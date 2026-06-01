@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect, useCallback } from "react";
+import React, { useState, useMemo, useEffect, useCallback, useRef } from "react";
 import {
   LineChart, Line, AreaChart, Area, BarChart, Bar,
   XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid,
@@ -1286,9 +1286,241 @@ function SecurityPage() {
   );
 }
 
+// ─── Chat page ────────────────────────────────────────────────────────────────
+const CHAT_MODELS = [
+  "gpt-4o-mini","gpt-4o","gpt-4.1","gpt-4.1-mini",
+  "claude-sonnet-4","claude-opus-4","claude-haiku-4",
+  "gemini-2.0-pro","gemini-2.0-flash",
+];
+
+function ChatPage() {
+  const [messages,     setMessages]     = useState([]);  // {role, content, meta?}
+  const [input,        setInput]        = useState("");
+  const [sending,      setSending]      = useState(false);
+  const [team,         setTeam]         = useState("SOC");
+  const [agent,        setAgent]        = useState("IR-Agent");
+  const [model,        setModel]        = useState("gpt-4o-mini");
+  const [systemPrompt, setSystemPrompt] = useState("");
+  const [showSystem,   setShowSystem]   = useState(false);
+  const [error,        setError]        = useState(null);
+  const [totalCost,    setTotalCost]    = useState(0);
+  const [totalTokens,  setTotalTokens]  = useState(0);
+  const bottomRef = useRef(null);
+
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages]);
+
+  const send = async () => {
+    const text = input.trim();
+    if (!text || sending) return;
+    setInput("");
+    setError(null);
+
+    // Add user message to history
+    const userMsg = { role: "user", content: text };
+    const newHistory = [...messages.filter(m => !m.meta), userMsg];
+    setMessages(prev => [...prev, { role: "user", content: text }]);
+    setSending(true);
+
+    try {
+      const r = await fetch("/api/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          team, agent, model,
+          system_prompt: systemPrompt || null,
+          messages: newHistory.map(m => ({ role: m.role, content: m.content })),
+        }),
+      });
+
+      if (!r.ok) {
+        const err = await r.json();
+        throw new Error(err.detail || `HTTP ${r.status}`);
+      }
+
+      const data = await r.json();
+      setMessages(prev => [...prev, {
+        role: "assistant",
+        content: data.reply,
+        meta: {
+          model: data.model,
+          tokens: data.total_tokens,
+          cost: data.cost_usd,
+          latency: data.latency_ms,
+          findings: data.security_findings,
+          warnings: data.budget_warnings,
+        },
+      }]);
+      setTotalCost(c => c + data.cost_usd);
+      setTotalTokens(t => t + data.total_tokens);
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setSending(false);
+    }
+  };
+
+  const handleKey = (e) => {
+    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
+  };
+
+  const clearChat = () => {
+    setMessages([]); setTotalCost(0); setTotalTokens(0); setError(null);
+  };
+
+  const LabelSelect = ({ label, value, onChange, options }) => (
+    <div style={{ display:"flex", flexDirection:"column", gap:3 }}>
+      <label style={{ fontSize:9, fontFamily:FONT_MONO, letterSpacing:"0.12em", textTransform:"uppercase", color:T.textMute }}>{label}</label>
+      <select value={value} onChange={e => onChange(e.target.value)}
+        style={{ background:T.panelHi, color:T.text, border:`1px solid ${T.border}`, padding:"5px 8px", borderRadius:4, fontSize:11, fontFamily:FONT_MONO, minWidth:120 }}>
+        {options.map(o => <option key={o} value={o}>{o}</option>)}
+      </select>
+    </div>
+  );
+
+  return (
+    <div style={{ display:"flex", flexDirection:"column", height:"calc(100vh - 120px)", gap:12 }}>
+
+      {/* Config bar */}
+      <div style={{ background:T.panel, border:`1px solid ${T.border}`, borderRadius:8, padding:"12px 16px", display:"flex", gap:16, alignItems:"flex-end", flexWrap:"wrap" }}>
+        <div style={{ display:"flex", flexDirection:"column", gap:3 }}>
+          <label style={{ fontSize:9, fontFamily:FONT_MONO, letterSpacing:"0.12em", textTransform:"uppercase", color:T.textMute }}>Team</label>
+          <input value={team} onChange={e => setTeam(e.target.value)}
+            style={{ background:T.panelHi, color:T.text, border:`1px solid ${T.border}`, padding:"5px 8px", borderRadius:4, fontSize:11, fontFamily:FONT_MONO, width:100 }}/>
+        </div>
+        <div style={{ display:"flex", flexDirection:"column", gap:3 }}>
+          <label style={{ fontSize:9, fontFamily:FONT_MONO, letterSpacing:"0.12em", textTransform:"uppercase", color:T.textMute }}>Agent</label>
+          <input value={agent} onChange={e => setAgent(e.target.value)}
+            style={{ background:T.panelHi, color:T.text, border:`1px solid ${T.border}`, padding:"5px 8px", borderRadius:4, fontSize:11, fontFamily:FONT_MONO, width:110 }}/>
+        </div>
+        <LabelSelect label="Model" value={model} onChange={setModel} options={CHAT_MODELS} />
+        <button onClick={() => setShowSystem(s => !s)}
+          style={{ background:"transparent", border:`1px solid ${T.border}`, color:T.textDim, padding:"6px 12px", borderRadius:4, fontSize:11, fontFamily:FONT_MONO, cursor:"pointer" }}>
+          {showSystem ? "Hide system prompt" : "System prompt"}
+        </button>
+        <div style={{ marginLeft:"auto", display:"flex", gap:16, fontFamily:FONT_MONO, fontSize:11, color:T.textDim, alignItems:"center" }}>
+          <span>Tokens: <span style={{ color:T.text }}>{totalTokens.toLocaleString()}</span></span>
+          <span>Cost: <span style={{ color:T.accent }}>${totalCost.toFixed(6)}</span></span>
+          <button onClick={clearChat}
+            style={{ background:"transparent", border:`1px solid ${T.border}`, color:T.crit, padding:"5px 12px", borderRadius:4, fontSize:11, fontFamily:FONT_MONO, cursor:"pointer" }}>
+            Clear
+          </button>
+        </div>
+      </div>
+
+      {/* System prompt */}
+      {showSystem && (
+        <div style={{ background:T.panel, border:`1px solid ${T.borderHi}`, borderRadius:6, padding:12 }}>
+          <textarea value={systemPrompt} onChange={e => setSystemPrompt(e.target.value)}
+            placeholder="System prompt (optional) — e.g. 'You are a SOC analyst specializing in threat intelligence.'"
+            rows={3}
+            style={{ width:"100%", background:T.panelHi, color:T.text, border:`1px solid ${T.border}`, borderRadius:4, padding:"8px 10px", fontSize:12, fontFamily:FONT_MONO, resize:"vertical", boxSizing:"border-box" }}/>
+        </div>
+      )}
+
+      {/* Message thread */}
+      <div style={{ flex:1, overflow:"auto", display:"flex", flexDirection:"column", gap:12, padding:"4px 2px" }}>
+        {messages.length === 0 && (
+          <div style={{ flex:1, display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", color:T.textMute, fontFamily:FONT_MONO, fontSize:13, gap:8 }}>
+            <div style={{ fontSize:28 }}>◆</div>
+            <div>Start a conversation — all messages route through AIFinOps Guard</div>
+            <div style={{ fontSize:11, color:T.textMute }}>Tokens, cost, and PII scanning on every message</div>
+          </div>
+        )}
+
+        {messages.map((msg, i) => (
+          <div key={i} style={{ display:"flex", flexDirection:"column", alignItems: msg.role==="user" ? "flex-end" : "flex-start", gap:4 }}>
+            {/* Role label */}
+            <div style={{ fontSize:10, fontFamily:FONT_MONO, letterSpacing:"0.1em", textTransform:"uppercase",
+              color: msg.role==="user" ? T.info : T.accent, marginBottom:2,
+              paddingLeft: msg.role==="assistant" ? 4 : 0,
+              paddingRight: msg.role==="user" ? 4 : 0 }}>
+              {msg.role === "user" ? `${team} / ${agent}` : msg.meta?.model || "assistant"}
+            </div>
+
+            {/* Bubble */}
+            <div style={{
+              maxWidth:"75%", padding:"12px 16px", borderRadius: msg.role==="user" ? "12px 12px 2px 12px" : "12px 12px 12px 2px",
+              background: msg.role==="user" ? `${T.info}18` : T.panelHi,
+              border: `1px solid ${msg.role==="user" ? T.info+"33" : T.border}`,
+              fontSize:13, color:T.text, lineHeight:1.6, whiteSpace:"pre-wrap", wordBreak:"break-word",
+            }}>
+              {msg.content}
+            </div>
+
+            {/* Meta strip for assistant messages */}
+            {msg.meta && (
+              <div style={{ display:"flex", gap:14, fontSize:10, fontFamily:FONT_MONO, color:T.textMute, paddingLeft:4, flexWrap:"wrap" }}>
+                <span>{msg.meta.tokens.toLocaleString()} tokens</span>
+                <span style={{ color:T.accent }}>${msg.meta.cost.toFixed(6)}</span>
+                <span>{msg.meta.latency.toFixed(0)}ms</span>
+                {msg.meta.findings?.length > 0 && (
+                  <span style={{ color:T.warn }}>⚠ {msg.meta.findings.length} PII finding{msg.meta.findings.length===1?"":"s"}</span>
+                )}
+                {msg.meta.warnings?.length > 0 && (
+                  <span style={{ color:T.warn }}>⚠ Budget {msg.meta.warnings[0].pct}% used</span>
+                )}
+              </div>
+            )}
+          </div>
+        ))}
+
+        {/* Typing indicator */}
+        {sending && (
+          <div style={{ display:"flex", alignItems:"flex-start", gap:4 }}>
+            <div style={{ padding:"10px 14px", background:T.panelHi, border:`1px solid ${T.border}`, borderRadius:"12px 12px 12px 2px" }}>
+              <div style={{ display:"flex", gap:4 }}>
+                {[0,1,2].map(i => (
+                  <div key={i} style={{ width:6, height:6, borderRadius:"50%", background:T.accent,
+                    animation:`pulse 1.2s ease-in-out ${i*0.2}s infinite`,
+                    opacity:0.6 }}/>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {error && (
+          <div style={{ padding:"10px 14px", background:`${T.crit}10`, border:`1px solid ${T.crit}33`, borderRadius:6, fontSize:12, color:T.crit, fontFamily:FONT_MONO }}>
+            ✗ {error}
+          </div>
+        )}
+
+        <div ref={bottomRef} />
+      </div>
+
+      {/* Input area */}
+      <div style={{ background:T.panel, border:`1px solid ${T.border}`, borderRadius:8, padding:12, display:"flex", gap:10, alignItems:"flex-end" }}>
+        <textarea
+          value={input}
+          onChange={e => setInput(e.target.value)}
+          onKeyDown={handleKey}
+          placeholder="Type a message… (Enter to send, Shift+Enter for new line)"
+          rows={2}
+          disabled={sending}
+          style={{ flex:1, background:T.panelHi, color:T.text, border:`1px solid ${T.border}`, borderRadius:6, padding:"10px 12px", fontSize:13, fontFamily:FONT_UI, resize:"none", lineHeight:1.5, opacity:sending?0.6:1 }}
+        />
+        <button onClick={send} disabled={sending || !input.trim()}
+          style={{ background:T.accent, color:T.bg, border:"none", padding:"10px 20px", borderRadius:6, fontSize:13, fontFamily:FONT_MONO, fontWeight:600, cursor:"pointer", opacity:(sending||!input.trim())?0.4:1, flexShrink:0 }}>
+          {sending ? "…" : "Send"}
+        </button>
+      </div>
+
+      <style>{`
+        @keyframes pulse {
+          0%, 100% { transform: scale(1); opacity: 0.4; }
+          50% { transform: scale(1.3); opacity: 1; }
+        }
+      `}</style>
+    </div>
+  );
+}
+
 // ─── Nav ──────────────────────────────────────────────────────────────────────
 const PAGES = [
   { id:"home",      label:"Home" },
+  { id:"chat",      label:"Chat" },
   { id:"overview",  label:"Overview" },
   { id:"cost",      label:"Cost Intelligence" },
   { id:"agents",    label:"Agent Activity" },
@@ -1414,7 +1646,7 @@ export default function App() {
           </div>
         </header>
 
-        {!["home","budgets","security"].includes(page) && <FilterBar filters={filters} setFilters={setFilters} allTeams={allTeams} allAgents={allAgents}/>}
+        {!["home","budgets","security","chat"].includes(page) && <FilterBar filters={filters} setFilters={setFilters} allTeams={allTeams} allAgents={allAgents}/>}
 
         {renderPage()}
       </main>

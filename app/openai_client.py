@@ -105,3 +105,28 @@ async def complete(
         total_tokens=usage.total_tokens,
         latency_ms=round(latency_ms, 2),
     )
+
+
+# ─── Multi-turn chat call ─────────────────────────────────────────────────────
+
+async def chat_complete(
+    messages: list[dict],  # full history: [{"role": "user"|"assistant"|"system", "content": "..."}]
+    model: str = "gpt-4o-mini",
+) -> CompletionResult:
+    client = _get_client(model)
+
+    t0 = time.perf_counter()
+    resp = await client.chat.completions.create(model=model, messages=messages)
+    latency_ms = (time.perf_counter() - t0) * 1000
+
+    choice = resp.choices[0].message.content or ""
+    usage  = resp.usage
+
+    return CompletionResult(
+        content=choice,
+        model=resp.model,
+        prompt_tokens=usage.prompt_tokens,
+        completion_tokens=usage.completion_tokens,
+        total_tokens=usage.total_tokens,
+        latency_ms=round(latency_ms, 2),
+    )

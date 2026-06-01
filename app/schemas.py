@@ -107,6 +107,36 @@ class PolicyRuleOut(BaseModel):
 
 # ── Security ──────────────────────────────────────────────────────────────────
 
+# ── Chat ──────────────────────────────────────────────────────────────────────
+
+class ChatMessage(BaseModel):
+    role: str   # "user" | "assistant" | "system"
+    content: str
+
+
+class ChatRequest(BaseModel):
+    team: str = Field(..., examples=["SOC"])
+    agent: str = Field(..., examples=["IR-Agent"])
+    model: str = Field(default="gpt-4o-mini", examples=["gpt-4o-mini"])
+    messages: list[ChatMessage]          # full conversation history
+    system_prompt: str | None = Field(default=None)
+
+
+class ChatResponse(BaseModel):
+    reply: str
+    model: str
+    prompt_tokens: int
+    completion_tokens: int
+    total_tokens: int
+    latency_ms: float
+    cost_usd: float
+    telemetry_id: int
+    security_findings: list[dict] = []
+    budget_warnings: list[dict] = []
+
+
+# ── Security scan ─────────────────────────────────────────────────────────────
+
 class ScanRequest(BaseModel):
     text: str
 

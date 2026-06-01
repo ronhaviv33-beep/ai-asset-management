@@ -6,6 +6,7 @@ from app.database import engine, get_db
 from app.models import Base
 from app.schemas import (
     AskRequest, AskResponse,
+    ChatRequest, ChatResponse,
     TelemetryRecord, TelemetrySummary,
     BudgetRuleCreate, BudgetRuleOut, BudgetStatusItem,
     PolicyRuleCreate, PolicyRuleOut,
@@ -15,7 +16,7 @@ from app import telemetry as tel
 from app import budget as bud
 from app import policy as pol
 from app.scanner import scan
-from app.openai_client import complete
+from app.openai_client import complete, chat_complete
 
 Base.metadata.create_all(bind=engine)
 
@@ -104,6 +105,66 @@ async def ask(req: AskRequest, db: Session = Depends(get_db)):
         telemetry_id=record.id,
         budget_warnings=budget_check["warnings"],
         security_findings=findings_list,
+    )
+
+
+# ─── Multi-turn Chat ─────────────────────────────────────────────────────────
+
+@app.post("/chat", response_model=ChatResponse)
+async def chat(req: ChatRequest, db: Session = Depends(get_db)):
+
+    # Scan the latest user message only
+    last_user = next((m.content for m in reversed(req.messages) if m.role == "user"), "")
+    scan_result  = scan(last_user)
+    findings_list = scan_result.to_dict()
+
+    # Policy check
+    policy_check = pol.check_model(db, team=req.team, model=req.model)
+    if not policy_check["allowed"]:
+        tel.save_blocked(db, team=req.team, agent=req.agent, model=req.model,
+                         prompt=last_user, reason=policy_check["reason"],
+                         sensitive=scan_result.is_sensitive, sensitive_findings=findings_list)
+        raise HTTPException(status_code=403, detail=policy_check["reason"])
+
+    # Budget check
+    budget_check = bud.check(db, team=req.team, agent=req.agent)
+    if not budget_check["allowed"]:
+        blk = budget_check["blocked_by"]
+        reason = (f"Budget limit exceeded for team '{blk['team']}': "
+                  f"${blk['spend']:.4f} of ${blk['limit']:.2f} {blk['period']} limit.")
+        tel.save_blocked(db, team=req.team, agent=req.agent, model=req.model,
+                         prompt=last_user, reason=reason,
+                         sensitive=scan_result.is_sensitive, sensitive_findings=findings_list)
+        raise HTTPException(status_code=429, detail=reason)
+
+    # Build messages list — prepend system prompt if given
+    messages = []
+    if req.system_prompt:
+        messages.append({"role": "system", "content": req.system_prompt})
+    messages += [{"role": m.role, "content": m.content} for m in req.messages]
+
+    try:
+        result = await chat_complete(messages=messages, model=req.model)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"LLM error: {exc}")
+
+    record = tel.save(db=db, team=req.team, agent=req.agent, prompt=last_user,
+                      result=result, sensitive=scan_result.is_sensitive,
+                      sensitive_findings=findings_list)
+
+    return ChatResponse(
+        reply=result.content,
+        model=result.model,
+        prompt_tokens=result.prompt_tokens,
+        completion_tokens=result.completion_tokens,
+        total_tokens=result.total_tokens,
+        latency_ms=result.latency_ms,
+        cost_usd=record.cost_usd,
+        telemetry_id=record.id,
+        security_findings=findings_list,
+        budget_warnings=budget_check["warnings"],
     )
 
 
