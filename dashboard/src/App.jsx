@@ -1,89 +1,1015 @@
-import { DollarSign, Zap, Clock, Activity, RefreshCw } from 'lucide-react'
-import { useData } from './hooks/useData'
-import { KpiCard } from './components/KpiCard'
-import { CostChart } from './components/CostChart'
-import { TokenChart } from './components/TokenChart'
-import { RequestsTable } from './components/RequestsTable'
+import React, { useState, useMemo, useEffect, useCallback } from "react";
+import {
+  LineChart, Line, AreaChart, Area, BarChart, Bar,
+  XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid,
+  PieChart, Pie, Cell,
+} from "recharts";
 
-export default function App() {
-  const { summary, records, loading, error, refresh, lastRefresh } = useData(30_000)
+// ─── Design tokens ────────────────────────────────────────────────────────────
+const T = {
+  bg: "#0A0B0F", panel: "#0F1117", panelHi: "#141823",
+  border: "#1E2230", borderHi: "#2A3142",
+  text: "#E8ECF4", textDim: "#7A8499", textMute: "#4B5468",
+  accent: "#7CFFB2", accentDim: "#3A7A5C",
+  warn: "#FFB547", crit: "#FF5C7A", info: "#6FA8FF", purple: "#B47AFF",
+};
+const FONT_UI   = "'Geist','Söhne',-apple-system,BlinkMacSystemFont,sans-serif";
+const FONT_MONO = "'JetBrains Mono','IBM Plex Mono',ui-monospace,SFMono-Regular,monospace";
 
-  if (loading) return (
-    <div className="flex items-center justify-center min-h-screen text-slate-400">
-      Loading telemetry...
+// ─── Static metadata (used for display names & governance rules) ──────────────
+const ORGS = [
+  { id: "org_001", name: "Northwind Labs" },
+  { id: "org_002", name: "Helix Financial" },
+  { id: "org_003", name: "Atlas Logistics" },
+];
+const TEAMS = [
+  { id: "team_01", org: "org_001", name: "Platform AI" },
+  { id: "team_02", org: "org_001", name: "Customer Support" },
+  { id: "team_03", org: "org_002", name: "Risk Analytics" },
+  { id: "team_04", org: "org_002", name: "Trading Research" },
+  { id: "team_05", org: "org_003", name: "Route Optimization" },
+];
+const AGENTS = [
+  { id: "ag_01", name: "support-triage-v2",  team: "team_02", workflow: "wf_01", tool: "zendesk_api" },
+  { id: "ag_02", name: "doc-summarizer",      team: "team_01", workflow: "wf_02", tool: "notion_api" },
+  { id: "ag_03", name: "code-reviewer",       team: "team_01", workflow: "wf_03", tool: "github_api" },
+  { id: "ag_04", name: "risk-classifier",     team: "team_03", workflow: "wf_04", tool: "internal_db" },
+  { id: "ag_05", name: "trade-narrator",      team: "team_04", workflow: "wf_05", tool: "bloomberg_api" },
+  { id: "ag_06", name: "route-planner",       team: "team_05", workflow: "wf_06", tool: "maps_api" },
+  { id: "ag_07", name: "invoice-extractor",   team: "team_03", workflow: "wf_07", tool: "ocr_service" },
+  { id: "ag_08", name: "kb-rag-search",       team: "team_02", workflow: "wf_08", tool: "vector_db" },
+  { id: "ag_09", name: "research-deepdive",   team: "team_04", workflow: "wf_09", tool: "web_search" },
+  { id: "ag_10", name: "qa-test-generator",   team: "team_01", workflow: "wf_10", tool: "github_api" },
+];
+const MODELS = [
+  { name: "claude-opus-4",       provider: "Anthropic", cost1k_in: 0.015,  cost1k_out: 0.075,  tier: "premium", approved: true  },
+  { name: "claude-sonnet-4",     provider: "Anthropic", cost1k_in: 0.003,  cost1k_out: 0.015,  tier: "mid",     approved: true  },
+  { name: "gpt-4.1",             provider: "OpenAI",    cost1k_in: 0.01,   cost1k_out: 0.03,   tier: "premium", approved: true  },
+  { name: "gpt-4o",              provider: "OpenAI",    cost1k_in: 0.0025, cost1k_out: 0.01,   tier: "mid",     approved: true  },
+  { name: "gpt-4o-mini",         provider: "OpenAI",    cost1k_in: 0.00015,cost1k_out: 0.0006, tier: "cheap",   approved: true  },
+  { name: "gemini-2.0-pro",      provider: "Google",    cost1k_in: 0.00125,cost1k_out: 0.005,  tier: "mid",     approved: false },
+  { name: "llama-3.1-70b-local", provider: "Local",     cost1k_in: 0.0002, cost1k_out: 0.0002, tier: "cheap",   approved: true  },
+];
+
+// ─── Provider / model lookup helpers ─────────────────────────────────────────
+function providerFromModel(name = "") {
+  if (name.startsWith("claude"))  return "Anthropic";
+  if (name.startsWith("gpt") || name.startsWith("o1") || name.startsWith("o3")) return "OpenAI";
+  if (name.startsWith("gemini")) return "Google";
+  if (name.includes("local") || name.includes("llama")) return "Local";
+  return "Unknown";
+}
+
+function tierFromModel(name = "") {
+  const m = MODELS.find((x) => x.name === name);
+  if (m) return m.tier;
+  if (name.includes("opus") || name.includes("4.1") || name.includes("turbo")) return "premium";
+  if (name.includes("mini") || name.includes("local") || name.includes("llama")) return "cheap";
+  return "mid";
+}
+
+function approvedModel(name = "") {
+  const m = MODELS.find((x) => x.name === name);
+  return m ? m.approved : true; // unknown models default to approved
+}
+
+// ─── Transform real API records → internal event shape ───────────────────────
+function apiRecordToEvent(r, idx) {
+  const ts = new Date(r.timestamp).getTime();
+  const hour = new Date(ts).getHours();
+  const afterHours = hour < 7 || hour > 20;
+
+  // Map free-text team/agent names to stable IDs (or create synthetic ones)
+  const teamId   = `live_team_${r.team.replace(/\s+/g, "_").toLowerCase()}`;
+  const agentId  = `live_ag_${r.agent.replace(/\s+/g, "_").toLowerCase()}`;
+  const workflow = `live_wf_${r.agent.replace(/\s+/g, "_").toLowerCase()}`;
+
+  return {
+    ts,
+    org: "org_live",
+    team: teamId,
+    agent: agentId,
+    workflow,
+    tool: "openai_api",
+    model: r.model,
+    provider: providerFromModel(r.model),
+    tokens_in:    r.prompt_tokens,
+    tokens_out:   r.completion_tokens,
+    tokens_total: r.total_tokens,
+    cost:         r.cost_usd,
+    latency:      r.latency_ms,
+    status:       "success",
+    error:        null,
+    afterHours,
+    sensitive:    false,
+    _liveTeam:  r.team,
+    _liveAgent: r.agent,
+  };
+}
+
+// Build synthetic TEAMS / AGENTS from live records so lookups work
+function buildLiveMetadata(apiRecords) {
+  const teamMap  = {};
+  const agentMap = {};
+  for (const r of apiRecords) {
+    const teamId  = `live_team_${r.team.replace(/\s+/g, "_").toLowerCase()}`;
+    const agentId = `live_ag_${r.agent.replace(/\s+/g, "_").toLowerCase()}`;
+    if (!teamMap[teamId])  teamMap[teamId]  = { id: teamId,  org: "org_live", name: r.team };
+    if (!agentMap[agentId]) agentMap[agentId] = { id: agentId, name: r.agent, team: teamId, workflow: `live_wf_${r.agent.replace(/\s+/g, "_").toLowerCase()}`, tool: "openai_api" };
+  }
+  const liveOrg   = { id: "org_live", name: "Live (AIFinOps Guard)" };
+  return { liveOrg, liveTeams: Object.values(teamMap), liveAgents: Object.values(agentMap) };
+}
+
+// ─── Demo data generator (fallback when API is empty) ────────────────────────
+function mulberry32(seed) {
+  return function () {
+    let t = (seed += 0x6d2b79f5);
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+const rng  = mulberry32(42);
+const pick = (arr) => arr[Math.floor(rng() * arr.length)];
+
+function genDemoEvents() {
+  const events = [];
+  const now = Date.now();
+  const DAY = 86400000;
+  for (let i = 0; i < 6000; i++) {
+    const ageDays = rng() * 30;
+    const ts      = now - ageDays * DAY - rng() * DAY;
+    const agent   = pick(AGENTS);
+    const team    = TEAMS.find((t) => t.id === agent.team);
+    const model   = pick(MODELS);
+    const hour    = new Date(ts).getHours();
+    const afterHours = hour < 7 || hour > 20;
+    const baseIn  = Math.floor(200 + Math.pow(rng(), 3) * 8000);
+    const baseOut = Math.floor(150 + Math.pow(rng(), 2.5) * 2000);
+    const cost    = (baseIn / 1000) * model.cost1k_in + (baseOut / 1000) * model.cost1k_out;
+    const failed  = rng() < 0.04;
+    const latency = failed ? 200 + rng() * 400 : 400 + rng() * 1800 + (model.tier === "premium" ? 500 : 0);
+    const sensitive = rng() < 0.015;
+    events.push({ ts, org: team.org, team: team.id, agent: agent.id, workflow: agent.workflow, tool: agent.tool, model: model.name, provider: model.provider, tokens_in: baseIn, tokens_out: baseOut, tokens_total: baseIn + baseOut, cost, latency, status: failed ? "failed" : "success", error: failed ? pick(["rate_limit", "timeout", "tool_error", "content_filter"]) : null, afterHours, sensitive });
+  }
+  // Anomaly injections
+  for (let i = 0; i < 40; i++) events.push({ ts: now - DAY - rng() * DAY * 0.5, org: "org_002", team: "team_04", agent: "ag_05", workflow: "wf_05", tool: "bloomberg_api", model: "claude-opus-4", provider: "Anthropic", tokens_in: 4000 + Math.floor(rng() * 3000), tokens_out: 1500 + Math.floor(rng() * 1000), tokens_total: 6000, cost: 0.35 + rng() * 0.2, latency: 2200 + rng() * 1500, status: "success", error: null, afterHours: false, sensitive: false });
+  for (let i = 0; i < 12; i++) events.push({ ts: now - rng() * DAY * 5, org: "org_002", team: "team_04", agent: "ag_09", workflow: "wf_09", tool: "web_search", model: "claude-opus-4", provider: "Anthropic", tokens_in: 45000 + Math.floor(rng() * 30000), tokens_out: 3000, tokens_total: 75000, cost: 0.9 + rng() * 0.5, latency: 8000 + rng() * 4000, status: "success", error: null, afterHours: false, sensitive: false });
+  for (let i = 0; i < 25; i++) events.push({ ts: now - DAY * 2 - rng() * DAY, org: "org_001", team: "team_01", agent: "ag_10", workflow: "wf_10", tool: "github_api", model: "gpt-4.1", provider: "OpenAI", tokens_in: 1200, tokens_out: 0, tokens_total: 1200, cost: 0.012, latency: 320, status: "failed", error: "tool_error", afterHours: false, sensitive: false });
+  for (let i = 0; i < 30; i++) { const ts = now - rng() * DAY * 7; const d = new Date(ts); d.setHours(3, Math.floor(rng() * 60), 0); events.push({ ts: d.getTime(), org: "org_003", team: "team_05", agent: "ag_06", workflow: "wf_06", tool: "maps_api", model: "gpt-4.1", provider: "OpenAI", tokens_in: 1800, tokens_out: 800, tokens_total: 2600, cost: 0.042, latency: 1400, status: "success", error: null, afterHours: true, sensitive: false }); }
+  for (let i = 0; i < 60; i++) events.push({ ts: now - DAY * 0.5 - rng() * 1000 * 60 * 30, org: "org_002", team: "team_03", agent: "ag_07", workflow: "wf_07", tool: "ocr_service", model: "claude-sonnet-4", provider: "Anthropic", tokens_in: 900, tokens_out: 300, tokens_total: 1200, cost: 0.0072, latency: 850, status: "success", error: null, afterHours: false, sensitive: true });
+  for (let i = 0; i < 18; i++) events.push({ ts: now - rng() * DAY * 10, org: "org_001", team: "team_02", agent: "ag_08", workflow: "wf_08", tool: "vector_db", model: "gemini-2.0-pro", provider: "Google", tokens_in: 1500, tokens_out: 600, tokens_total: 2100, cost: 0.005, latency: 920, status: "success", error: null, afterHours: false, sensitive: false });
+  return events.sort((a, b) => b.ts - a.ts);
+}
+
+// ─── Live data hook ───────────────────────────────────────────────────────────
+function useLiveData(intervalMs = 30_000) {
+  const [apiRecords, setApiRecords] = useState(null); // null = loading, [] = empty
+  const [lastRefresh, setLastRefresh] = useState(null);
+  const [isLive, setIsLive] = useState(false);
+
+  const load = useCallback(async () => {
+    try {
+      const r = await fetch("/api/telemetry?limit=1000");
+      if (!r.ok) throw new Error("API error");
+      const data = await r.json();
+      setApiRecords(data);
+      setIsLive(data.length > 0);
+      setLastRefresh(new Date());
+    } catch {
+      setApiRecords([]); // fall back to demo
+    }
+  }, []);
+
+  useEffect(() => {
+    load();
+    const id = setInterval(load, intervalMs);
+    return () => clearInterval(id);
+  }, [load, intervalMs]);
+
+  return { apiRecords, lastRefresh, isLive, refresh: load };
+}
+
+// ─── Filter / aggregation helpers ────────────────────────────────────────────
+function applyFilters(events, f) {
+  const cutoff = Date.now() - f.range * 86400000;
+  return events.filter((e) => {
+    if (e.ts < cutoff) return false;
+    if (f.team  !== "all" && e.team  !== f.team)  return false;
+    if (f.model !== "all" && e.model !== f.model)  return false;
+    if (f.agent !== "all" && e.agent !== f.agent)  return false;
+    return true;
+  });
+}
+
+// ─── Alert metadata ───────────────────────────────────────────────────────────
+const ALERT_META = {
+  agent_cost_spike:         { title: "Agent cost spike detected",           category: "Cost Anomaly",                 checks: "Compares an agent's spend in the current 24h window against its trailing 7-day daily average. Fires when today exceeds 2× that baseline.", matters: "A sudden cost jump usually means an agent is doing far more work than usual — often from a prompt change, a retry loop, or an upstream input that ballooned in size.", causes: ["Prompt template change that inflated context size", "Tool-call retry loop with no termination", "Upstream data source returning much larger payloads", "New high-volume workload without a budget guardrail"], detail: (a) => `${a.entity} is the affected agent. ${a.msg}. At this rate it is on track to consume a disproportionate share of its team's budget.` },
+  high_token_prompt:        { title: "Unusually large prompt",              category: "Cost Optimization",            checks: "Flags any single request whose total token count exceeds 30,000 tokens.", matters: "Token cost scales linearly with size. Very large prompts are frequently caused by stuffing entire documents into context when only a fraction is relevant.", causes: ["Full-document context with no retrieval or chunking", "Unbounded conversation history replayed each turn", "Retrieved chunks not deduplicated or truncated", "Verbose system prompts duplicated across calls"], detail: (a) => `The request from ${a.entity} carried ${a.msg.split(" ")[0]} — well above threshold. Adding retrieval truncation typically cuts this by 60–80%.` },
+  failed_workflow_spike:    { title: "Workflow failure rate elevated",       category: "Reliability Risk",             checks: "Tracks the failure ratio per workflow over a rolling 48h window. Fires when rate exceeds 25% with meaningful call volume.", matters: "High failure rates mean users aren't getting results and you're still paying for failed attempts.", causes: ["Upstream tool or API outage / rate limiting", "Expired or rotated auth credentials", "Breaking change in a tool's response schema", "Timeout thresholds too aggressive for the model"], detail: (a) => `Workflow ${a.entity} ${a.msg.toLowerCase()}. Each failed run still incurs partial token cost.` },
+  expensive_model_usage:    { title: "Premium model used on trivial prompts", category: "Cost Optimization",          checks: "Counts calls to a premium-tier model where total prompt was under 200 tokens — work a mid-tier model handles at a fraction of the cost.", matters: "Premium models cost 5–10× more per token. Short, simple prompts rarely benefit from the extra capability.", causes: ["Single default model hardcoded for all routes", "No model-routing tier based on task complexity", "Premium model chosen 'to be safe' without measuring need"], detail: (a) => `${a.msg}. Confirm these calls don't require premium reasoning before routing them down.` },
+  unusual_after_hours_usage: { title: "After-hours activity spike",          category: "Security Signal",              checks: "Counts requests outside business hours (before 07:00 or after 20:00) over the last 7 days.", matters: "Off-hours bursts can be a legitimate batch job — or an early indicator of a leaked API key or unauthorized access.", causes: ["Undocumented scheduled batch job", "Leaked or shared API credential being used externally", "Retry loop that only triggers under low-traffic conditions"], detail: (a) => `${a.entity} logged ${a.msg.toLowerCase()}. If this batch window is expected, suppress the rule; if not, rotate the key.` },
+  repeated_agent_loop:      { title: "Agent stuck in a loop",               category: "Reliability Risk",             checks: "Buckets each agent's calls into 30-min windows. Fires when any window exceeds 40 calls from the same agent.", matters: "A looping agent burns tokens continuously with no useful output — one of the fastest ways to run up an unexpected bill.", causes: ["Tool-call retry with no max-attempts cap", "Missing or unreachable termination condition", "Agent re-planning indefinitely on an unsolvable step"], detail: (a) => `${a.entity} produced ${a.msg.toLowerCase()}. Add a hard call cap and termination check before re-enabling.` },
+  unapproved_model_usage:   { title: "Unapproved model in use",             category: "Governance Violation",         checks: "Flags any request routed to a model not on the organization's approved allowlist.", matters: "Unapproved models may not meet data-residency, security, or contractual requirements.", causes: ["Developer testing a new provider in production", "Missing enforcement at the model gateway", "SDK default that bypassed the allowlist"], detail: (a) => `${a.msg}. Either add to the allowlist through governance review, or block at the gateway.` },
+  sensitive_data_exposure:  { title: "Sensitive data in AI requests",        category: "Security Risk",                checks: "Inspects request payloads for patterns matching PII or financial data.", matters: "Sending sensitive data to an external model can breach privacy regulations and contractual obligations.", causes: ["No PII redaction layer in front of the model call", "Raw documents passed through without scrubbing", "User input not sanitized before being added to context"], detail: (a) => `${a.entity} triggered this: ${a.msg.toLowerCase()}. Enable a redaction/DLP policy on this workflow immediately.` },
+};
+
+// ─── Detection engine ─────────────────────────────────────────────────────────
+function runDetections(events) {
+  const alerts = [];
+  const DAY = 86400000;
+  const now = Date.now();
+  const byAgentToday = {}, byAgent7d = {};
+  events.forEach((e) => {
+    const age = now - e.ts;
+    if (age < DAY)             byAgentToday[e.agent] = (byAgentToday[e.agent] || 0) + e.cost;
+    if (age >= DAY && age < 8 * DAY) byAgent7d[e.agent]  = (byAgent7d[e.agent]  || 0) + e.cost;
+  });
+  Object.keys(byAgentToday).forEach((a) => {
+    const today = byAgentToday[a]; const avg7 = (byAgent7d[a] || 0) / 7;
+    if (avg7 > 0.5 && today > 2 * avg7) alerts.push({ type: "agent_cost_spike", sev: "critical", entity: a, msg: `Agent cost $${today.toFixed(2)} today vs $${avg7.toFixed(2)} 7-day avg`, action: "Inspect prompt construction and tool-call loops", ts: now - 720_000 });
+  });
+  events.filter((e) => e.tokens_total > 30000).slice(0, 5).forEach((e) => alerts.push({ type: "high_token_prompt", sev: "warning", entity: e.agent, msg: `${e.tokens_total.toLocaleString()} tokens in single request (${e.model})`, action: "Add context compaction or retrieval truncation", ts: e.ts }));
+  const wfFails = {}, wfTotal = {};
+  events.filter((e) => now - e.ts < 2 * DAY).forEach((e) => { wfTotal[e.workflow] = (wfTotal[e.workflow] || 0) + 1; if (e.status === "failed") wfFails[e.workflow] = (wfFails[e.workflow] || 0) + 1; });
+  Object.keys(wfTotal).forEach((w) => { const rate = (wfFails[w] || 0) / wfTotal[w]; if (rate > 0.25 && wfTotal[w] > 10) alerts.push({ type: "failed_workflow_spike", sev: "critical", entity: w, msg: `${(rate * 100).toFixed(0)}% failure rate over last 48h`, action: "Check upstream tool availability and auth tokens", ts: now - 2_700_000 }); });
+  const cheapCandidates = events.filter((e) => tierFromModel(e.model) === "premium" && e.tokens_total < 200);
+  if (cheapCandidates.length > 5) alerts.push({ type: "expensive_model_usage", sev: "warning", entity: cheapCandidates[0].agent, msg: `${cheapCandidates.length} premium-model calls under 200 tokens`, action: "Route short prompts to gpt-4o-mini or claude-sonnet", ts: now - 5_400_000 });
+  const afterHoursAgents = {};
+  events.filter((e) => now - e.ts < 7 * DAY && e.afterHours).forEach((e) => { afterHoursAgents[e.agent] = (afterHoursAgents[e.agent] || 0) + 1; });
+  Object.keys(afterHoursAgents).forEach((a) => { if (afterHoursAgents[a] > 15) alerts.push({ type: "unusual_after_hours_usage", sev: "info", entity: a, msg: `${afterHoursAgents[a]} calls outside 07:00–20:00 in last 7d`, action: "Confirm batch job is intentional; otherwise rotate keys", ts: now - 10_800_000 }); });
+  const buckets = {};
+  events.forEach((e) => { const k = `${e.agent}:${Math.floor(e.ts / 1_800_000)}`; buckets[k] = (buckets[k] || 0) + 1; });
+  const flagged = new Set();
+  Object.entries(buckets).forEach(([k, v]) => { const [agent] = k.split(":"); if (v > 40 && !flagged.has(agent)) { flagged.add(agent); alerts.push({ type: "repeated_agent_loop", sev: "critical", entity: agent, msg: `${v} calls in single 30-min window`, action: "Check for tool-call retry loop or missing termination", ts: now - 1_200_000 }); } });
+  const unapproved = events.filter((e) => !approvedModel(e.model));
+  if (unapproved.length > 0) alerts.push({ type: "unapproved_model_usage", sev: "warning", entity: unapproved[0].agent, msg: `${unapproved.length} calls to non-allowlisted model "${unapproved[0].model}"`, action: "Block at gateway or request governance approval", ts: now - 14_400_000 });
+  const sensitive = events.filter((e) => e.sensitive);
+  if (sensitive.length > 0) alerts.push({ type: "sensitive_data_exposure", sev: "critical", entity: sensitive[0].agent, msg: `${sensitive.length} requests flagged with sensitive payload patterns`, action: "Enable PII redaction policy on this workflow", ts: now - 7_200_000 });
+  return alerts.sort((a, b) => { const o = { critical: 0, warning: 1, info: 2 }; return o[a.sev] - o[b.sev] || b.ts - a.ts; });
+}
+
+// ─── Aggregation ──────────────────────────────────────────────────────────────
+function agg(events) {
+  const now = Date.now();
+  const today = events.filter((e) => now - e.ts < 86400000);
+  const costByTeam = {}, costByAgent = {}, costByModel = {}, tokensByModel = {}, latencyByModel = {}, failsByWorkflow = {}, callsByWorkflow = {};
+  events.forEach((e) => {
+    costByTeam[e.team]   = (costByTeam[e.team]   || 0) + e.cost;
+    costByAgent[e.agent] = (costByAgent[e.agent] || 0) + e.cost;
+    costByModel[e.model] = (costByModel[e.model] || 0) + e.cost;
+    tokensByModel[e.model] = (tokensByModel[e.model] || 0) + e.tokens_total;
+    if (!latencyByModel[e.model]) latencyByModel[e.model] = [];
+    latencyByModel[e.model].push(e.latency);
+    callsByWorkflow[e.workflow] = (callsByWorkflow[e.workflow] || 0) + 1;
+    if (e.status === "failed") failsByWorkflow[e.workflow] = (failsByWorkflow[e.workflow] || 0) + 1;
+  });
+  const buckets = {};
+  events.forEach((e) => { const d = new Date(e.ts); d.setHours(0,0,0,0); const k = d.getTime(); if (!buckets[k]) buckets[k] = { date: k, tokens: 0, cost: 0, calls: 0 }; buckets[k].tokens += e.tokens_total; buckets[k].cost += e.cost; buckets[k].calls += 1; });
+  const series = Object.values(buckets).sort((a, b) => a.date - b.date);
+  return {
+    today: { cost: today.reduce((s,e)=>s+e.cost,0), tokens: today.reduce((s,e)=>s+e.tokens_total,0), activeAgents: new Set(today.map((e)=>e.agent)).size, avgLatency: today.length>0 ? today.reduce((s,e)=>s+e.latency,0)/today.length : 0, failed: today.filter((e)=>e.status==="failed").length },
+    total: { cost: events.reduce((s,e)=>s+e.cost,0), tokens: events.reduce((s,e)=>s+e.tokens_total,0) },
+    costByTeam, costByAgent, costByModel, tokensByModel, latencyByModel, failsByWorkflow, callsByWorkflow, series,
+  };
+}
+
+function estimateSavings(events) {
+  const premShort = events.filter((e) => tierFromModel(e.model) === "premium" && e.tokens_total < 500);
+  const premium   = premShort.reduce((s,e)=>s+e.cost*0.7, 0);
+  const buckets   = {};
+  events.forEach((e) => { const k = `${e.agent}:${Math.floor(e.ts/1_800_000)}`; if (!buckets[k]) buckets[k]=[]; buckets[k].push(e); });
+  let loops = 0;
+  Object.values(buckets).forEach((b) => { if (b.length>40) { loops += b.slice(40).reduce((s,e)=>s+e.cost,0)*0.6; } });
+  const failed  = events.filter((e)=>e.status==="failed").reduce((s,e)=>s+e.cost, 0);
+  const latency = events.filter((e)=>e.latency>3000).reduce((s,e)=>s+e.cost*0.1, 0);
+  return { premium, loops, failed, latency, total: premium+loops+failed+latency };
+}
+
+function computeRiskScore(events, alerts) {
+  let score = 0; const factors = [];
+  const f1 = Math.min(alerts.filter((a)=>a.type==="agent_cost_spike").length*8,20); score+=f1; factors.push({ label:"Cost anomalies", value:f1, max:20, raw:alerts.filter((a)=>a.type==="agent_cost_spike").length });
+  const failRate = events.length>0 ? events.filter((e)=>e.status==="failed").length/events.length : 0;
+  const f2 = Math.min(Math.round(failRate*200),15); score+=f2; factors.push({ label:"Workflow failures", value:f2, max:15, raw:`${(failRate*100).toFixed(1)}%` });
+  const unapp = events.filter((e)=>!approvedModel(e.model)).length;
+  const f3 = Math.min(Math.round(unapp/5),15); score+=f3; factors.push({ label:"Unapproved models", value:f3, max:15, raw:unapp });
+  const ah = events.filter((e)=>e.afterHours).length;
+  const f4 = Math.min(Math.round(ah/30),10); score+=f4; factors.push({ label:"After-hours activity", value:f4, max:10, raw:ah });
+  const sens = events.filter((e)=>e.sensitive).length;
+  const f5 = Math.min(sens,25); score+=f5; factors.push({ label:"Sensitive data exposure", value:f5, max:25, raw:sens });
+  const loopAlerts = alerts.filter((a)=>a.type==="repeated_agent_loop").length;
+  const f6 = Math.min(loopAlerts*10,15); score+=f6; factors.push({ label:"Looping agents", value:f6, max:15, raw:loopAlerts });
+  return { score:Math.min(score,100), factors };
+}
+
+function execSummary(A, savings, risk, alerts) {
+  const crit   = alerts.filter((a)=>a.sev==="critical").length;
+  const topAgent= Object.entries(A.costByAgent).sort((a,b)=>b[1]-a[1])[0];
+  const topModel= Object.entries(A.costByModel).sort((a,b)=>b[1]-a[1])[0];
+  return {
+    what: `Across the selected window, AI runtime spend reached $${A.total.cost.toFixed(2)} with ${crit} critical alert${crit===1?"":"s"} firing. The top cost driver is ${topAgent?.[0]||"—"} on ${topModel?.[0]||"—"}.`,
+    why:  `Roughly $${savings.total.toFixed(2)} of spend appears recoverable — primarily from premium-model calls on short prompts, agent loops, and failed workflows. The runtime risk score is ${risk.score}/100${risk.score>50?", which is above the recommended threshold":""}.`,
+    next: crit>0 ? `Address the ${crit} critical alert${crit===1?"":"s"} first. Then route short premium-model prompts to a mid-tier alternative to capture estimated savings.` : `Continue monitoring. Consider routing short prompts on premium models to a mid-tier alternative to capture estimated savings.`,
+  };
+}
+
+// ─── Shared UI primitives ─────────────────────────────────────────────────────
+const Card = ({ children, style, title, subtitle, right }) => (
+  <div style={{ background:T.panel, border:`1px solid ${T.border}`, borderRadius:6, padding:18, ...style }}>
+    {(title||right) && (
+      <div style={{ display:"flex", alignItems:"baseline", justifyContent:"space-between", marginBottom:14 }}>
+        <div>
+          {title    && <div style={{ fontSize:11, letterSpacing:"0.12em", textTransform:"uppercase", color:T.textDim, fontFamily:FONT_MONO, fontWeight:500 }}>{title}</div>}
+          {subtitle && <div style={{ fontSize:13, color:T.textMute, marginTop:4 }}>{subtitle}</div>}
+        </div>
+        {right}
+      </div>
+    )}
+    {children}
+  </div>
+);
+
+const Stat = ({ label, value, delta, suffix, accent }) => (
+  <Card>
+    <div style={{ fontSize:10, letterSpacing:"0.14em", textTransform:"uppercase", color:T.textDim, fontFamily:FONT_MONO }}>{label}</div>
+    <div style={{ fontSize:28, fontFamily:FONT_MONO, fontWeight:500, color:accent||T.text, marginTop:10, letterSpacing:"-0.02em", lineHeight:1 }}>
+      {value}{suffix && <span style={{ fontSize:13, color:T.textDim, marginLeft:4, fontWeight:400 }}>{suffix}</span>}
     </div>
-  )
+    {delta && <div style={{ fontSize:12, marginTop:8, fontFamily:FONT_MONO, color:delta.startsWith("+")?T.crit:T.accent }}>{delta} vs yesterday</div>}
+  </Card>
+);
 
-  if (error) return (
-    <div className="flex items-center justify-center min-h-screen text-red-400">
-      Error: {error} — is the backend running on port 8000?
+const Pill = ({ children, color }) => (
+  <span style={{ display:"inline-flex", alignItems:"center", padding:"2px 8px", borderRadius:3, fontSize:10, fontFamily:FONT_MONO, letterSpacing:"0.08em", textTransform:"uppercase", background:`${color}18`, color, border:`1px solid ${color}33` }}>{children}</span>
+);
+
+const sevColor = (s) => s==="critical"?T.crit:s==="warning"?T.warn:T.info;
+const fmt$  = (n) => n>=1000?`$${(n/1000).toFixed(2)}k`:`$${n.toFixed(2)}`;
+const fmtK  = (n) => n>=1_000_000?`${(n/1_000_000).toFixed(2)}M`:n>=1000?`${(n/1000).toFixed(1)}k`:n.toString();
+const fmtTime=(ts)=>{ const d=Date.now()-ts; if(d<60_000)return"just now"; if(d<3_600_000)return`${Math.floor(d/60_000)}m ago`; if(d<86_400_000)return`${Math.floor(d/3_600_000)}h ago`; return new Date(ts).toLocaleDateString(); };
+
+// ─── Page components ──────────────────────────────────────────────────────────
+function Home({ risk, savings, alerts, A, onNavigate }) {
+  const crit = alerts.filter((a)=>a.sev==="critical").length;
+  return (
+    <div>
+      <div style={{ background:`linear-gradient(135deg,${T.panel} 0%,${T.panelHi} 100%)`, border:`1px solid ${T.border}`, borderRadius:8, padding:"44px 40px", marginBottom:18, position:"relative", overflow:"hidden" }}>
+        <div style={{ position:"absolute", top:0, right:0, width:300, height:300, background:`radial-gradient(circle,${T.accent}10 0%,transparent 70%)`, pointerEvents:"none" }} />
+        <div style={{ fontFamily:FONT_MONO, fontSize:10, letterSpacing:"0.18em", textTransform:"uppercase", color:T.accent, marginBottom:14 }}>◆ AI Runtime Control Center</div>
+        <h1 style={{ fontSize:36, fontWeight:400, letterSpacing:"-0.025em", lineHeight:1.15, margin:0, maxWidth:720, color:T.text }}>
+          "We don't understand or control our<br /><span style={{ color:T.textDim }}>AI infrastructure."</span>
+        </h1>
+        <div style={{ fontSize:15, color:T.textDim, marginTop:18, maxWidth:620, lineHeight:1.55 }}>
+          Every enterprise running AI in production hits the same wall: opaque spend, runaway agents, ungoverned models, and no audit trail. AIFinOps Guard gives you the layer that sees, scores, and controls all of it.
+        </div>
+        <div style={{ display:"grid", gridTemplateColumns:"repeat(4,1fr)", gap:14, marginTop:32, maxWidth:880 }}>
+          {[
+            { k:"Cost",      v:"Visibility",    desc:"See every $ across teams, agents, models",       to:"cost" },
+            { k:"Behavior",  v:"Intelligence",  desc:"Detect loops, spikes, anomalies in real time",    to:"agents" },
+            { k:"Security",  v:"Posture",       desc:"Catch unapproved models & sensitive data",        to:"alerts" },
+            { k:"Governance",v:"Controls",      desc:"Policy enforcement & audit trails",               to:"workflows" },
+          ].map((p) => (
+            <button key={p.k} onClick={()=>onNavigate(p.to)}
+              style={{ background:T.panel, border:`1px solid ${T.border}`, borderRadius:5, padding:16, textAlign:"left", cursor:"pointer", color:T.text, fontFamily:FONT_UI, transition:"all 0.15s" }}
+              onMouseEnter={(e)=>{ e.currentTarget.style.borderColor=T.accent; e.currentTarget.style.transform="translateY(-1px)"; }}
+              onMouseLeave={(e)=>{ e.currentTarget.style.borderColor=T.border; e.currentTarget.style.transform="translateY(0)"; }}>
+              <div style={{ fontFamily:FONT_MONO, fontSize:10, letterSpacing:"0.14em", textTransform:"uppercase", color:T.accent, marginBottom:6 }}>{p.k}</div>
+              <div style={{ fontSize:16, marginBottom:6 }}>{p.v}</div>
+              <div style={{ fontSize:12, color:T.textDim, lineHeight:1.4 }}>{p.desc}</div>
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div style={{ display:"grid", gridTemplateColumns:"1.1fr 1.3fr 1fr", gap:14, marginBottom:14 }}>
+        <RiskScoreCard risk={risk} />
+        <SavingsCard savings={savings} />
+        <Card title="Critical signal" subtitle={`${crit} critical · ${alerts.length} total`}>
+          <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
+            {alerts.slice(0,3).map((a,i) => (
+              <div key={i} style={{ padding:"10px 12px", background:T.panelHi, borderLeft:`2px solid ${sevColor(a.sev)}`, borderRadius:3 }}>
+                <div style={{ fontFamily:FONT_MONO, fontSize:10, color:sevColor(a.sev), letterSpacing:"0.08em", textTransform:"uppercase", marginBottom:4 }}>{a.type}</div>
+                <div style={{ fontSize:12, color:T.text, lineHeight:1.4 }}>{a.msg}</div>
+              </div>
+            ))}
+            <button onClick={()=>onNavigate("alerts")} style={{ background:"transparent", border:`1px solid ${T.border}`, color:T.textDim, padding:"8px 12px", borderRadius:4, cursor:"pointer", fontSize:11, fontFamily:FONT_MONO, letterSpacing:"0.08em", textTransform:"uppercase", marginTop:4 }}>View all alerts →</button>
+          </div>
+        </Card>
+      </div>
+      <ExecSummaryCard A={A} savings={savings} risk={risk} alerts={alerts} />
     </div>
-  )
+  );
+}
+
+function RiskScoreCard({ risk }) {
+  const color = risk.score>60?T.crit:risk.score>35?T.warn:T.accent;
+  const label = risk.score>60?"ELEVATED":risk.score>35?"MODERATE":"HEALTHY";
+  return (
+    <Card title="AI Runtime Risk Score" subtitle="Composite of 6 factors, 0–100">
+      <div style={{ display:"flex", gap:20, alignItems:"center" }}>
+        <div style={{ position:"relative", width:110, height:110, flexShrink:0 }}>
+          <svg width="110" height="110" viewBox="0 0 110 110">
+            <circle cx="55" cy="55" r="46" fill="none" stroke={T.border}  strokeWidth="6" />
+            <circle cx="55" cy="55" r="46" fill="none" stroke={color} strokeWidth="6" strokeLinecap="round" strokeDasharray={`${(risk.score/100)*289} 289`} transform="rotate(-90 55 55)" />
+          </svg>
+          <div style={{ position:"absolute", inset:0, display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center" }}>
+            <div style={{ fontSize:32, fontFamily:FONT_MONO, color, fontWeight:500, lineHeight:1 }}>{risk.score}</div>
+            <div style={{ fontSize:9, color:T.textMute, fontFamily:FONT_MONO, letterSpacing:"0.12em", marginTop:2 }}>/ 100</div>
+          </div>
+        </div>
+        <div style={{ flex:1, minWidth:0 }}>
+          <Pill color={color}>{label}</Pill>
+          <div style={{ display:"flex", flexDirection:"column", gap:4, marginTop:10 }}>
+            {risk.factors.map((f) => (
+              <div key={f.label} style={{ display:"flex", alignItems:"center", gap:8, fontSize:11 }}>
+                <div style={{ flex:1, fontFamily:FONT_MONO, color:T.textDim }}>{f.label}</div>
+                <div style={{ width:56, height:3, background:T.border, borderRadius:2, overflow:"hidden" }}>
+                  <div style={{ width:`${(f.value/f.max)*100}%`, height:"100%", background:f.value>0?color:T.border }} />
+                </div>
+                <div style={{ width:30, textAlign:"right", fontFamily:FONT_MONO, color:T.text }}>{f.value}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    </Card>
+  );
+}
+
+function SavingsCard({ savings }) {
+  const items = [
+    { label:"Right-sizing premium models",  val:savings.premium, note:"Route short prompts to mid-tier" },
+    { label:"Stopping agent loops",         val:savings.loops,   note:"Cap retries / add termination" },
+    { label:"Reducing failed workflows",    val:savings.failed,  note:"Fix upstream tool errors" },
+    { label:"Optimizing slow workflows",    val:savings.latency, note:"Reduce p95 latency penalty" },
+  ];
+  return (
+    <Card title="Potential Monthly Savings" subtitle="Estimated based on current runtime patterns">
+      <div style={{ display:"flex", alignItems:"baseline", gap:12, marginBottom:14 }}>
+        <div style={{ fontSize:38, fontFamily:FONT_MONO, color:T.accent, fontWeight:500, letterSpacing:"-0.02em", lineHeight:1 }}>${savings.total.toFixed(0)}</div>
+        <div style={{ fontSize:12, color:T.textDim, fontFamily:FONT_MONO }}>/ month recoverable</div>
+      </div>
+      <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
+        {items.map((it) => (
+          <div key={it.label} style={{ display:"flex", alignItems:"center", gap:10, fontSize:12 }}>
+            <div style={{ flex:1 }}>
+              <div style={{ color:T.text }}>{it.label}</div>
+              <div style={{ color:T.textMute, fontSize:11, marginTop:2 }}>{it.note}</div>
+            </div>
+            <div style={{ fontFamily:FONT_MONO, color:T.accent, fontWeight:500 }}>${it.val.toFixed(2)}</div>
+          </div>
+        ))}
+      </div>
+    </Card>
+  );
+}
+
+function ExecSummaryCard({ A, savings, risk, alerts }) {
+  const s = execSummary(A, savings, risk, alerts);
+  return (
+    <Card title="Executive Summary" subtitle="Plain-English digest of current runtime state" style={{ background:`linear-gradient(180deg,${T.panel} 0%,${T.panelHi} 100%)` }}>
+      <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:24 }}>
+        {[
+          { label:"What happened",   text:s.what, color:T.info },
+          { label:"Why it matters",  text:s.why,  color:T.warn },
+          { label:"What to do next", text:s.next, color:T.accent },
+        ].map((b) => (
+          <div key={b.label}>
+            <div style={{ fontFamily:FONT_MONO, fontSize:10, letterSpacing:"0.12em", textTransform:"uppercase", color:b.color, marginBottom:10, paddingBottom:8, borderBottom:`1px solid ${b.color}33` }}>{b.label}</div>
+            <div style={{ fontSize:13, color:T.text, lineHeight:1.6 }}>{b.text}</div>
+          </div>
+        ))}
+      </div>
+    </Card>
+  );
+}
+
+function RuntimeChain({ events, allAgents, allTeams, selectedAgentId, onSelectAgent }) {
+  const ag = allAgents.find((a)=>a.id===selectedAgentId) || allAgents[0];
+  if (!ag) return null;
+  const agEvents   = events.filter((e)=>e.agent===ag.id);
+  const totalCost  = agEvents.reduce((s,e)=>s+e.cost,0);
+  const totalCalls = agEvents.length;
+  const modelMix   = {};
+  agEvents.forEach((e)=>{ modelMix[e.model]=(modelMix[e.model]||0)+1; });
+  const topModel   = Object.entries(modelMix).sort((a,b)=>b[1]-a[1])[0]?.[0]||"—";
+  const fails      = agEvents.filter((e)=>e.status==="failed").length;
+  const sensitive  = agEvents.filter((e)=>e.sensitive).length;
+  const unapproved = agEvents.filter((e)=>!approvedModel(e.model)).length;
+  const riskLevel  = (fails/Math.max(totalCalls,1)>0.1||sensitive>0||unapproved>0)?"high":totalCost>50?"medium":"low";
+  const riskColor  = riskLevel==="high"?T.crit:riskLevel==="medium"?T.warn:T.accent;
+  const modelApproved = approvedModel(topModel);
+
+  const Node = ({ label, value, sub, color }) => (
+    <div style={{ background:T.panelHi, border:`1px solid ${T.border}`, borderRadius:6, padding:"14px 16px", minWidth:140, flex:1 }}>
+      <div style={{ fontFamily:FONT_MONO, fontSize:9, letterSpacing:"0.14em", textTransform:"uppercase", color:T.textMute, marginBottom:6 }}>{label}</div>
+      <div style={{ fontFamily:FONT_MONO, fontSize:15, color:color||T.text, marginBottom:4 }}>{value}</div>
+      <div style={{ fontFamily:FONT_MONO, fontSize:11, color:T.textDim }}>{sub}</div>
+    </div>
+  );
+  const Arrow = () => (
+    <div style={{ display:"flex", alignItems:"center", padding:"0 6px" }}>
+      <svg width="28" height="14" viewBox="0 0 28 14">
+        <line x1="0" y1="7" x2="22" y2="7" stroke={T.borderHi} strokeWidth="1" strokeDasharray="3,3"/>
+        <polygon points="22,3 28,7 22,11" fill={T.borderHi}/>
+      </svg>
+    </div>
+  );
 
   return (
-    <div className="min-h-screen bg-[#0f1117] p-6 max-w-7xl mx-auto">
-      {/* Header */}
-      <div className="flex items-center justify-between mb-8">
-        <div>
-          <h1 className="text-2xl font-bold text-white tracking-tight">AIFinOps Guard</h1>
-          <p className="text-sm text-slate-400 mt-0.5">AI Runtime Intelligence Platform</p>
+    <Card title="Runtime Chain" subtitle="Trace a single agent end-to-end: who, what tool, which model, what it cost, what risk">
+      <div style={{ display:"flex", gap:6, marginBottom:18, flexWrap:"wrap" }}>
+        {allAgents.map((a)=>(
+          <button key={a.id} onClick={()=>onSelectAgent(a.id)}
+            style={{ background:a.id===selectedAgentId?T.accent:"transparent", color:a.id===selectedAgentId?T.bg:T.textDim, border:`1px solid ${a.id===selectedAgentId?T.accent:T.border}`, padding:"5px 10px", borderRadius:3, fontSize:11, fontFamily:FONT_MONO, cursor:"pointer" }}>
+            {a.name}
+          </button>
+        ))}
+      </div>
+      <div style={{ display:"flex", alignItems:"stretch", overflowX:"auto", paddingBottom:4 }}>
+        <Node label="Agent"  value={ag.name}    sub={allTeams.find((t)=>t.id===ag.team)?.name||ag.team} />
+        <Arrow />
+        <Node label="Tool"   value={ag.tool}    sub={`${totalCalls.toLocaleString()} invocations`} />
+        <Arrow />
+        <Node label="Model"  value={topModel}   sub={providerFromModel(topModel)} color={!modelApproved?T.warn:T.text} />
+        <Arrow />
+        <Node label="Cost"   value={fmt$(totalCost)} sub={`avg $${(totalCost/Math.max(totalCalls,1)).toFixed(4)}/call`} />
+        <Arrow />
+        <Node label="Risk"   value={riskLevel.toUpperCase()} sub={`${fails} fail · ${sensitive} sens · ${unapproved} unapp`} color={riskColor} />
+      </div>
+    </Card>
+  );
+}
+
+function Overview({ A, events, allAgents, allTeams }) {
+  const [selectedAgent, setSelectedAgent] = useState(allAgents[0]?.id || "");
+  return (
+    <div>
+      <div style={{ display:"grid", gridTemplateColumns:"repeat(5,1fr)", gap:14, marginBottom:14 }}>
+        <Stat label="Cost today"    value={fmt$(A.today.cost)}         delta="+47%" />
+        <Stat label="Tokens today"  value={fmtK(A.today.tokens)}       delta="+38%" />
+        <Stat label="Active agents" value={A.today.activeAgents}       suffix={`/ ${allAgents.length}`} />
+        <Stat label="Avg latency"   value={Math.round(A.today.avgLatency)} suffix="ms" delta="+12%" />
+        <Stat label="Failed reqs"   value={A.today.failed}             accent={A.today.failed>5?T.crit:T.text} />
+      </div>
+      <div style={{ marginBottom:14 }}>
+        <RuntimeChain events={events} allAgents={allAgents} allTeams={allTeams} selectedAgentId={selectedAgent} onSelectAgent={setSelectedAgent} />
+      </div>
+      <div style={{ display:"grid", gridTemplateColumns:"2fr 1fr", gap:14 }}>
+        <Card title="Cost trend" subtitle="Daily spend across the selected window">
+          <ResponsiveContainer width="100%" height={220}>
+            <AreaChart data={A.series}>
+              <defs><linearGradient id="g1" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor={T.accent} stopOpacity={0.35}/><stop offset="100%" stopColor={T.accent} stopOpacity={0}/></linearGradient></defs>
+              <CartesianGrid stroke={T.border} vertical={false}/>
+              <XAxis dataKey="date" tickFormatter={(d)=>new Date(d).toLocaleDateString(undefined,{month:"short",day:"numeric"})} stroke={T.textMute} style={{ fontFamily:FONT_MONO, fontSize:10 }}/>
+              <YAxis stroke={T.textMute} style={{ fontFamily:FONT_MONO, fontSize:10 }} tickFormatter={(v)=>`$${v.toFixed(0)}`}/>
+              <Tooltip contentStyle={{ background:T.panelHi, border:`1px solid ${T.borderHi}`, borderRadius:4, fontFamily:FONT_MONO, fontSize:11 }} labelFormatter={(d)=>new Date(d).toLocaleDateString()} formatter={(v)=>[`$${v.toFixed(2)}`,"cost"]}/>
+              <Area type="monotone" dataKey="cost" stroke={T.accent} strokeWidth={1.5} fill="url(#g1)"/>
+            </AreaChart>
+          </ResponsiveContainer>
+        </Card>
+        <Card title="Top agents by cost" subtitle="Window total">
+          <div style={{ display:"flex", flexDirection:"column", gap:6 }}>
+            {Object.entries(A.costByAgent).sort((a,b)=>b[1]-a[1]).slice(0,6).map(([id,cost])=>{
+              const agent = allAgents.find((x)=>x.id===id);
+              const max   = Math.max(...Object.values(A.costByAgent));
+              return (
+                <div key={id} style={{ fontSize:12 }}>
+                  <div style={{ display:"flex", justifyContent:"space-between", marginBottom:4 }}>
+                    <span style={{ fontFamily:FONT_MONO, color:T.text }}>{agent?.name||id}</span>
+                    <span style={{ fontFamily:FONT_MONO, color:T.textDim }}>{fmt$(cost)}</span>
+                  </div>
+                  <div style={{ height:4, background:T.border, borderRadius:2, overflow:"hidden" }}>
+                    <div style={{ width:`${(cost/max)*100}%`, height:"100%", background:T.accent, opacity:0.85 }}/>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </Card>
+      </div>
+    </div>
+  );
+}
+
+function CostIntel({ A, events, allTeams }) {
+  const teamData  = Object.entries(A.costByTeam).map(([id,cost])=>({ name:allTeams.find((t)=>t.id===id)?.name||id, cost }));
+  const modelData = Object.entries(A.costByModel).map(([name,cost])=>({ name, cost }));
+  const COLORS    = [T.accent, T.info, T.warn, T.crit, T.purple, "#5BD9C5"];
+  const wfCost    = {};
+  events.forEach((e)=>{ wfCost[e.workflow]=(wfCost[e.workflow]||0)+e.cost; });
+  const topWf = Object.entries(wfCost).sort((a,b)=>b[1]-a[1]).slice(0,10);
+  return (
+    <div>
+      <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:14, marginBottom:14 }}>
+        <Card title="Cost by team" subtitle="Window cumulative">
+          <ResponsiveContainer width="100%" height={260}>
+            <BarChart data={teamData} layout="vertical">
+              <CartesianGrid stroke={T.border} horizontal={false}/>
+              <XAxis type="number" stroke={T.textMute} style={{ fontFamily:FONT_MONO, fontSize:10 }} tickFormatter={(v)=>`$${v.toFixed(0)}`}/>
+              <YAxis type="category" dataKey="name" stroke={T.textDim} style={{ fontFamily:FONT_MONO, fontSize:10 }} width={130}/>
+              <Tooltip contentStyle={{ background:T.panelHi, border:`1px solid ${T.borderHi}`, borderRadius:4, fontFamily:FONT_MONO, fontSize:11 }} formatter={(v)=>[fmt$(v),"cost"]}/>
+              <Bar dataKey="cost" fill={T.accent}/>
+            </BarChart>
+          </ResponsiveContainer>
+        </Card>
+        <Card title="Cost by model" subtitle="Provider mix">
+          <ResponsiveContainer width="100%" height={200}>
+            <PieChart>
+              <Pie data={modelData} dataKey="cost" nameKey="name" cx="50%" cy="50%" innerRadius={55} outerRadius={85} paddingAngle={2}>
+                {modelData.map((_,i)=><Cell key={i} fill={COLORS[i%COLORS.length]} stroke={T.bg} strokeWidth={2}/>)}
+              </Pie>
+              <Tooltip contentStyle={{ background:T.panelHi, border:`1px solid ${T.borderHi}`, borderRadius:4, fontFamily:FONT_MONO, fontSize:11 }} formatter={(v)=>[fmt$(v),"cost"]}/>
+            </PieChart>
+          </ResponsiveContainer>
+          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:6, marginTop:8 }}>
+            {modelData.map((m,i)=>(
+              <div key={m.name} style={{ fontSize:11, fontFamily:FONT_MONO, display:"flex", alignItems:"center", gap:6, color:T.textDim }}>
+                <span style={{ width:8, height:8, background:COLORS[i%COLORS.length], borderRadius:1, flexShrink:0 }}/>{m.name}
+              </div>
+            ))}
+          </div>
+        </Card>
+      </div>
+      <Card title="Most expensive workflows" subtitle="Top 10 by spend">
+        <table style={{ width:"100%", borderCollapse:"collapse" }}>
+          <thead>
+            <tr style={{ borderBottom:`1px solid ${T.border}` }}>
+              {["Workflow","Calls","Total cost","Avg cost/call"].map((h)=>(
+                <th key={h} style={{ textAlign:"left", padding:"10px 8px", fontFamily:FONT_MONO, fontSize:10, letterSpacing:"0.1em", textTransform:"uppercase", color:T.textDim, fontWeight:500 }}>{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {topWf.map(([wf,cost])=>{
+              const calls = A.callsByWorkflow[wf]||0;
+              return (
+                <tr key={wf} style={{ borderBottom:`1px solid ${T.border}` }}>
+                  <td style={{ padding:"12px 8px", fontFamily:FONT_MONO, fontSize:12, color:T.text }}>{wf}</td>
+                  <td style={{ padding:"12px 8px", fontFamily:FONT_MONO, fontSize:12, color:T.textDim }}>{calls.toLocaleString()}</td>
+                  <td style={{ padding:"12px 8px", fontFamily:FONT_MONO, fontSize:12, color:T.text }}>{fmt$(cost)}</td>
+                  <td style={{ padding:"12px 8px", fontFamily:FONT_MONO, fontSize:12, color:T.textDim }}>${(cost/Math.max(calls,1)).toFixed(4)}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </Card>
+    </div>
+  );
+}
+
+function AgentActivity({ events, allAgents, allTeams }) {
+  const rows = allAgents.map((a)=>{
+    const aev = events.filter((e)=>e.agent===a.id);
+    const requests = aev.length;
+    const cost     = aev.reduce((s,e)=>s+e.cost,0);
+    const avgLat   = requests>0 ? aev.reduce((s,e)=>s+e.latency,0)/requests : 0;
+    const errors   = aev.filter((e)=>e.status==="failed").length;
+    const last     = aev[0]?.ts||0;
+    return { ...a, requests, cost, avgLat, errors, last };
+  }).sort((a,b)=>b.cost-a.cost);
+  return (
+    <Card title="Agents" subtitle="Live runtime activity">
+      <table style={{ width:"100%", borderCollapse:"collapse" }}>
+        <thead>
+          <tr style={{ borderBottom:`1px solid ${T.border}` }}>
+            {["Agent","Team","Requests","Cost","Avg latency","Errors","Last activity"].map((h)=>(
+              <th key={h} style={{ textAlign:"left", padding:"10px 8px", fontFamily:FONT_MONO, fontSize:10, letterSpacing:"0.1em", textTransform:"uppercase", color:T.textDim, fontWeight:500 }}>{h}</th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((r)=>(
+            <tr key={r.id} style={{ borderBottom:`1px solid ${T.border}` }}>
+              <td style={{ padding:"12px 8px" }}>
+                <div style={{ fontFamily:FONT_MONO, fontSize:12, color:T.text }}>{r.name}</div>
+                <div style={{ fontFamily:FONT_MONO, fontSize:10, color:T.textMute, marginTop:2 }}>{r.id}</div>
+              </td>
+              <td style={{ padding:"12px 8px", fontSize:12, color:T.textDim }}>{allTeams.find((t)=>t.id===r.team)?.name||r.team}</td>
+              <td style={{ padding:"12px 8px", fontFamily:FONT_MONO, fontSize:12, color:T.text }}>{r.requests.toLocaleString()}</td>
+              <td style={{ padding:"12px 8px", fontFamily:FONT_MONO, fontSize:12, color:T.text }}>{fmt$(r.cost)}</td>
+              <td style={{ padding:"12px 8px", fontFamily:FONT_MONO, fontSize:12, color:r.avgLat>2000?T.warn:T.textDim }}>{Math.round(r.avgLat)}ms</td>
+              <td style={{ padding:"12px 8px" }}>{r.errors>10?<Pill color={T.crit}>{r.errors}</Pill>:r.errors>0?<Pill color={T.warn}>{r.errors}</Pill>:<span style={{ fontFamily:FONT_MONO, fontSize:12, color:T.textMute }}>0</span>}</td>
+              <td style={{ padding:"12px 8px", fontFamily:FONT_MONO, fontSize:12, color:T.textDim }}>{fmtTime(r.last)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </Card>
+  );
+}
+
+function ModelUsage({ A }) {
+  const allModelNames = [...new Set([...MODELS.map((m)=>m.name), ...Object.keys(A.costByModel)])];
+  const modelRows = allModelNames.map((name)=>{
+    const meta = MODELS.find((m)=>m.name===name);
+    const cost  = A.costByModel[name]||0;
+    const tokens= A.tokensByModel[name]||0;
+    const lats  = A.latencyByModel[name]||[];
+    const avgLat= lats.length>0 ? lats.reduce((s,x)=>s+x,0)/lats.length : 0;
+    const p95   = lats.length>0 ? [...lats].sort((a,b)=>a-b)[Math.floor(lats.length*0.95)] : 0;
+    return { name, provider:meta?.provider||providerFromModel(name), tier:meta?.tier||tierFromModel(name), approved:meta?.approved??approvedModel(name), cost, tokens, avgLat, p95, calls:lats.length };
+  }).sort((a,b)=>b.cost-a.cost);
+  return (
+    <Card title="Models" subtitle="Performance, spend, and governance posture">
+      <table style={{ width:"100%", borderCollapse:"collapse" }}>
+        <thead>
+          <tr style={{ borderBottom:`1px solid ${T.border}` }}>
+            {["Model","Provider","Tier","Approved","Calls","Tokens","Cost","Avg latency","p95"].map((h)=>(
+              <th key={h} style={{ textAlign:"left", padding:"10px 8px", fontFamily:FONT_MONO, fontSize:10, letterSpacing:"0.1em", textTransform:"uppercase", color:T.textDim, fontWeight:500 }}>{h}</th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {modelRows.map((m)=>(
+            <tr key={m.name} style={{ borderBottom:`1px solid ${T.border}` }}>
+              <td style={{ padding:"12px 8px", fontFamily:FONT_MONO, fontSize:12, color:T.text }}>{m.name}</td>
+              <td style={{ padding:"12px 8px", fontSize:12, color:T.textDim }}>{m.provider}</td>
+              <td style={{ padding:"12px 8px" }}><Pill color={m.tier==="premium"?T.warn:m.tier==="mid"?T.info:T.accent}>{m.tier}</Pill></td>
+              <td style={{ padding:"12px 8px" }}>{m.approved?<Pill color={T.accent}>yes</Pill>:<Pill color={T.crit}>no</Pill>}</td>
+              <td style={{ padding:"12px 8px", fontFamily:FONT_MONO, fontSize:12, color:T.text }}>{m.calls.toLocaleString()}</td>
+              <td style={{ padding:"12px 8px", fontFamily:FONT_MONO, fontSize:12, color:T.text }}>{fmtK(m.tokens)}</td>
+              <td style={{ padding:"12px 8px", fontFamily:FONT_MONO, fontSize:12, color:T.text }}>{fmt$(m.cost)}</td>
+              <td style={{ padding:"12px 8px", fontFamily:FONT_MONO, fontSize:12, color:T.textDim }}>{Math.round(m.avgLat)}ms</td>
+              <td style={{ padding:"12px 8px", fontFamily:FONT_MONO, fontSize:12, color:m.p95>3000?T.warn:T.textDim }}>{Math.round(m.p95)}ms</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </Card>
+  );
+}
+
+function WorkflowHealth({ A, events }) {
+  const rows = Object.keys(A.callsByWorkflow).map((wf)=>{
+    const calls = A.callsByWorkflow[wf];
+    const fails = A.failsByWorkflow[wf]||0;
+    const cost  = events.filter((e)=>e.workflow===wf).reduce((s,e)=>s+e.cost,0);
+    return { wf, calls, fails, rate:fails/calls, cost };
+  }).sort((a,b)=>b.rate-a.rate);
+  return (
+    <Card title="Workflow health" subtitle="Failure rate & spend per workflow">
+      <table style={{ width:"100%", borderCollapse:"collapse" }}>
+        <thead>
+          <tr style={{ borderBottom:`1px solid ${T.border}` }}>
+            {["Workflow","Calls","Failures","Rate","Cost","Status"].map((h)=>(
+              <th key={h} style={{ textAlign:"left", padding:"10px 8px", fontFamily:FONT_MONO, fontSize:10, letterSpacing:"0.1em", textTransform:"uppercase", color:T.textDim, fontWeight:500 }}>{h}</th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((r)=>(
+            <tr key={r.wf} style={{ borderBottom:`1px solid ${T.border}` }}>
+              <td style={{ padding:"12px 8px", fontFamily:FONT_MONO, fontSize:12, color:T.text }}>{r.wf}</td>
+              <td style={{ padding:"12px 8px", fontFamily:FONT_MONO, fontSize:12, color:T.text }}>{r.calls.toLocaleString()}</td>
+              <td style={{ padding:"12px 8px", fontFamily:FONT_MONO, fontSize:12, color:r.fails>0?T.warn:T.textDim }}>{r.fails}</td>
+              <td style={{ padding:"12px 8px", fontFamily:FONT_MONO, fontSize:12, color:r.rate>0.2?T.crit:r.rate>0.05?T.warn:T.textDim }}>{(r.rate*100).toFixed(1)}%</td>
+              <td style={{ padding:"12px 8px", fontFamily:FONT_MONO, fontSize:12, color:T.text }}>{fmt$(r.cost)}</td>
+              <td style={{ padding:"12px 8px" }}>{r.rate>0.2?<Pill color={T.crit}>degraded</Pill>:r.rate>0.05?<Pill color={T.warn}>warning</Pill>:<Pill color={T.accent}>healthy</Pill>}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </Card>
+  );
+}
+
+function AlertCard({ a }) {
+  const [open, setOpen] = useState(false);
+  const meta = ALERT_META[a.type]||{};
+  const c    = sevColor(a.sev);
+  return (
+    <div style={{ background:T.panelHi, border:`1px solid ${T.border}`, borderLeft:`2px solid ${c}`, borderRadius:5, overflow:"hidden" }}>
+      <div style={{ padding:"16px 18px" }}>
+        <div style={{ display:"flex", alignItems:"flex-start", justifyContent:"space-between", gap:16 }}>
+          <div style={{ display:"flex", gap:14, alignItems:"flex-start" }}>
+            <div style={{ width:34, height:34, borderRadius:7, background:`${c}1A`, border:`1px solid ${c}33`, display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0, marginTop:2 }}>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={c} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+            </div>
+            <div>
+              <div style={{ fontSize:15, color:T.text, fontWeight:500, marginBottom:3 }}>{meta.title||a.type}</div>
+              <div style={{ fontSize:12, color:T.textDim, fontFamily:FONT_MONO }}>{meta.category||"Alert"}<span style={{ color:T.textMute }}> · {a.entity}</span></div>
+            </div>
+          </div>
+          <div style={{ display:"flex", alignItems:"center", gap:10, flexShrink:0 }}>
+            <Pill color={c}>{a.sev}</Pill>
+            <span style={{ fontFamily:FONT_MONO, fontSize:11, color:T.textMute }}>{fmtTime(a.ts)}</span>
+          </div>
         </div>
-        <div className="flex items-center gap-3">
-          {lastRefresh && (
-            <span className="text-xs text-slate-500">
-              Updated {lastRefresh.toLocaleTimeString()}
-            </span>
-          )}
-          <button
-            onClick={refresh}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white/5 hover:bg-white/10 text-slate-300 text-sm transition-colors"
-          >
-            <RefreshCw size={14} />
-            Refresh
+        <div style={{ display:"flex", gap:8, marginTop:14, flexWrap:"wrap" }}>
+          <button style={{ display:"inline-flex", alignItems:"center", gap:7, background:`${c}1A`, color:c, border:`1px solid ${c}44`, padding:"6px 12px", borderRadius:4, fontSize:12, fontFamily:FONT_UI, cursor:"pointer" }}>▶ Run an action</button>
+          <button style={{ display:"inline-flex", alignItems:"center", gap:7, background:"transparent", color:T.textDim, border:`1px solid ${T.border}`, padding:"6px 12px", borderRadius:4, fontSize:12, fontFamily:FONT_UI, cursor:"pointer" }}>Ignore</button>
+          <button style={{ display:"inline-flex", alignItems:"center", gap:7, background:"transparent", color:T.textDim, border:`1px solid ${T.border}`, padding:"6px 12px", borderRadius:4, fontSize:12, fontFamily:FONT_UI, cursor:"pointer" }}>Support</button>
+          <button onClick={()=>setOpen((o)=>!o)} style={{ display:"inline-flex", alignItems:"center", gap:7, background:"transparent", color:T.textDim, border:`1px solid ${T.border}`, padding:"6px 12px", borderRadius:4, fontSize:12, fontFamily:FONT_UI, cursor:"pointer", marginLeft:"auto" }}>
+            {open?"Hide explanation":"Why this fired"} {open?"▲":"▼"}
           </button>
         </div>
       </div>
-
-      {/* KPI Cards */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
-        <KpiCard
-          icon={DollarSign}
-          label="Total Cost"
-          value={`$${summary.total_cost_usd.toFixed(4)}`}
-          sub={`${summary.total_requests} requests`}
-          color="green"
-        />
-        <KpiCard
-          icon={Zap}
-          label="Total Tokens"
-          value={summary.total_tokens.toLocaleString()}
-          sub="across all models"
-          color="yellow"
-        />
-        <KpiCard
-          icon={Clock}
-          label="Avg Latency"
-          value={`${summary.avg_latency_ms.toFixed(0)}ms`}
-          sub="per request"
-          color="blue"
-        />
-        <KpiCard
-          icon={Activity}
-          label="Models Used"
-          value={summary.models_used.length}
-          sub={summary.models_used.join(', ') || '—'}
-          color="indigo"
-        />
-      </div>
-
-      {/* Charts */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-6">
-        <CostChart records={records} />
-        <TokenChart records={records} />
-      </div>
-
-      {/* Table */}
-      <RequestsTable records={records} />
+      {open && (
+        <div style={{ borderTop:`1px solid ${T.border}`, background:T.panel, padding:"18px 18px 18px 64px" }}>
+          <div style={{ marginBottom:16 }}>
+            <div style={{ fontSize:13, color:T.text, lineHeight:1.6 }}>{meta.detail?meta.detail(a):a.msg}</div>
+          </div>
+          {meta.checks && <ExplBlock label="What this rule checks" color={T.info}   text={meta.checks}  />}
+          {meta.matters && <ExplBlock label="Why it matters"        color={T.warn}   text={meta.matters} />}
+          {meta.causes && (
+            <div style={{ marginBottom:16 }}>
+              <div style={{ fontFamily:FONT_MONO, fontSize:10, letterSpacing:"0.12em", textTransform:"uppercase", color:T.purple, marginBottom:8 }}>Common causes</div>
+              <div style={{ display:"flex", flexDirection:"column", gap:6 }}>
+                {meta.causes.map((cz,i)=>(
+                  <div key={i} style={{ display:"flex", gap:8, fontSize:13, color:T.textDim, lineHeight:1.5 }}>
+                    <span style={{ color:T.purple, flexShrink:0 }}>—</span>{cz}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+          <div style={{ background:T.panelHi, border:`1px solid ${T.border}`, borderRadius:4, padding:"12px 14px", display:"flex", gap:10, alignItems:"flex-start" }}>
+            <span style={{ color:T.accent, fontFamily:FONT_MONO, fontSize:13, flexShrink:0 }}>→</span>
+            <div>
+              <div style={{ fontFamily:FONT_MONO, fontSize:10, letterSpacing:"0.12em", textTransform:"uppercase", color:T.accent, marginBottom:4 }}>Recommended action</div>
+              <div style={{ fontSize:13, color:T.text, lineHeight:1.5 }}>{a.action}</div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
-  )
+  );
+}
+
+function ExplBlock({ label, color, text }) {
+  return (
+    <div style={{ marginBottom:16 }}>
+      <div style={{ fontFamily:FONT_MONO, fontSize:10, letterSpacing:"0.12em", textTransform:"uppercase", color, marginBottom:6 }}>{label}</div>
+      <div style={{ fontSize:13, color:T.textDim, lineHeight:1.6 }}>{text}</div>
+    </div>
+  );
+}
+
+function AlertsPage({ alerts, sevFilter }) {
+  const filtered = sevFilter==="all"?alerts:alerts.filter((a)=>a.sev===sevFilter);
+  return (
+    <Card title="Alerts" subtitle={`${filtered.length} of ${alerts.length} matching current filter · click any alert for the full explanation`}>
+      <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
+        {filtered.length===0 ? (
+          <div style={{ color:T.textMute, fontFamily:FONT_MONO, fontSize:13, padding:"24px 0", textAlign:"center" }}>No alerts matching current filter</div>
+        ) : filtered.map((a,i)=><AlertCard key={i} a={a}/>)}
+      </div>
+    </Card>
+  );
+}
+
+function FilterBar({ filters, setFilters, allTeams, allAgents }) {
+  const Select = ({ label, value, onChange, options }) => (
+    <div style={{ display:"flex", flexDirection:"column", gap:4 }}>
+      <label style={{ fontSize:9, fontFamily:FONT_MONO, letterSpacing:"0.12em", textTransform:"uppercase", color:T.textMute }}>{label}</label>
+      <select value={value} onChange={(e)=>onChange(e.target.value)} style={{ background:T.panelHi, color:T.text, border:`1px solid ${T.border}`, padding:"5px 8px", borderRadius:3, fontSize:12, fontFamily:FONT_MONO, cursor:"pointer", minWidth:100 }}>
+        {options.map((o)=><option key={o.value} value={o.value}>{o.label}</option>)}
+      </select>
+    </div>
+  );
+  return (
+    <div style={{ display:"flex", gap:16, padding:"12px 18px", background:T.panel, border:`1px solid ${T.border}`, borderRadius:6, marginBottom:14, alignItems:"flex-end", flexWrap:"wrap" }}>
+      <Select label="Team"     value={filters.team}  onChange={(v)=>setFilters({...filters,team:v})}  options={[{value:"all",label:"All teams"},  ...allTeams.map((t)=>({value:t.id,label:t.name}))]}/>
+      <Select label="Model"    value={filters.model} onChange={(v)=>setFilters({...filters,model:v})} options={[{value:"all",label:"All models"}, ...MODELS.map((m)=>({value:m.name,label:m.name}))]}/>
+      <Select label="Agent"    value={filters.agent} onChange={(v)=>setFilters({...filters,agent:v})} options={[{value:"all",label:"All agents"}, ...allAgents.map((a)=>({value:a.id,label:a.name}))]}/>
+      <Select label="Severity" value={filters.sev}   onChange={(v)=>setFilters({...filters,sev:v})}   options={[{value:"all",label:"All"},{value:"critical",label:"Critical"},{value:"warning",label:"Warning"},{value:"info",label:"Info"}]}/>
+      <Select label="Range"    value={String(filters.range)} onChange={(v)=>setFilters({...filters,range:parseInt(v)})} options={[{value:"1",label:"Last 24h"},{value:"7",label:"Last 7d"},{value:"30",label:"Last 30d"}]}/>
+      <button onClick={()=>setFilters({team:"all",model:"all",agent:"all",sev:"all",range:30})} style={{ background:"transparent", color:T.textDim, border:`1px solid ${T.border}`, padding:"6px 12px", borderRadius:3, fontSize:11, fontFamily:FONT_MONO, cursor:"pointer", marginLeft:"auto" }}>Reset</button>
+    </div>
+  );
+}
+
+// ─── Nav ──────────────────────────────────────────────────────────────────────
+const PAGES = [
+  { id:"home",      label:"Home" },
+  { id:"overview",  label:"Overview" },
+  { id:"cost",      label:"Cost Intelligence" },
+  { id:"agents",    label:"Agent Activity" },
+  { id:"models",    label:"Model Usage" },
+  { id:"workflows", label:"Workflow Health" },
+  { id:"alerts",    label:"Alerts" },
+];
+
+// ─── Root ─────────────────────────────────────────────────────────────────────
+export default function App() {
+  const [page, setPage]       = useState("home");
+  const [filters, setFilters] = useState({ team:"all", model:"all", agent:"all", sev:"all", range:30 });
+
+  const { apiRecords, lastRefresh, isLive, refresh } = useLiveData(30_000);
+
+  // Build event list and metadata from live data or demo fallback
+  const { allEvents, allTeams, allAgents } = useMemo(() => {
+    if (apiRecords === null) return { allEvents: [], allTeams: TEAMS, allAgents: AGENTS }; // still loading
+    if (apiRecords.length === 0) {
+      // No live data — use demo
+      return { allEvents: genDemoEvents(), allTeams: TEAMS, allAgents: AGENTS };
+    }
+    const { liveOrg, liveTeams, liveAgents } = buildLiveMetadata(apiRecords);
+    const liveEvents = apiRecords.map(apiRecordToEvent);
+    return {
+      allEvents:  liveEvents,
+      allTeams:   liveTeams,
+      allAgents:  liveAgents,
+    };
+  }, [apiRecords]);
+
+  const filteredEvents = useMemo(() => applyFilters(allEvents, filters), [allEvents, filters]);
+  const A       = useMemo(() => agg(filteredEvents),               [filteredEvents]);
+  const alerts  = useMemo(() => runDetections(filteredEvents),     [filteredEvents]);
+  const savings = useMemo(() => estimateSavings(filteredEvents),   [filteredEvents]);
+  const risk    = useMemo(() => computeRiskScore(filteredEvents, alerts), [filteredEvents, alerts]);
+  const critCount = alerts.filter((a)=>a.sev==="critical").length;
+
+  // Props passed down so page components use the right metadata
+  const pageProps = { events: filteredEvents, allTeams, allAgents, A, alerts, savings, risk };
+
+  const renderPage = () => {
+    switch (page) {
+      case "home":      return <Home      {...pageProps} onNavigate={setPage} />;
+      case "overview":  return <Overview  {...pageProps} />;
+      case "cost":      return <CostIntel {...pageProps} />;
+      case "agents":    return <AgentActivity {...pageProps} />;
+      case "models":    return <ModelUsage A={A} />;
+      case "workflows": return <WorkflowHealth {...pageProps} />;
+      case "alerts":    return <AlertsPage alerts={alerts} sevFilter={filters.sev} />;
+      default:          return null;
+    }
+  };
+
+  if (apiRecords === null) {
+    return <div style={{ minHeight:"100vh", background:T.bg, display:"flex", alignItems:"center", justifyContent:"center", color:T.textDim, fontFamily:FONT_MONO }}>Connecting to AIFinOps Guard API…</div>;
+  }
+
+  return (
+    <div style={{ minHeight:"100vh", background:T.bg, color:T.text, fontFamily:FONT_UI, fontSize:14, display:"flex" }}>
+      <style>{`
+        @import url('https://fonts.googleapis.com/css2?family=Geist:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap');
+        * { box-sizing:border-box; }
+        ::-webkit-scrollbar { width:8px; height:8px; }
+        ::-webkit-scrollbar-track { background:${T.bg}; }
+        ::-webkit-scrollbar-thumb { background:${T.border}; border-radius:4px; }
+        ::-webkit-scrollbar-thumb:hover { background:${T.borderHi}; }
+        select { appearance:none; background-image:url("data:image/svg+xml;utf8,<svg fill='%237A8499' xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 24 24'><polygon points='6,9 18,9 12,16'/></svg>"); background-repeat:no-repeat; background-position:right 8px center; padding-right:22px !important; }
+        button:focus { outline:none; }
+      `}</style>
+
+      {/* Sidebar */}
+      <aside style={{ width:230, background:T.panel, borderRight:`1px solid ${T.border}`, padding:"22px 16px", display:"flex", flexDirection:"column", flexShrink:0 }}>
+        <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:32, padding:"0 6px" }}>
+          <div style={{ width:22, height:22, background:T.accent, borderRadius:4, display:"flex", alignItems:"center", justifyContent:"center", fontFamily:FONT_MONO, fontWeight:600, fontSize:12, color:T.bg }}>◆</div>
+          <div>
+            <div style={{ fontSize:13, fontWeight:500, letterSpacing:"-0.01em" }}>AIFinOps Guard</div>
+            <div style={{ fontSize:9, color:T.textMute, fontFamily:FONT_MONO, letterSpacing:"0.1em", textTransform:"uppercase", marginTop:1 }}>control center</div>
+          </div>
+        </div>
+
+        <div style={{ fontSize:9, letterSpacing:"0.14em", textTransform:"uppercase", color:T.textMute, fontFamily:FONT_MONO, padding:"0 8px 10px" }}>Telemetry</div>
+
+        <nav style={{ display:"flex", flexDirection:"column", gap:2 }}>
+          {PAGES.map((p)=>(
+            <button key={p.id} onClick={()=>setPage(p.id)}
+              style={{ background:page===p.id?T.panelHi:"transparent", border:"none", color:page===p.id?T.text:T.textDim, textAlign:"left", padding:"9px 10px", fontSize:13, borderRadius:4, cursor:"pointer", fontFamily:FONT_UI, display:"flex", alignItems:"center", gap:10, borderLeft:page===p.id?`2px solid ${T.accent}`:"2px solid transparent", transition:"all 0.12s" }}>
+              {p.label}
+              {p.id==="alerts" && critCount>0 && (
+                <span style={{ marginLeft:"auto", background:T.crit, color:T.bg, fontSize:10, fontFamily:FONT_MONO, padding:"1px 6px", borderRadius:8, fontWeight:600 }}>{critCount}</span>
+              )}
+            </button>
+          ))}
+        </nav>
+
+        <div style={{ marginTop:"auto", padding:"12px 8px" }}>
+          <div style={{ fontSize:10, color:T.textMute, fontFamily:FONT_MONO, letterSpacing:"0.08em", lineHeight:1.8 }}>
+            <div style={{ color:isLive?T.accent:T.warn }}>● {isLive?"live data":"demo mode"}</div>
+            <span style={{ color:T.textMute }}>{filteredEvents.length.toLocaleString()} events / {filters.range}d</span>
+            {lastRefresh && <div style={{ color:T.textMute, marginTop:2 }}>updated {lastRefresh.toLocaleTimeString()}</div>}
+          </div>
+          <button onClick={refresh} style={{ marginTop:8, width:"100%", background:"transparent", border:`1px solid ${T.border}`, color:T.textDim, padding:"6px 10px", borderRadius:3, fontSize:10, fontFamily:FONT_MONO, cursor:"pointer", letterSpacing:"0.08em", textTransform:"uppercase" }}>↻ Refresh</button>
+        </div>
+      </aside>
+
+      {/* Main */}
+      <main style={{ flex:1, padding:"20px 28px", overflow:"auto" }}>
+        <header style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:18 }}>
+          <div>
+            <div style={{ fontSize:11, color:T.textMute, fontFamily:FONT_MONO, letterSpacing:"0.12em", textTransform:"uppercase" }}>{page}</div>
+            <h1 style={{ fontSize:22, fontWeight:500, margin:"4px 0 0", letterSpacing:"-0.015em" }}>{PAGES.find((p)=>p.id===page)?.label}</h1>
+          </div>
+          <div style={{ display:"flex", gap:10, alignItems:"center", fontFamily:FONT_MONO, fontSize:11, color:T.textDim }}>
+            <span>{filters.team==="all"?"all teams":allTeams.find((t)=>t.id===filters.team)?.name}</span>
+            <span style={{ color:T.textMute }}>|</span>
+            <span>last {filters.range}d</span>
+            <span style={{ color:T.textMute }}>|</span>
+            <span style={{ color:isLive?T.accent:T.warn }}>● {isLive?"live":"demo"}</span>
+          </div>
+        </header>
+
+        {page!=="home" && <FilterBar filters={filters} setFilters={setFilters} allTeams={allTeams} allAgents={allAgents}/>}
+
+        {renderPage()}
+      </main>
+    </div>
+  );
 }
