@@ -1399,6 +1399,9 @@ function ChatPage() {
   const lastActivityRef  = useRef(Date.now());
   const timerRef         = useRef(null);
 
+  // Mode: "chat" = multi-turn /sessions/{uuid}/chat | "ask" = single-shot /ask
+  const [mode, setMode] = useState("chat");
+
   // Active sessions panel
   const [activeSessions, setActiveSessions] = useState([]);
   const [showSessions,   setShowSessions]   = useState(false);
@@ -1509,39 +1512,58 @@ function ChatPage() {
     setError(null);
     resetTimer();
 
-    const userMsg   = { role: "user", content: text };
-    const newHistory = [...messages.filter(m => m.role !== "typing"), userMsg];
+    const userMsg = { role: "user", content: text };
     setMessages(prev => [...prev, userMsg]);
     setSending(true);
 
     try {
-      const uuid = await ensureSession();
-      const r = await fetch(`/api/sessions/${uuid}/chat`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          session_uuid: uuid,
-          user_name: user?.name || "Unknown",
-          user_role: user?.role || "analyst",
-          team, agent, model,
-          system_prompt: systemPrompt || null,
-          messages: newHistory.map(m => ({ role: m.role, content: m.content })),
-        }),
-      });
-
-      if (!r.ok) {
-        const err = await r.json();
-        throw new Error(err.detail || `HTTP ${r.status}`);
+      if (mode === "chat") {
+        // ── Multi-turn: pass full history, session-tracked ──
+        const newHistory = [...messages.filter(m => m.role !== "typing"), userMsg];
+        const uuid = await ensureSession();
+        const r = await fetch(`/api/sessions/${uuid}/chat`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            session_uuid: uuid,
+            user_name: user?.name || "Unknown",
+            user_role: user?.role || "analyst",
+            team, agent, model,
+            system_prompt: systemPrompt || null,
+            messages: newHistory.map(m => ({ role: m.role, content: m.content })),
+          }),
+        });
+        if (!r.ok) { const e = await r.json(); throw new Error(e.detail || `HTTP ${r.status}`); }
+        const data = await r.json();
+        setMessages(prev => [...prev, {
+          role: "assistant", content: data.reply,
+          meta: { model: data.model, tokens: data.total_tokens, cost: data.cost_usd,
+                  latency: data.latency_ms, findings: data.security_findings, warnings: data.budget_warnings },
+        }]);
+        setTotalCost(c  => c + data.cost_usd);
+        setTotalTokens(t => t + data.total_tokens);
+      } else {
+        // ── Single-shot: independent /ask, no history, auto-creates session ──
+        const r = await fetch("/api/ask", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            team, agent, model,
+            prompt: text,
+            system_prompt: systemPrompt || null,
+          }),
+        });
+        if (!r.ok) { const e = await r.json(); throw new Error(e.detail || `HTTP ${r.status}`); }
+        const data = await r.json();
+        setMessages(prev => [...prev, {
+          role: "assistant", content: data.response,
+          meta: { model: data.model, tokens: data.total_tokens, cost: data.cost_usd,
+                  latency: data.latency_ms, findings: data.security_findings, warnings: data.budget_warnings },
+          askSession: data.session_uuid,  // badge to show which auto-session was created
+        }]);
+        setTotalCost(c  => c + data.cost_usd);
+        setTotalTokens(t => t + data.total_tokens);
       }
-
-      const data = await r.json();
-      setMessages(prev => [...prev, {
-        role: "assistant", content: data.reply,
-        meta: { model: data.model, tokens: data.total_tokens, cost: data.cost_usd,
-                latency: data.latency_ms, findings: data.security_findings, warnings: data.budget_warnings },
-      }]);
-      setTotalCost(c  => c + data.cost_usd);
-      setTotalTokens(t => t + data.total_tokens);
     } catch (e) {
       setError(e.message);
     } finally {
@@ -1771,6 +1793,55 @@ function ChatPage() {
           </div>
         )}
 
+        {/* Mode toggle + info panel */}
+        <div style={{ background:T.panel, border:`1px solid ${T.border}`, borderRadius:8, overflow:"hidden" }}>
+          {/* Toggle row */}
+          <div style={{ display:"flex", borderBottom:`1px solid ${T.border}` }}>
+            {[
+              { id:"chat", icon:"◈", label:"Chat",        sub:"Multi-turn" },
+              { id:"ask",  icon:"◇", label:"Single-shot", sub:"One-off"    },
+            ].map(m => (
+              <button key={m.id} onClick={() => setMode(m.id)}
+                style={{ flex:1, display:"flex", alignItems:"center", justifyContent:"center", gap:8,
+                  padding:"10px 16px", border:"none",
+                  background: mode===m.id ? T.panelHi : "transparent",
+                  borderBottom: mode===m.id ? `2px solid ${mode==="chat" ? T.accent : T.purple}` : "2px solid transparent",
+                  color: mode===m.id ? T.text : T.textMute, cursor:"pointer", transition:"all 0.1s" }}>
+                <span style={{ fontSize:14, color: mode===m.id ? (m.id==="chat" ? T.accent : T.purple) : T.textMute }}>{m.icon}</span>
+                <span style={{ fontFamily:FONT_MONO, fontSize:12, fontWeight: mode===m.id ? 600 : 400 }}>{m.label}</span>
+                <span style={{ fontSize:10, fontFamily:FONT_MONO, color:T.textMute }}>{m.sub}</span>
+              </button>
+            ))}
+          </div>
+          {/* Info strip */}
+          {mode === "chat" && (
+            <div style={{ padding:"10px 16px", display:"flex", alignItems:"flex-start", gap:12, background:`${T.accent}08` }}>
+              <span style={{ color:T.accent, fontSize:16, flexShrink:0, marginTop:1 }}>◈</span>
+              <div style={{ display:"flex", flexDirection:"column", gap:3 }}>
+                <span style={{ fontSize:12, color:T.text, fontWeight:500 }}>Chat mode — Continuous conversation</span>
+                <span style={{ fontSize:11, color:T.textDim, lineHeight:1.6 }}>
+                  Every message you send includes the full conversation history. The model remembers context across turns.
+                  Uses <code style={{ background:T.panelHi, padding:"1px 5px", borderRadius:3, fontSize:10 }}>/sessions/&#123;uuid&#125;/chat</code>.
+                  A session is created on your first message and stays open for 30 min of inactivity.
+                </span>
+              </div>
+            </div>
+          )}
+          {mode === "ask" && (
+            <div style={{ padding:"10px 16px", display:"flex", alignItems:"flex-start", gap:12, background:`${T.purple}08` }}>
+              <span style={{ color:T.purple, fontSize:16, flexShrink:0, marginTop:1 }}>◇</span>
+              <div style={{ display:"flex", flexDirection:"column", gap:3 }}>
+                <span style={{ fontSize:12, color:T.text, fontWeight:500 }}>Single-shot mode — Independent requests</span>
+                <span style={{ fontSize:11, color:T.textDim, lineHeight:1.6 }}>
+                  Each message is a standalone API call with no history. The model has no memory of previous messages.
+                  Uses <code style={{ background:T.panelHi, padding:"1px 5px", borderRadius:3, fontSize:10 }}>/ask</code>.
+                  Every send auto-creates its own session — check the Recent tab to see them.
+                </span>
+              </div>
+            </div>
+          )}
+        </div>
+
         {/* Config bar */}
         <div style={{ background:T.panel, border:`1px solid ${T.border}`, borderRadius:8, padding:"12px 16px", display:"flex", gap:16, alignItems:"flex-end", flexWrap:"wrap" }}>
           {/* Current user badge */}
@@ -1836,10 +1907,11 @@ function ChatPage() {
         <div style={{ flex:1, overflow:"auto", display:"flex", flexDirection:"column", gap:12, padding:"4px 2px" }}>
           {messages.length === 0 && !sessionClosed && (
             <div style={{ flex:1, display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", color:T.textMute, fontFamily:FONT_MONO, fontSize:13, gap:8, paddingTop:60 }}>
-              <div style={{ fontSize:28 }}>◆</div>
-              <div>Start a conversation — all messages route through AIFinOps Guard</div>
+              <div style={{ fontSize:28, color: mode==="chat" ? T.accent : T.purple }}>{mode==="chat" ? "◈" : "◇"}</div>
+              <div>{mode==="chat" ? "Start a conversation — history is preserved across turns" : "Send a single-shot prompt — no history, each message is independent"}</div>
               <div style={{ fontSize:11 }}>PII scan · budget check · policy enforcement · cost tracking</div>
-              <div style={{ fontSize:10, marginTop:4, color:T.textMute }}>Session auto-closes after 30 min of inactivity</div>
+              {mode==="chat" && <div style={{ fontSize:10, marginTop:4 }}>Session auto-closes after 30 min of inactivity</div>}
+              {mode==="ask"  && <div style={{ fontSize:10, marginTop:4 }}>Each send creates its own session — visible in Recent tab</div>}
             </div>
           )}
 
@@ -1858,12 +1930,13 @@ function ChatPage() {
                 {msg.content}
               </div>
               {msg.meta && (
-                <div style={{ display:"flex", gap:14, fontSize:10, fontFamily:FONT_MONO, color:T.textMute, paddingLeft:4, flexWrap:"wrap" }}>
+                <div style={{ display:"flex", gap:14, fontSize:10, fontFamily:FONT_MONO, color:T.textMute, paddingLeft:4, flexWrap:"wrap", alignItems:"center" }}>
                   <span>{msg.meta.tokens.toLocaleString()} tokens</span>
                   <span style={{ color:T.accent }}>${msg.meta.cost.toFixed(6)}</span>
                   <span>{msg.meta.latency.toFixed(0)}ms</span>
                   {msg.meta.findings?.length > 0 && <span style={{ color:T.warn }}>⚠ {msg.meta.findings.length} PII finding{msg.meta.findings.length===1?"":"s"}</span>}
                   {msg.meta.warnings?.length > 0 && <span style={{ color:T.warn }}>⚠ Budget {msg.meta.warnings[0].pct}% used</span>}
+                  {msg.askSession && <span style={{ color:T.purple, background:`${T.purple}15`, border:`1px solid ${T.purple}33`, borderRadius:3, padding:"1px 6px" }}>◇ single-shot · session {msg.askSession.slice(0,8)}…</span>}
                 </div>
               )}
             </div>
