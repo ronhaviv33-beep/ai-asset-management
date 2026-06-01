@@ -22,10 +22,50 @@ from app.openai_client import complete, chat_complete
 
 Base.metadata.create_all(bind=engine)
 
+tags_metadata = [
+    {
+        "name": "POST — Ask / Create",
+        "description": (
+            "**Send prompts and create resources.**  \n"
+            "All LLM calls run through the full enforcement pipeline: "
+            "PII scan → model policy check → budget check → LLM → telemetry.  \n"
+            "Includes single-shot `/ask`, multi-turn `/chat`, session-aware chat, "
+            "and creation of sessions, budgets, and policies."
+        ),
+    },
+    {
+        "name": "GET — Read / Monitor",
+        "description": (
+            "**Read data and monitor the system.**  \n"
+            "Query telemetry records, cost summaries, audit logs, security alerts, "
+            "active sessions, budget status, and policy rules.  \n"
+            "All read endpoints are non-destructive and safe to call repeatedly."
+        ),
+    },
+    {
+        "name": "DELETE — Remove",
+        "description": (
+            "**Remove resources.**  \n"
+            "Close active chat sessions, delete budget rules, and remove policy rules.  \n"
+            "Deletions are immediate and cannot be undone."
+        ),
+    },
+]
+
 app = FastAPI(
     title="AIFinOps Guard",
-    description="AI Runtime Intelligence Platform — telemetry, cost, and governance gateway",
+    description=(
+        "## AI Runtime Intelligence Platform\n\n"
+        "Every LLM call in your organisation routes through this gateway. "
+        "It enforces **budget limits**, **model policies**, and **PII scanning** "
+        "on every request, then stores full telemetry for cost and audit reporting.\n\n"
+        "Endpoints are grouped by operation type:\n"
+        "- **POST** — send prompts or create resources\n"
+        "- **GET** — read telemetry, sessions, budgets, policies\n"
+        "- **DELETE** — remove sessions, budgets, policies"
+    ),
     version="0.4.0",
+    openapi_tags=tags_metadata,
 )
 
 app.add_middleware(
@@ -38,14 +78,14 @@ app.add_middleware(
 
 # ─── Health ───────────────────────────────────────────────────────────────────
 
-@app.get("/")
+@app.get("/", tags=["GET — Read / Monitor"])
 def root():
     return {"status": "AIFinOps Gateway Running", "version": "0.4.0"}
 
 
 # ─── AI Gateway ───────────────────────────────────────────────────────────────
 
-@app.post("/ask", response_model=AskResponse)
+@app.post("/ask", response_model=AskResponse, tags=["POST — Ask / Create"])
 async def ask(req: AskRequest, db: Session = Depends(get_db)):
 
     # 1. PII / sensitive data scan
@@ -137,7 +177,7 @@ async def ask(req: AskRequest, db: Session = Depends(get_db)):
 
 # ─── Multi-turn Chat ─────────────────────────────────────────────────────────
 
-@app.post("/chat", response_model=ChatResponse)
+@app.post("/chat", response_model=ChatResponse, tags=["POST — Ask / Create"])
 async def chat(req: ChatRequest, db: Session = Depends(get_db)):
 
     # Scan the latest user message only
@@ -197,7 +237,7 @@ async def chat(req: ChatRequest, db: Session = Depends(get_db)):
 
 # ─── Telemetry ────────────────────────────────────────────────────────────────
 
-@app.get("/telemetry", response_model=list[TelemetryRecord])
+@app.get("/telemetry", response_model=list[TelemetryRecord], tags=["GET — Read / Monitor"])
 def get_telemetry(
     skip: int = Query(default=0, ge=0),
     limit: int = Query(default=100, ge=1, le=1000),
@@ -206,14 +246,14 @@ def get_telemetry(
     return tel.get_all(db, skip=skip, limit=limit)
 
 
-@app.get("/telemetry/summary", response_model=TelemetrySummary)
+@app.get("/telemetry/summary", response_model=TelemetrySummary, tags=["GET — Read / Monitor"])
 def get_summary(db: Session = Depends(get_db)):
     return tel.get_summary(db)
 
 
 # ─── Audit log ────────────────────────────────────────────────────────────────
 
-@app.get("/audit", response_model=list[TelemetryRecord])
+@app.get("/audit", response_model=list[TelemetryRecord], tags=["GET — Read / Monitor"])
 def get_audit(
     team: str | None = Query(default=None),
     agent: str | None = Query(default=None),
@@ -230,7 +270,7 @@ def get_audit(
 
 # ─── Security ─────────────────────────────────────────────────────────────────
 
-@app.post("/security/scan", response_model=ScanResponse)
+@app.post("/security/scan", response_model=ScanResponse, tags=["POST — Ask / Create"])
 def security_scan(req: ScanRequest):
     result = scan(req.text)
     return ScanResponse(
@@ -240,38 +280,38 @@ def security_scan(req: ScanRequest):
     )
 
 
-@app.get("/security/alerts")
+@app.get("/security/alerts", tags=["GET — Read / Monitor"])
 def security_alerts(db: Session = Depends(get_db)):
     return tel.get_security_alerts(db)
 
 
 # ─── Budgets ──────────────────────────────────────────────────────────────────
 
-@app.post("/budgets", response_model=BudgetRuleOut, status_code=201)
+@app.post("/budgets", response_model=BudgetRuleOut, status_code=201, tags=["POST — Ask / Create"])
 def create_budget(rule: BudgetRuleCreate, db: Session = Depends(get_db)):
     return bud.create_rule(db, team=rule.team, agent=rule.agent,
                            limit_usd=rule.limit_usd, period=rule.period, action=rule.action)
 
 
-@app.get("/budgets", response_model=list[BudgetRuleOut])
+@app.get("/budgets", response_model=list[BudgetRuleOut], tags=["GET — Read / Monitor"])
 def list_budgets(db: Session = Depends(get_db)):
     return bud.get_rules(db)
 
 
-@app.delete("/budgets/{rule_id}", status_code=204)
+@app.delete("/budgets/{rule_id}", status_code=204, tags=["DELETE — Remove"])
 def delete_budget(rule_id: int, db: Session = Depends(get_db)):
     if not bud.delete_rule(db, rule_id):
         raise HTTPException(status_code=404, detail="Budget rule not found")
 
 
-@app.get("/budgets/status", response_model=list[BudgetStatusItem])
+@app.get("/budgets/status", response_model=list[BudgetStatusItem], tags=["GET — Read / Monitor"])
 def budget_status(db: Session = Depends(get_db)):
     return bud.get_status(db)
 
 
 # ─── Chat Sessions ────────────────────────────────────────────────────────────
 
-@app.post("/sessions", response_model=SessionOut, status_code=201)
+@app.post("/sessions", response_model=SessionOut, status_code=201, tags=["POST — Ask / Create"])
 def create_session(req: SessionCreate, db: Session = Depends(get_db)):
     sess.expire_inactive(db)
     return sess.create_session(
@@ -280,19 +320,19 @@ def create_session(req: SessionCreate, db: Session = Depends(get_db)):
     )
 
 
-@app.get("/sessions", response_model=list[SessionOut])
+@app.get("/sessions", response_model=list[SessionOut], tags=["GET — Read / Monitor"])
 def list_sessions(active_only: bool = Query(default=True), db: Session = Depends(get_db)):
     sess.expire_inactive(db)
     return sess.list_sessions(db, active_only=active_only)
 
 
-@app.delete("/sessions/{session_uuid}", status_code=204)
+@app.delete("/sessions/{session_uuid}", status_code=204, tags=["DELETE — Remove"])
 def close_session(session_uuid: str, db: Session = Depends(get_db)):
     if not sess.close_session(db, session_uuid):
         raise HTTPException(status_code=404, detail="Session not found")
 
 
-@app.get("/sessions/{session_uuid}/messages", response_model=list[SessionMessageOut])
+@app.get("/sessions/{session_uuid}/messages", response_model=list[SessionMessageOut], tags=["GET — Read / Monitor"])
 def get_session_messages(session_uuid: str, db: Session = Depends(get_db)):
     s = sess.get_session(db, session_uuid)
     if not s:
@@ -300,7 +340,7 @@ def get_session_messages(session_uuid: str, db: Session = Depends(get_db)):
     return sess.get_messages(db, session_uuid)
 
 
-@app.post("/sessions/{session_uuid}/chat", response_model=ChatResponse)
+@app.post("/sessions/{session_uuid}/chat", response_model=ChatResponse, tags=["POST — Ask / Create"])
 async def session_chat(session_uuid: str, req: SessionChatRequest, db: Session = Depends(get_db)):
     # Verify session exists and is active
     s = sess.get_session(db, session_uuid)
@@ -375,17 +415,17 @@ async def session_chat(session_uuid: str, req: SessionChatRequest, db: Session =
 
 # ─── Policies ─────────────────────────────────────────────────────────────────
 
-@app.post("/policies", response_model=PolicyRuleOut, status_code=201)
+@app.post("/policies", response_model=PolicyRuleOut, status_code=201, tags=["POST — Ask / Create"])
 def create_policy(rule: PolicyRuleCreate, db: Session = Depends(get_db)):
     return pol.create_rule(db, team=rule.team, rule_type=rule.rule_type, value=rule.value)
 
 
-@app.get("/policies", response_model=list[PolicyRuleOut])
+@app.get("/policies", response_model=list[PolicyRuleOut], tags=["GET — Read / Monitor"])
 def list_policies(db: Session = Depends(get_db)):
     return pol.get_rules(db)
 
 
-@app.delete("/policies/{rule_id}", status_code=204)
+@app.delete("/policies/{rule_id}", status_code=204, tags=["DELETE — Remove"])
 def delete_policy(rule_id: int, db: Session = Depends(get_db)):
     if not pol.delete_rule(db, rule_id):
         raise HTTPException(status_code=404, detail="Policy rule not found")
