@@ -19,7 +19,7 @@ from app import budget as bud
 from app import policy as pol
 from app import sessions as sess
 from app.scanner import scan
-from app.openai_client import complete, chat_complete
+from app.client import complete, chat_complete
 from app.auth import hash_password, verify_password, create_token, get_current_user, require_admin
 
 Base.metadata.create_all(bind=engine)

@@ -3,7 +3,7 @@ from datetime import datetime, timezone, timedelta
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 from app.models import Telemetry, calculate_cost
-from app.openai_client import CompletionResult
+from app.client import CompletionResult
 from app.schemas import TelemetrySummary
 
 
