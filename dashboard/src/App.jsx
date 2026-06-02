@@ -2614,7 +2614,7 @@ function IntegrationsPage() {
   const [teamName, setTeamName] = useState(currentUser?.team || "my-team");
   const [agentName, setAgentName] = useState("my-agent");
 
-  const gatewayUrl = `${window.location.origin}/api`;
+  const gatewayUrl = BASE.startsWith("http") ? BASE : window.location.origin;
 
   const copy = (id, text) => {
     navigator.clipboard.writeText(text);
@@ -2721,7 +2721,7 @@ curl -X POST ${gatewayUrl}/v1/chat/completions \\
 # Teams using the Anthropic SDK natively — no code changes needed.
 # Just point base_url at this server instead of api.anthropic.com.
 client = anthropic.Anthropic(
-    base_url="${window.location.origin}",   # note: no /v1 suffix — the SDK adds it
+    base_url="${gatewayUrl}",   # note: no /v1 suffix — the SDK adds it
     api_key="<your-jwt-token>",             # from POST /api/auth/login
     default_headers={
         "X-Guard-Team":  "${teamName}",
