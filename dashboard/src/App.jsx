@@ -395,6 +395,40 @@ const SortableTh = ({ label, sortKey, active, dir, onToggle, style: extraStyle =
   </th>
 );
 
+function useSearch(rows, getSearchString) {
+  const [query, setQuery] = useState("");
+  const filtered = query.trim()
+    ? rows.filter(r => getSearchString(r).toLowerCase().includes(query.toLowerCase().trim()))
+    : rows;
+  return { query, setQuery, filtered };
+}
+
+const SearchBox = ({ query, onChange, placeholder = "Search…", count, total }) => (
+  <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:10 }}>
+    <div style={{ position:"relative", flex:1, maxWidth:320 }}>
+      <span style={{ position:"absolute", left:9, top:"50%", transform:"translateY(-50%)", color:T.textMute, fontSize:12, pointerEvents:"none" }}>⌕</span>
+      <input
+        value={query}
+        onChange={e => onChange(e.target.value)}
+        placeholder={placeholder}
+        style={{ width:"100%", boxSizing:"border-box", background:T.panelHi, color:T.text, border:`1px solid ${query ? T.accent+"55" : T.border}`,
+          padding:"6px 10px 6px 28px", borderRadius:4, fontSize:12, fontFamily:FONT_MONO, outline:"none" }}
+      />
+      {query && (
+        <button onClick={() => onChange("")}
+          style={{ position:"absolute", right:6, top:"50%", transform:"translateY(-50%)", background:"none", border:"none", color:T.textMute, cursor:"pointer", fontSize:14, lineHeight:1, padding:0 }}>
+          ×
+        </button>
+      )}
+    </div>
+    {query && (
+      <span style={{ fontFamily:FONT_MONO, fontSize:11, color:T.textMute }}>
+        {count} / {total}
+      </span>
+    )}
+  </div>
+);
+
 // ─── Page components ──────────────────────────────────────────────────────────
 function Home({ risk, savings, alerts, A, onNavigate }) {
   const crit = alerts.filter((a)=>a.sev==="critical").length;
@@ -672,7 +706,8 @@ function CostIntel({ A, events, allTeams }) {
   events.forEach((e)=>{ wfCost[e.workflow]=(wfCost[e.workflow]||0)+e.cost; });
   const wfBaseRows = Object.entries(wfCost).map(([wf, cost]) => ({ wf, cost, calls: A.callsByWorkflow[wf]||0, avgCost: cost/Math.max(A.callsByWorkflow[wf]||0,1) }));
   const colKey = { "Workflow":"wf","Calls":"calls","Total cost":"cost","Avg cost/call":"avgCost" };
-  const topWf = sort(wfBaseRows, (r, k) => r[k]);
+  const wfSorted = sort(wfBaseRows, (r, k) => r[k]);
+  const { query: wfQuery, setQuery: setWfQuery, filtered: topWf } = useSearch(wfSorted, r => r.wf);
   return (
     <div>
       <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:14, marginBottom:14 }}>
@@ -706,6 +741,7 @@ function CostIntel({ A, events, allTeams }) {
         </Card>
       </div>
       <Card title="Most expensive workflows" subtitle="Click a column header to sort">
+        <SearchBox query={wfQuery} onChange={setWfQuery} placeholder="Search workflows…" count={topWf.length} total={wfBaseRows.length} />
         <table style={{ width:"100%", borderCollapse:"collapse" }}>
           <thead>
             <tr style={{ borderBottom:`1px solid ${T.border}` }}>
@@ -743,9 +779,11 @@ function AgentActivity({ events, allAgents, allTeams }) {
     return { ...a, requests, cost, avgLat, errors, last, teamName };
   });
   const colKey = { "Agent":"name","Team":"teamName","Requests":"requests","Cost":"cost","Avg latency":"avgLat","Errors":"errors","Last activity":"last" };
-  const rows = sort(baseRows, (r, k) => r[k]);
+  const sorted = sort(baseRows, (r, k) => r[k]);
+  const { query, setQuery, filtered: rows } = useSearch(sorted, r => `${r.name} ${r.teamName} ${r.id}`);
   return (
     <Card title="Agents" subtitle="Live runtime activity">
+      <SearchBox query={query} onChange={setQuery} placeholder="Search agents or teams…" count={rows.length} total={baseRows.length} />
       <table style={{ width:"100%", borderCollapse:"collapse" }}>
         <thead>
           <tr style={{ borderBottom:`1px solid ${T.border}` }}>
@@ -788,9 +826,11 @@ function ModelUsage({ A }) {
     return { name, provider:meta?.provider||providerFromModel(name), tier:meta?.tier||tierFromModel(name), approved:meta?.approved??approvedModel(name), cost, tokens, avgLat, p95, calls:lats.length };
   });
   const colKey = { "Model":"name","Provider":"provider","Tier":"tier","Approved":"approved","Calls":"calls","Tokens":"tokens","Cost":"cost","Avg latency":"avgLat","p95":"p95" };
-  const modelRows = sort(baseRows, (r, k) => r[k]);
+  const sorted = sort(baseRows, (r, k) => r[k]);
+  const { query, setQuery, filtered: modelRows } = useSearch(sorted, r => `${r.name} ${r.provider} ${r.tier}`);
   return (
     <Card title="Models" subtitle="Performance, spend, and governance posture">
+      <SearchBox query={query} onChange={setQuery} placeholder="Search models or providers…" count={modelRows.length} total={baseRows.length} />
       <table style={{ width:"100%", borderCollapse:"collapse" }}>
         <thead>
           <tr style={{ borderBottom:`1px solid ${T.border}` }}>
@@ -828,9 +868,11 @@ function WorkflowHealth({ A, events }) {
     return { wf, calls, fails, rate:fails/calls, cost };
   });
   const colKey = { "Workflow":"wf","Calls":"calls","Failures":"fails","Rate":"rate","Cost":"cost","Status":"rate" };
-  const rows = sort(baseRows, (r, k) => r[k]);
+  const sorted = sort(baseRows, (r, k) => r[k]);
+  const { query, setQuery, filtered: rows } = useSearch(sorted, r => r.wf);
   return (
     <Card title="Workflow health" subtitle="Failure rate & spend per workflow">
+      <SearchBox query={query} onChange={setQuery} placeholder="Search workflows…" count={rows.length} total={baseRows.length} />
       <table style={{ width:"100%", borderCollapse:"collapse" }}>
         <thead>
           <tr style={{ borderBottom:`1px solid ${T.border}` }}>
@@ -970,7 +1012,10 @@ function SortableBudgetTable({ rules, onDelete }) {
     if (k === "limit_usd")  return r.limit_usd;
     return r[k] || "";
   });
+  const { query, setQuery, filtered } = useSearch(sorted, r => `${r.team} ${r.agent||""} ${r.period} ${r.action}`);
   return (
+    <>
+    <SearchBox query={query} onChange={setQuery} placeholder="Search team, agent, period…" count={filtered.length} total={rules.length} />
     <table style={{ width:"100%", borderCollapse:"collapse" }}>
       <thead>
         <tr style={{ borderBottom:`1px solid ${T.border}` }}>
@@ -982,7 +1027,7 @@ function SortableBudgetTable({ rules, onDelete }) {
         </tr>
       </thead>
       <tbody>
-        {sorted.map((r) => (
+        {filtered.map((r) => (
           <tr key={r.id} style={{ borderBottom:`1px solid ${T.border}` }}>
             <td style={{ padding:"12px 8px", fontFamily:FONT_MONO, fontSize:12, color:T.text }}>{r.team}</td>
             <td style={{ padding:"12px 8px", fontFamily:FONT_MONO, fontSize:12, color:T.textDim }}>{r.agent||<span style={{color:T.textMute}}>all agents</span>}</td>
@@ -1000,6 +1045,7 @@ function SortableBudgetTable({ rules, onDelete }) {
         ))}
       </tbody>
     </table>
+    </>
   );
 }
 
@@ -1147,9 +1193,13 @@ function AuditLogTable({ audit, hasMore = false, loadingMore = false, onLoadMore
     if (k === "sensitive") return r.sensitive ? 1 : 0;
     return r[k];
   });
+  const { query, setQuery, filtered } = useSearch(sorted, r =>
+    `${r.team} ${r.agent} ${r.model} ${r.prompt||""} ${r.block_reason||""}`
+  );
 
   return (
     <Card title="Audit Log" subtitle="All requests — including blocked and sensitive-flagged. Click a row for full details.">
+      <SearchBox query={query} onChange={setQuery} placeholder="Search team, agent, model, prompt…" count={filtered.length} total={audit.length} />
       <table style={{ width:"100%", borderCollapse:"collapse" }}>
         <thead>
           <tr style={{ borderBottom:`1px solid ${T.border}` }}>
@@ -1161,9 +1211,9 @@ function AuditLogTable({ audit, hasMore = false, loadingMore = false, onLoadMore
           </tr>
         </thead>
         <tbody>
-          {sorted.length === 0 ? (
-            <tr><td colSpan={9} style={{ padding:"20px 8px", color:T.textMute, fontFamily:FONT_MONO, fontSize:13 }}>No audit records yet.</td></tr>
-          ) : sorted.map((r) => {
+          {filtered.length === 0 ? (
+            <tr><td colSpan={9} style={{ padding:"20px 8px", color:T.textMute, fontFamily:FONT_MONO, fontSize:13 }}>{audit.length === 0 ? "No audit records yet." : "No records match your search."}</td></tr>
+          ) : filtered.map((r) => {
             const isOpen = expanded === r.id;
             const rowBg = r.blocked ? `${T.crit}08` : r.sensitive ? `${T.warn}08` : "transparent";
             let findings = [];
@@ -1587,7 +1637,10 @@ function SortableUsersTable({ users, currentUser, editing, editSaving, setEditin
     if (k === "is_active")  return u.is_active ? 1 : 0;
     return u[k] || "";
   });
+  const { query, setQuery, filtered } = useSearch(sorted, u => `${u.name} ${u.email} ${u.role} ${u.team||""}`);
   return (
+    <>
+    <SearchBox query={query} onChange={setQuery} placeholder="Search name, email, role, team…" count={filtered.length} total={users.length} />
     <table style={{ width:"100%", borderCollapse:"collapse" }}>
       <thead>
         <tr style={{ borderBottom:`1px solid ${T.border}` }}>
@@ -1599,7 +1652,7 @@ function SortableUsersTable({ users, currentUser, editing, editSaving, setEditin
         </tr>
       </thead>
       <tbody>
-        {sorted.map(u => {
+        {filtered.map(u => {
           const isEditing = editing?.id === u.id;
           const isSelf    = u.id === currentUser?.id;
           return (
@@ -1655,6 +1708,7 @@ function SortableUsersTable({ users, currentUser, editing, editSaving, setEditin
         })}
       </tbody>
     </table>
+    </>
   );
 }
 
