@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useEffect, useCallback, useRef, createContext, useContext } from "react";
-import { login as apiLogin, fetchMe, fetchUsers, createUser, updateUser, deleteUser, getToken, setToken, authFetch, fetchKeyStatuses, updateKey } from "./api.js";
+import { login as apiLogin, fetchMe, fetchUsers, createUser, updateUser, deleteUser, getToken, setToken, authFetch, fetchKeyStatuses, updateKey, BASE } from "./api.js";
 import {
   LineChart, Line, AreaChart, Area, BarChart, Bar,
   XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid,
@@ -185,7 +185,7 @@ function useLiveData(intervalMs = 30_000) {
   const load = useCallback(async () => {
     if (!getToken()) { setApiRecords([]); return; }
     try {
-      const r = await authFetch("/api/telemetry?limit=1000");
+      const r = await authFetch(`${BASE}/telemetry?limit=1000`);
       if (!r || !r.ok) throw new Error("API error");
       const data = await r.json();
       setApiRecords(data);
@@ -1061,8 +1061,8 @@ function BudgetsPage() {
   const load = useCallback(async () => {
     try {
       const [r, s] = await Promise.all([
-        authFetch("/api/budgets").then((x) => x.json()),
-        authFetch("/api/budgets/status").then((x) => x.json()),
+        authFetch(`${BASE}/budgets`).then((x) => x.json()),
+        authFetch(`${BASE}/budgets/status`).then((x) => x.json()),
       ]);
       setRules(r);
       setStatus(s);
@@ -1078,7 +1078,7 @@ function BudgetsPage() {
     setErr(null);
     try {
       const body = { ...form, limit_usd: parseFloat(form.limit_usd), agent: form.agent || null };
-      const r = await authFetch("/api/budgets", { method:"POST", body: JSON.stringify(body) });
+      const r = await authFetch(`${BASE}/budgets`, { method:"POST", body: JSON.stringify(body) });
       if (!r || !r.ok) throw new Error(await r.text());
       setForm({ team:"", agent:"", limit_usd:"", period:"monthly", action:"alert" });
       await load();
@@ -1087,7 +1087,7 @@ function BudgetsPage() {
   };
 
   const handleDelete = async (id) => {
-    await authFetch(`/api/budgets/${id}`, { method:"DELETE" });
+    await authFetch(`${BASE}/budgets/${id}`, { method:"DELETE" });
     await load();
   };
 
@@ -1331,7 +1331,7 @@ function SecurityPage() {
     if (!isAdmin) return;
     setAuditLoading(true);
     try {
-      const r = await authFetch(`/api/audit?sensitive_only=false&blocked_only=false&limit=${AUDIT_PAGE + 1}&skip=${offset}`);
+      const r = await authFetch(`${BASE}/audit?sensitive_only=false&blocked_only=false&limit=${AUDIT_PAGE + 1}&skip=${offset}`);
       if (!r?.ok) return;
       const rows = await r.json();
       const hasMore = rows.length > AUDIT_PAGE;
@@ -1346,11 +1346,11 @@ function SecurityPage() {
   const load = useCallback(async () => {
     try {
       const fetchers = [
-        authFetch("/api/security/alerts").then((x) => x.json()),
+        authFetch(`${BASE}/security/alerts`).then((x) => x.json()),
       ];
       if (isAdmin) {
         fetchers.push(
-          authFetch("/api/policies").then((x) => x.json()),
+          authFetch(`${BASE}/policies`).then((x) => x.json()),
         );
       }
       const [a, p] = await Promise.all(fetchers);
@@ -1367,7 +1367,7 @@ function SecurityPage() {
     if (!scanText.trim()) return;
     setScanning(true);
     try {
-      const r = await authFetch("/api/security/scan", {
+      const r = await authFetch(`${BASE}/security/scan`, {
         method: "POST",
         body: JSON.stringify({ text: scanText }),
       });
@@ -1379,7 +1379,7 @@ function SecurityPage() {
     e.preventDefault();
     setSaving(true);
     try {
-      await authFetch("/api/policies", {
+      await authFetch(`${BASE}/policies`, {
         method: "POST",
         body: JSON.stringify(pForm),
       });
@@ -1389,7 +1389,7 @@ function SecurityPage() {
   };
 
   const handleDeletePolicy = async (id) => {
-    await authFetch(`/api/policies/${id}`, { method:"DELETE" });
+    await authFetch(`${BASE}/policies/${id}`, { method:"DELETE" });
     await load();
   };
 
@@ -1935,11 +1935,11 @@ function ChatPage() {
       const saved = localStorage.getItem(CHAT_SESSION_KEY);
       if (saved) {
         try {
-          const sr = await authFetch(`/api/sessions/${saved}`);
+          const sr = await authFetch(`${BASE}/sessions/${saved}`);
           if (sr?.ok) {
             const session = await sr.json();
             if (session.is_active) {
-              const mr = await authFetch(`/api/sessions/${saved}/messages`);
+              const mr = await authFetch(`${BASE}/sessions/${saved}/messages`);
               if (mr?.ok) {
                 const msgs = await mr.json();
                 if (msgs.length > 0) {
@@ -1994,8 +1994,8 @@ function ChatPage() {
     const fetchSessions = async () => {
       try {
         const [activeR, allR] = await Promise.all([
-          authFetch("/api/sessions?active_only=true"),
-          authFetch("/api/sessions?active_only=false"),
+          authFetch(`${BASE}/sessions?active_only=true`),
+          authFetch(`${BASE}/sessions?active_only=false`),
         ]);
         if (activeR?.ok) setActiveSessions(await activeR.json());
         if (allR?.ok)    setAllSessions(await allR.json());
@@ -2011,7 +2011,7 @@ function ChatPage() {
     if (!sessionUuid || sessionClosed) return;
     const poll = async () => {
       try {
-        const r = await authFetch(`/api/sessions/${sessionUuid}/messages`);
+        const r = await authFetch(`${BASE}/sessions/${sessionUuid}/messages`);
         if (!r?.ok) return;
         const dbMsgs = await r.json();
         // Only act if DB has more messages than we've tracked
@@ -2052,7 +2052,7 @@ function ChatPage() {
         clearInterval(timerRef.current);
         setSessionClosed(true);
         setTimeoutSecsLeft(0);
-        authFetch(`/api/sessions/${sessionUuid}`, { method: "DELETE" }).catch(() => {});
+        authFetch(`${BASE}/sessions/${sessionUuid}`, { method: "DELETE" }).catch(() => {});
       } else {
         setTimeoutSecsLeft(remaining <= SESSION_WARN_MS ? Math.ceil(remaining / 1000) : null);
       }
@@ -2065,7 +2065,7 @@ function ChatPage() {
   // ── Create or reuse session ──
   const ensureSession = async () => {
     if (sessionUuid) return sessionUuid;
-    const r = await authFetch("/api/sessions", {
+    const r = await authFetch(`${BASE}/sessions`, {
       method: "POST",
       body: JSON.stringify({ user_name: user?.name || "Unknown", user_role: user?.role || "analyst", team, agent, model }),
     });
@@ -2092,7 +2092,7 @@ function ChatPage() {
         // ── Multi-turn: pass full history, session-tracked ──
         const newHistory = [...messages.filter(m => m.role !== "typing"), userMsg];
         const uuid = await ensureSession();
-        const r = await authFetch(`/api/sessions/${uuid}/chat`, {
+        const r = await authFetch(`${BASE}/sessions/${uuid}/chat`, {
           method: "POST",
           body: JSON.stringify({
             session_uuid: uuid,
@@ -2114,7 +2114,7 @@ function ChatPage() {
         setTotalTokens(t => t + data.total_tokens);
       } else {
         // ── Single-shot: independent /ask, no history, auto-creates session ──
-        const r = await authFetch("/api/ask", {
+        const r = await authFetch(`${BASE}/ask", {
           method: "POST",
           body: JSON.stringify({
             team, agent, model,
@@ -2146,7 +2146,7 @@ function ChatPage() {
 
   const clearChat = async () => {
     if (sessionUuid) {
-      await authFetch(`/api/sessions/${sessionUuid}`, { method: "DELETE" }).catch(() => {});
+      await authFetch(`${BASE}/sessions/${sessionUuid}`, { method: "DELETE" }).catch(() => {});
     }
     localStorage.removeItem(CHAT_SESSION_KEY);
     setMessages([]); setTotalCost(0); setTotalTokens(0); setError(null);
@@ -2157,21 +2157,21 @@ function ChatPage() {
   const resumeSession = async (s) => {
     // Load history from old session, create a fresh active session, restore messages
     try {
-      const r = await authFetch(`/api/sessions/${s.session_uuid}/messages`);
+      const r = await authFetch(`${BASE}/sessions/${s.session_uuid}/messages`);
       if (!r?.ok) throw new Error("Could not load messages");
       const msgs = await r.json();
 
       // Close current session if one is open
       if (sessionUuid) {
-        await fetch(`/api/sessions/${sessionUuid}`, { method: "DELETE" }).catch(() => {});
+        await fetch(`${BASE}/sessions/${sessionUuid}`, { method: "DELETE" }).catch(() => {});
       }
       // Always close the source session — we continue it in a new one
       if (s.session_uuid !== sessionUuid) {
-        await fetch(`/api/sessions/${s.session_uuid}`, { method: "DELETE" }).catch(() => {});
+        await fetch(`${BASE}/sessions/${s.session_uuid}`, { method: "DELETE" }).catch(() => {});
       }
 
       // Create a new session inheriting the old config
-      const nr = await authFetch("/api/sessions", {
+      const nr = await authFetch(`${BASE}/sessions", {
         method: "POST",
         body: JSON.stringify({
           user_name: user?.name || "Unknown",
@@ -2307,7 +2307,7 @@ function ChatPage() {
                             </button>
                             {(user?.role === "admin" || s.user_name === user?.name) && (
                               <button onClick={async () => {
-                                await authFetch(`/api/sessions/${s.session_uuid}`, { method:"DELETE" }).catch(()=>{});
+                                await authFetch(`${BASE}/sessions/${s.session_uuid}`, { method:"DELETE" }).catch(()=>{});
                                 setActiveSessions(prev => prev.filter(x => x.session_uuid !== s.session_uuid));
                               }}
                                 style={{ background:`${T.crit}15`, border:`1px solid ${T.crit}44`, color:T.crit, borderRadius:4, padding:"4px 10px", fontSize:10, fontFamily:FONT_MONO, cursor:"pointer" }}>
