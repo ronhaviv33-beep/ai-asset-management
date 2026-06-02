@@ -139,6 +139,46 @@ class ChatResponse(BaseModel):
 
 # ── Security scan ─────────────────────────────────────────────────────────────
 
+# ── Auth / Users ─────────────────────────────────────────────────────────────
+
+class UserCreate(BaseModel):
+    email: str = Field(..., examples=["ron@company.com"])
+    name: str = Field(..., examples=["Ron Haviv"])
+    password: str = Field(..., min_length=8)
+    role: str = Field(default="analyst", pattern="^(admin|analyst|viewer)$")
+    team: str = Field(default="")
+
+
+class UserUpdate(BaseModel):
+    name: str | None = None
+    role: str | None = Field(default=None, pattern="^(admin|analyst|viewer)$")
+    team: str | None = None
+    is_active: bool | None = None
+
+
+class UserOut(BaseModel):
+    id: int
+    email: str
+    name: str
+    role: str
+    team: str
+    is_active: bool
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class LoginRequest(BaseModel):
+    email: str
+    password: str
+
+
+class TokenResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+    user: UserOut
+
+
 # ── Sessions ─────────────────────────────────────────────────────────────────
 
 class SessionCreate(BaseModel):

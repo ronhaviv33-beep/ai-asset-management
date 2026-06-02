@@ -1,4 +1,5 @@
 import React, { useState, useMemo, useEffect, useCallback, useRef, createContext, useContext } from "react";
+import { login as apiLogin, fetchMe, fetchUsers, createUser, updateUser, deleteUser, getToken, setToken, authFetch } from "./api.js";
 import {
   LineChart, Line, AreaChart, Area, BarChart, Bar,
   XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid,
@@ -183,8 +184,8 @@ function useLiveData(intervalMs = 30_000) {
 
   const load = useCallback(async () => {
     try {
-      const r = await fetch("/api/telemetry?limit=1000");
-      if (!r.ok) throw new Error("API error");
+      const r = await authFetch("/api/telemetry?limit=1000");
+      if (!r || !r.ok) throw new Error("API error");
       const data = await r.json();
       setApiRecords(data);
       setIsLive(data.length > 0);
@@ -906,8 +907,8 @@ function BudgetsPage() {
   const load = useCallback(async () => {
     try {
       const [r, s] = await Promise.all([
-        fetch("/api/budgets").then((x) => x.json()),
-        fetch("/api/budgets/status").then((x) => x.json()),
+        authFetch("/api/budgets").then((x) => x.json()),
+        authFetch("/api/budgets/status").then((x) => x.json()),
       ]);
       setRules(r);
       setStatus(s);
@@ -923,8 +924,8 @@ function BudgetsPage() {
     setErr(null);
     try {
       const body = { ...form, limit_usd: parseFloat(form.limit_usd), agent: form.agent || null };
-      const r = await fetch("/api/budgets", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(body) });
-      if (!r.ok) throw new Error(await r.text());
+      const r = await authFetch("/api/budgets", { method:"POST", body: JSON.stringify(body) });
+      if (!r || !r.ok) throw new Error(await r.text());
       setForm({ team:"", agent:"", limit_usd:"", period:"monthly", action:"alert" });
       await load();
     } catch (e) { setErr(e.message); }
@@ -932,7 +933,7 @@ function BudgetsPage() {
   };
 
   const handleDelete = async (id) => {
-    await fetch(`/api/budgets/${id}`, { method:"DELETE" });
+    await authFetch(`/api/budgets/${id}`, { method:"DELETE" });
     await load();
   };
 
@@ -1065,9 +1066,9 @@ function SecurityPage() {
   const load = useCallback(async () => {
     try {
       const [a, p, au] = await Promise.all([
-        fetch("/api/security/alerts").then((x) => x.json()),
-        fetch("/api/policies").then((x) => x.json()),
-        fetch("/api/audit?sensitive_only=false&blocked_only=false&limit=50").then((x) => x.json()),
+        authFetch("/api/security/alerts").then((x) => x.json()),
+        authFetch("/api/policies").then((x) => x.json()),
+        authFetch("/api/audit?sensitive_only=false&blocked_only=false&limit=50").then((x) => x.json()),
       ]);
       setAlerts(a);
       setPolicies(p);
@@ -1082,8 +1083,8 @@ function SecurityPage() {
     if (!scanText.trim()) return;
     setScanning(true);
     try {
-      const r = await fetch("/api/security/scan", {
-        method: "POST", headers: {"Content-Type":"application/json"},
+      const r = await authFetch("/api/security/scan", {
+        method: "POST",
         body: JSON.stringify({ text: scanText }),
       });
       setScanResult(await r.json());
@@ -1094,8 +1095,8 @@ function SecurityPage() {
     e.preventDefault();
     setSaving(true);
     try {
-      await fetch("/api/policies", {
-        method: "POST", headers: {"Content-Type":"application/json"},
+      await authFetch("/api/policies", {
+        method: "POST",
         body: JSON.stringify(pForm),
       });
       setPForm({ team:"", rule_type:"block_model", value:"" });
@@ -1104,7 +1105,7 @@ function SecurityPage() {
   };
 
   const handleDeletePolicy = async (id) => {
-    await fetch(`/api/policies/${id}`, { method:"DELETE" });
+    await authFetch(`/api/policies/${id}`, { method:"DELETE" });
     await load();
   };
 
@@ -1291,7 +1292,7 @@ const UserContext = createContext(null);
 const useUser = () => useContext(UserContext);
 
 const ROLES = {
-  admin:   { label:"Admin",   color: T.crit,   pages: ["home","chat","overview","cost","agents","models","workflows","alerts","budgets","security"] },
+  admin:   { label:"Admin",   color: T.crit,   pages: ["home","chat","overview","cost","agents","models","workflows","alerts","budgets","security","users"] },
   analyst: { label:"Analyst", color: T.warn,   pages: ["home","chat","overview","cost","agents","models","workflows","alerts","security"] },
   viewer:  { label:"Viewer",  color: T.info,   pages: ["home","overview","cost","agents","models","workflows","alerts"] },
 };
@@ -1300,75 +1301,170 @@ function canAccess(role, page) {
   return (ROLES[role]?.pages ?? []).includes(page);
 }
 
-// ─── User Selector Modal ───────────────────────────────────────────────────────
-function UserSelectorModal({ onConfirm, onCancel }) {
-  const [name, setName]   = useState("");
-  const [role, setRole]   = useState("analyst");
-  const [team, setTeam]   = useState("SOC");
-  const [err,  setErr]    = useState("");
+// ─── Login Page ───────────────────────────────────────────────────────────────
+function LoginPage({ onLogin }) {
+  const [email,    setEmail]    = useState("");
+  const [password, setPassword] = useState("");
+  const [loading,  setLoading]  = useState(false);
+  const [err,      setErr]      = useState("");
 
-  const confirm = () => {
-    if (!name.trim()) { setErr("Name is required"); return; }
-    onConfirm({ name: name.trim(), role, team: team.trim() || "SOC" });
+  const submit = async (e) => {
+    e.preventDefault();
+    setErr("");
+    setLoading(true);
+    try {
+      const data = await apiLogin(email, password);
+      setToken(data.access_token);
+      onLogin(data.user, data.access_token);
+    } catch (ex) {
+      setErr(ex.message);
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
-    <div style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.85)", display:"flex", alignItems:"center", justifyContent:"center", zIndex:9999 }}
-      onClick={e => { if (e.target === e.currentTarget && onCancel) onCancel(); }}>
-      <div style={{ background:T.panel, border:`1px solid ${T.borderHi}`, borderRadius:12, padding:36, width:400, display:"flex", flexDirection:"column", gap:20, position:"relative" }}>
-        {onCancel && (
-          <button onClick={onCancel}
-            style={{ position:"absolute", top:14, right:14, background:"transparent", border:"none", color:T.textMute, fontSize:18, cursor:"pointer", lineHeight:1, padding:"2px 6px", borderRadius:4 }}
-            title="Cancel">✕</button>
-        )}
+    <div style={{ position:"fixed", inset:0, background:T.bg, display:"flex", alignItems:"center", justifyContent:"center", zIndex:9999 }}>
+      <form onSubmit={submit} style={{ background:T.panel, border:`1px solid ${T.borderHi}`, borderRadius:12, padding:40, width:380, display:"flex", flexDirection:"column", gap:22 }}>
         <div>
-          <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:6 }}>
-            <div style={{ width:20, height:20, background:T.accent, borderRadius:4, display:"flex", alignItems:"center", justifyContent:"center", fontFamily:FONT_MONO, fontWeight:600, fontSize:11, color:T.bg }}>◆</div>
-            <span style={{ fontSize:14, fontWeight:500 }}>AIFinOps Guard</span>
+          <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:8 }}>
+            <div style={{ width:22, height:22, background:T.accent, borderRadius:4, display:"flex", alignItems:"center", justifyContent:"center", fontFamily:FONT_MONO, fontWeight:600, fontSize:12, color:T.bg }}>◆</div>
+            <span style={{ fontSize:15, fontWeight:500, letterSpacing:"-0.01em" }}>AIFinOps Guard</span>
           </div>
-          <div style={{ fontSize:13, color:T.textDim }}>Identify yourself to continue</div>
+          <div style={{ fontSize:13, color:T.textDim }}>Sign in to your account</div>
         </div>
-
         <div style={{ display:"flex", flexDirection:"column", gap:14 }}>
           {[
-            { label:"Your name", val:name, set:setName, placeholder:"e.g. Ron Haviv" },
-            { label:"Team", val:team, set:setTeam, placeholder:"e.g. SOC" },
-          ].map(({ label, val, set, placeholder }) => (
+            { label:"Email", val:email, set:setEmail, type:"email",    placeholder:"you@company.com" },
+            { label:"Password", val:password, set:setPassword, type:"password", placeholder:"••••••••" },
+          ].map(({ label, val, set, type, placeholder }) => (
             <div key={label} style={{ display:"flex", flexDirection:"column", gap:5 }}>
               <label style={{ fontSize:9, fontFamily:FONT_MONO, letterSpacing:"0.12em", textTransform:"uppercase", color:T.textMute }}>{label}</label>
-              <input value={val} onChange={e => set(e.target.value)} placeholder={placeholder}
-                onKeyDown={e => e.key==="Enter" && confirm()}
-                style={{ background:T.panelHi, color:T.text, border:`1px solid ${T.border}`, padding:"8px 12px", borderRadius:6, fontSize:13, fontFamily:FONT_UI, outline:"none" }}/>
+              <input type={type} value={val} onChange={e => set(e.target.value)} placeholder={placeholder} required
+                style={{ background:T.panelHi, color:T.text, border:`1px solid ${T.border}`, padding:"9px 12px", borderRadius:6, fontSize:13, fontFamily:FONT_UI, outline:"none" }}/>
             </div>
           ))}
-
-          <div style={{ display:"flex", flexDirection:"column", gap:5 }}>
-            <label style={{ fontSize:9, fontFamily:FONT_MONO, letterSpacing:"0.12em", textTransform:"uppercase", color:T.textMute }}>Role</label>
-            <div style={{ display:"flex", gap:8 }}>
-              {Object.entries(ROLES).map(([r, meta]) => (
-                <button key={r} onClick={() => setRole(r)}
-                  style={{ flex:1, padding:"8px 0", borderRadius:6, border:`1px solid ${role===r ? meta.color : T.border}`,
-                    background: role===r ? `${meta.color}18` : "transparent",
-                    color: role===r ? meta.color : T.textDim, fontSize:11, fontFamily:FONT_MONO, cursor:"pointer" }}>
-                  {meta.label}
-                </button>
-              ))}
-            </div>
-            <div style={{ fontSize:10, color:T.textMute, fontFamily:FONT_MONO, marginTop:2 }}>
-              {role==="admin" && "Full access — chat, budgets, policies, all sessions"}
-              {role==="analyst" && "Can chat, view telemetry, alerts, audit & security"}
-              {role==="viewer" && "Read-only: telemetry and alerts only"}
-            </div>
-          </div>
         </div>
-
-        {err && <div style={{ fontSize:11, color:T.crit, fontFamily:FONT_MONO }}>{err}</div>}
-
-        <button onClick={confirm}
-          style={{ background:T.accent, color:T.bg, border:"none", padding:"11px 0", borderRadius:7, fontSize:13, fontFamily:FONT_MONO, fontWeight:600, cursor:"pointer" }}>
-          Enter Dashboard
+        {err && <div style={{ fontSize:12, color:T.crit, fontFamily:FONT_MONO }}>{err}</div>}
+        <button type="submit" disabled={loading}
+          style={{ background:T.accent, color:T.bg, border:"none", padding:"12px 0", borderRadius:7, fontSize:13, fontFamily:FONT_MONO, fontWeight:600, cursor:"pointer", opacity:loading?0.6:1 }}>
+          {loading ? "Signing in…" : "Sign in"}
         </button>
-      </div>
+        <div style={{ fontSize:11, color:T.textMute, fontFamily:FONT_MONO, textAlign:"center" }}>
+          Default: admin@aifinops.local / Admin123!
+        </div>
+      </form>
+    </div>
+  );
+}
+
+// ─── Users Page (admin only) ──────────────────────────────────────────────────
+function UsersPage() {
+  const [users,   setUsers]   = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [form,    setForm]    = useState({ email:"", name:"", password:"", role:"analyst", team:"" });
+  const [saving,  setSaving]  = useState(false);
+  const [err,     setErr]     = useState(null);
+
+  const load = useCallback(async () => {
+    try {
+      const data = await fetchUsers();
+      setUsers(data);
+    } catch (e) { setErr(e.message); }
+    finally { setLoading(false); }
+  }, []);
+
+  useEffect(() => { load(); }, [load]);
+
+  const handleCreate = async (e) => {
+    e.preventDefault();
+    setSaving(true); setErr(null);
+    try {
+      await createUser(form);
+      setForm({ email:"", name:"", password:"", role:"analyst", team:"" });
+      await load();
+    } catch (e) { setErr(e.message); }
+    finally { setSaving(false); }
+  };
+
+  const handleToggle = async (u) => {
+    try { await updateUser(u.id, { is_active: !u.is_active }); await load(); }
+    catch (e) { setErr(e.message); }
+  };
+
+  const handleDelete = async (id) => {
+    try { await deleteUser(id); await load(); }
+    catch (e) { setErr(e.message); }
+  };
+
+  if (loading) return <div style={{ color:T.textDim, fontFamily:FONT_MONO, padding:24 }}>Loading users…</div>;
+
+  return (
+    <div style={{ display:"flex", flexDirection:"column", gap:14 }}>
+      <Card title="Add User" subtitle="Create a new platform user">
+        <form onSubmit={handleCreate} style={{ display:"flex", gap:10, flexWrap:"wrap", alignItems:"flex-end" }}>
+          {[
+            { label:"Email *",    key:"email",    placeholder:"ron@company.com", type:"email" },
+            { label:"Name *",     key:"name",     placeholder:"Ron Haviv" },
+            { label:"Password *", key:"password", placeholder:"min 8 chars", type:"password" },
+            { label:"Team",       key:"team",     placeholder:"SOC" },
+          ].map(({ label, key, placeholder, type }) => (
+            <div key={key} style={{ display:"flex", flexDirection:"column", gap:4 }}>
+              <label style={{ fontSize:9, fontFamily:FONT_MONO, letterSpacing:"0.12em", textTransform:"uppercase", color:T.textMute }}>{label}</label>
+              <input type={type||"text"} placeholder={placeholder} value={form[key]}
+                onChange={e => setForm({...form,[key]:e.target.value})}
+                required={label.includes("*")}
+                style={{ background:T.panelHi, color:T.text, border:`1px solid ${T.border}`, padding:"6px 10px", borderRadius:4, fontSize:12, fontFamily:FONT_MONO, width:160 }}/>
+            </div>
+          ))}
+          <div style={{ display:"flex", flexDirection:"column", gap:4 }}>
+            <label style={{ fontSize:9, fontFamily:FONT_MONO, letterSpacing:"0.12em", textTransform:"uppercase", color:T.textMute }}>Role</label>
+            <select value={form.role} onChange={e => setForm({...form, role:e.target.value})}
+              style={{ background:T.panelHi, color:T.text, border:`1px solid ${T.border}`, padding:"6px 10px", borderRadius:4, fontSize:12, fontFamily:FONT_MONO, minWidth:120 }}>
+              {Object.entries(ROLES).map(([r, m]) => <option key={r} value={r}>{m.label}</option>)}
+            </select>
+          </div>
+          <button type="submit" disabled={saving}
+            style={{ background:T.accent, color:T.bg, border:"none", padding:"8px 18px", borderRadius:4, fontSize:12, fontFamily:FONT_MONO, fontWeight:600, cursor:"pointer", opacity:saving?0.6:1 }}>
+            {saving ? "Saving…" : "+ Add User"}
+          </button>
+        </form>
+        {err && <div style={{ color:T.crit, fontFamily:FONT_MONO, fontSize:12, marginTop:10 }}>{err}</div>}
+      </Card>
+
+      <Card title="Platform Users" subtitle={`${users.length} user${users.length===1?"":"s"} registered`}>
+        <table style={{ width:"100%", borderCollapse:"collapse" }}>
+          <thead>
+            <tr style={{ borderBottom:`1px solid ${T.border}` }}>
+              {["Name","Email","Role","Team","Status","Created",""].map(h => (
+                <th key={h} style={{ textAlign:"left", padding:"10px 8px", fontFamily:FONT_MONO, fontSize:10, letterSpacing:"0.1em", textTransform:"uppercase", color:T.textDim, fontWeight:500 }}>{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {users.map(u => (
+              <tr key={u.id} style={{ borderBottom:`1px solid ${T.border}`, opacity:u.is_active?1:0.5 }}>
+                <td style={{ padding:"12px 8px", fontSize:12, color:T.text, fontWeight:500 }}>{u.name}</td>
+                <td style={{ padding:"12px 8px", fontFamily:FONT_MONO, fontSize:11, color:T.textDim }}>{u.email}</td>
+                <td style={{ padding:"12px 8px" }}><Pill color={ROLES[u.role]?.color ?? T.textDim}>{u.role}</Pill></td>
+                <td style={{ padding:"12px 8px", fontSize:12, color:T.textDim }}>{u.team || "—"}</td>
+                <td style={{ padding:"12px 8px" }}>{u.is_active ? <Pill color={T.accent}>active</Pill> : <Pill color={T.textMute}>inactive</Pill>}</td>
+                <td style={{ padding:"12px 8px", fontFamily:FONT_MONO, fontSize:11, color:T.textMute }}>{new Date(u.created_at).toLocaleDateString()}</td>
+                <td style={{ padding:"12px 8px", display:"flex", gap:6 }}>
+                  <button onClick={() => handleToggle(u)}
+                    style={{ background:"transparent", border:`1px solid ${T.border}`, color:u.is_active?T.warn:T.accent, padding:"4px 10px", borderRadius:3, fontSize:11, fontFamily:FONT_MONO, cursor:"pointer" }}>
+                    {u.is_active ? "Disable" : "Enable"}
+                  </button>
+                  <button onClick={() => handleDelete(u.id)}
+                    style={{ background:"transparent", border:`1px solid ${T.border}`, color:T.crit, padding:"4px 10px", borderRadius:3, fontSize:11, fontFamily:FONT_MONO, cursor:"pointer" }}>
+                    Delete
+                  </button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </Card>
     </div>
   );
 }
@@ -1427,11 +1523,11 @@ function ChatPage() {
     const fetchSessions = async () => {
       try {
         const [activeR, allR] = await Promise.all([
-          fetch("/api/sessions?active_only=true"),
-          fetch("/api/sessions?active_only=false"),
+          authFetch("/api/sessions?active_only=true"),
+          authFetch("/api/sessions?active_only=false"),
         ]);
-        if (activeR.ok) setActiveSessions(await activeR.json());
-        if (allR.ok)    setAllSessions(await allR.json());
+        if (activeR?.ok) setActiveSessions(await activeR.json());
+        if (allR?.ok)    setAllSessions(await allR.json());
       } catch { /* ignore */ }
     };
     fetchSessions();
@@ -1445,8 +1541,8 @@ function ChatPage() {
     if (!sessionUuid || sessionClosed) return;
     const poll = async () => {
       try {
-        const r = await fetch(`/api/sessions/${sessionUuid}/messages`);
-        if (!r.ok) return;
+        const r = await authFetch(`/api/sessions/${sessionUuid}/messages`);
+        if (!r?.ok) return;
         const dbMsgs = await r.json();
         // Only act if DB has more messages than we've tracked
         if (dbMsgs.length <= knownMsgCountRef.current) return;
@@ -1486,7 +1582,7 @@ function ChatPage() {
         clearInterval(timerRef.current);
         setSessionClosed(true);
         setTimeoutSecsLeft(0);
-        fetch(`/api/sessions/${sessionUuid}`, { method: "DELETE" }).catch(() => {});
+        authFetch(`/api/sessions/${sessionUuid}`, { method: "DELETE" }).catch(() => {});
       } else {
         setTimeoutSecsLeft(remaining <= SESSION_WARN_MS ? Math.ceil(remaining / 1000) : null);
       }
@@ -1499,12 +1595,11 @@ function ChatPage() {
   // ── Create or reuse session ──
   const ensureSession = async () => {
     if (sessionUuid) return sessionUuid;
-    const r = await fetch("/api/sessions", {
+    const r = await authFetch("/api/sessions", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ user_name: user?.name || "Unknown", user_role: user?.role || "analyst", team, agent, model }),
     });
-    if (!r.ok) throw new Error("Failed to create session");
+    if (!r?.ok) throw new Error("Failed to create session");
     const data = await r.json();
     knownMsgCountRef.current = 0;
     setSessionUuid(data.session_uuid);
@@ -1527,9 +1622,8 @@ function ChatPage() {
         // ── Multi-turn: pass full history, session-tracked ──
         const newHistory = [...messages.filter(m => m.role !== "typing"), userMsg];
         const uuid = await ensureSession();
-        const r = await fetch(`/api/sessions/${uuid}/chat`, {
+        const r = await authFetch(`/api/sessions/${uuid}/chat`, {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             session_uuid: uuid,
             user_name: user?.name || "Unknown",
@@ -1550,9 +1644,8 @@ function ChatPage() {
         setTotalTokens(t => t + data.total_tokens);
       } else {
         // ── Single-shot: independent /ask, no history, auto-creates session ──
-        const r = await fetch("/api/ask", {
+        const r = await authFetch("/api/ask", {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             team, agent, model,
             prompt: text,
@@ -1583,7 +1676,7 @@ function ChatPage() {
 
   const clearChat = async () => {
     if (sessionUuid) {
-      await fetch(`/api/sessions/${sessionUuid}`, { method: "DELETE" }).catch(() => {});
+      await authFetch(`/api/sessions/${sessionUuid}`, { method: "DELETE" }).catch(() => {});
     }
     setMessages([]); setTotalCost(0); setTotalTokens(0); setError(null);
     setSessionUuid(null); setSessionClosed(false); setTimeoutSecsLeft(null);
@@ -1593,8 +1686,8 @@ function ChatPage() {
   const resumeSession = async (s) => {
     // Load history from old session, create a fresh active session, restore messages
     try {
-      const r = await fetch(`/api/sessions/${s.session_uuid}/messages`);
-      if (!r.ok) throw new Error("Could not load messages");
+      const r = await authFetch(`/api/sessions/${s.session_uuid}/messages`);
+      if (!r?.ok) throw new Error("Could not load messages");
       const msgs = await r.json();
 
       // Close current session if one is open
@@ -1607,16 +1700,15 @@ function ChatPage() {
       }
 
       // Create a new session inheriting the old config
-      const nr = await fetch("/api/sessions", {
+      const nr = await authFetch("/api/sessions", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           user_name: user?.name || "Unknown",
           user_role: user?.role || "analyst",
           team: s.team, agent: s.agent, model: s.model,
         }),
       });
-      if (!nr.ok) throw new Error("Could not create session");
+      if (!nr?.ok) throw new Error("Could not create session");
       const newSession = await nr.json();
 
       // Rebuild message display from stored history
@@ -1738,7 +1830,7 @@ function ChatPage() {
                             </button>
                             {(user?.role === "admin" || s.user_name === user?.name) && (
                               <button onClick={async () => {
-                                await fetch(`/api/sessions/${s.session_uuid}`, { method:"DELETE" }).catch(()=>{});
+                                await authFetch(`/api/sessions/${s.session_uuid}`, { method:"DELETE" }).catch(()=>{});
                                 setActiveSessions(prev => prev.filter(x => x.session_uuid !== s.session_uuid));
                               }}
                                 style={{ background:`${T.crit}15`, border:`1px solid ${T.crit}44`, color:T.crit, borderRadius:4, padding:"4px 10px", fontSize:10, fontFamily:FONT_MONO, cursor:"pointer" }}>
@@ -2039,8 +2131,9 @@ const PAGES = [
   { id:"models",    label:"Model Usage" },
   { id:"workflows", label:"Workflow Health" },
   { id:"alerts",    label:"Alerts" },
-  { id:"budgets",   label:"Budgets",  adminOnly: true },
+  { id:"budgets",   label:"Budgets" },
   { id:"security",  label:"Security" },
+  { id:"users",     label:"Users" },
 ];
 
 // ─── Root ─────────────────────────────────────────────────────────────────────
@@ -2048,25 +2141,33 @@ export default function App() {
   const [page, setPage]       = useState("home");
   const [filters, setFilters] = useState({ team:"all", model:"all", agent:"all", sev:"all", range:30 });
 
-  // ── User identity & RBAC ──
-  const [user, setUser] = useState(() => {
-    try { return JSON.parse(localStorage.getItem("aifinops_user")) || null; } catch { return null; }
-  });
+  // ── Real JWT auth ──
+  const [user,         setUser]         = useState(null);
+  const [authChecked,  setAuthChecked]  = useState(false);
 
-  const prevUserRef = useRef(null);
+  // On mount, validate stored token
+  useEffect(() => {
+    const check = async () => {
+      const token = getToken();
+      if (token) {
+        try {
+          const me = await fetchMe();
+          if (me) { setUser(me); }
+          else    { setToken(null); }
+        } catch { setToken(null); }
+      }
+      setAuthChecked(true);
+    };
+    check();
+  }, []);
 
   const handleLogin = (u) => {
-    localStorage.setItem("aifinops_user", JSON.stringify(u));
     setUser(u);
   };
 
-  const handleCancelSwitch = () => {
-    // Restore the previous user without touching chat state
-    if (prevUserRef.current) {
-      localStorage.setItem("aifinops_user", JSON.stringify(prevUserRef.current));
-      setUser(prevUserRef.current);
-      prevUserRef.current = null;
-    }
+  const handleLogout = () => {
+    setToken(null);
+    setUser(null);
   };
 
   const { apiRecords, lastRefresh, isLive, refresh } = useLiveData(30_000);
@@ -2117,17 +2218,21 @@ export default function App() {
       case "alerts":    return <AlertsPage alerts={alerts} sevFilter={filters.sev} />;
       case "budgets":   return <BudgetsPage />;
       case "security":  return <SecurityPage />;
+      case "users":     return <UsersPage />;
       default:          return null;
     }
   };
 
-  if (apiRecords === null) {
-    return <div style={{ minHeight:"100vh", background:T.bg, display:"flex", alignItems:"center", justifyContent:"center", color:T.textDim, fontFamily:FONT_MONO }}>Connecting to AIFinOps Guard API…</div>;
+  if (!authChecked || apiRecords === null) {
+    return <div style={{ minHeight:"100vh", background:T.bg, display:"flex", alignItems:"center", justifyContent:"center", color:T.textDim, fontFamily:FONT_MONO }}>Connecting to AIFinOps Guard…</div>;
+  }
+
+  if (!user) {
+    return <LoginPage onLogin={handleLogin} />;
   }
 
   return (
     <UserContext.Provider value={user}>
-    {!user && <UserSelectorModal onConfirm={handleLogin} onCancel={prevUserRef.current ? handleCancelSwitch : undefined} />}
     <div style={{ minHeight:"100vh", background:T.bg, color:T.text, fontFamily:FONT_UI, fontSize:14, display:"flex" }}>
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=Geist:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap');
@@ -2173,17 +2278,8 @@ export default function App() {
                 <div style={{ fontSize:12, fontWeight:500, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{user.name}</div>
                 <div style={{ fontSize:9, fontFamily:FONT_MONO, color: ROLES[user.role]?.color ?? T.textDim, textTransform:"uppercase", letterSpacing:"0.1em" }}>{user.role} · {user.team}</div>
               </div>
-              <button title="Switch user" onClick={() => {
-                prevUserRef.current = user;  // save so cancel can restore
-                localStorage.removeItem("aifinops_user");
-                setUser(null);
-                // Clear chat state so the new user starts with a blank slate
-                setMessages([]); setTotalCost(0); setTotalTokens(0);
-                setSessionUuid(null); setSessionClosed(false);
-                setTimeoutSecsLeft(null); setError(null);
-                knownMsgCountRef.current = 0;
-              }}
-                style={{ background:"transparent", border:"none", color:T.textMute, fontSize:14, cursor:"pointer", padding:"2px 4px", lineHeight:1 }}>⇄</button>
+              <button title="Sign out" onClick={handleLogout}
+                style={{ background:"transparent", border:"none", color:T.textMute, fontSize:12, cursor:"pointer", padding:"2px 4px", lineHeight:1, fontFamily:FONT_MONO }}>⏻</button>
             </div>
           )}
           <div style={{ fontSize:10, color:T.textMute, fontFamily:FONT_MONO, letterSpacing:"0.08em", lineHeight:1.8 }}>

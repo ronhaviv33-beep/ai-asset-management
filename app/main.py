@@ -12,6 +12,7 @@ from app.schemas import (
     PolicyRuleCreate, PolicyRuleOut,
     ScanRequest, ScanResponse, ScanFinding,
     SessionCreate, SessionOut, SessionMessageOut, SessionChatRequest,
+    UserCreate, UserUpdate, UserOut, LoginRequest, TokenResponse,
 )
 from app import telemetry as tel
 from app import budget as bud
@@ -19,8 +20,30 @@ from app import policy as pol
 from app import sessions as sess
 from app.scanner import scan
 from app.openai_client import complete, chat_complete
+from app.auth import hash_password, verify_password, create_token, get_current_user, require_admin
 
 Base.metadata.create_all(bind=engine)
+
+
+# ─── Startup seed ─────────────────────────────────────────────────────────────
+
+def _seed_admin():
+    from app.models import User
+    db = next(get_db())
+    try:
+        if not db.query(User).filter(User.email == "admin@aifinops.local").first():
+            db.add(User(
+                email="admin@aifinops.local",
+                name="Admin",
+                hashed_password=hash_password("Admin123!"),
+                role="admin",
+                team="Platform",
+            ))
+            db.commit()
+    finally:
+        db.close()
+
+_seed_admin()
 
 tags_metadata = [
     {
@@ -40,6 +63,14 @@ tags_metadata = [
             "Query telemetry records, cost summaries, audit logs, security alerts, "
             "active sessions, budget status, and policy rules.  \n"
             "All read endpoints are non-destructive and safe to call repeatedly."
+        ),
+    },
+    {
+        "name": "Auth — Users",
+        "description": (
+            "**Authentication and user management.**  \n"
+            "Login, logout, current-user info, and admin-only user CRUD.  \n"
+            "All other endpoints require a valid Bearer token from `/auth/login`."
         ),
     },
     {
@@ -64,7 +95,7 @@ app = FastAPI(
         "- **GET** — read telemetry, sessions, budgets, policies\n"
         "- **DELETE** — remove sessions, budgets, policies"
     ),
-    version="0.4.0",
+    version="0.5.0",
     openapi_tags=tags_metadata,
 )
 
@@ -80,13 +111,78 @@ app.add_middleware(
 
 @app.get("/", tags=["GET — Read / Monitor"])
 def root():
-    return {"status": "AIFinOps Gateway Running", "version": "0.4.0"}
+    return {"status": "AIFinOps Gateway Running", "version": "0.5.0"}
+
+
+# ─── Auth ─────────────────────────────────────────────────────────────────────
+
+@app.post("/auth/login", response_model=TokenResponse, tags=["Auth — Users"])
+def login(req: LoginRequest, db: Session = Depends(get_db)):
+    from app.models import User
+    user = db.query(User).filter(User.email == req.email, User.is_active == True).first()  # noqa: E712
+    if not user or not verify_password(req.password, user.hashed_password):
+        raise HTTPException(status_code=401, detail="Invalid email or password")
+    return TokenResponse(access_token=create_token(user), user=UserOut.model_validate(user))
+
+
+@app.get("/auth/me", response_model=UserOut, tags=["Auth — Users"])
+async def me(current_user=Depends(get_current_user)):
+    return current_user
+
+
+@app.get("/auth/users", response_model=list[UserOut], tags=["Auth — Users"])
+async def list_users(db: Session = Depends(get_db), _=Depends(require_admin)):
+    from app.models import User
+    return db.query(User).order_by(User.created_at).all()
+
+
+@app.post("/auth/users", response_model=UserOut, status_code=201, tags=["Auth — Users"])
+async def create_user(req: UserCreate, db: Session = Depends(get_db), _=Depends(require_admin)):
+    from app.models import User
+    if db.query(User).filter(User.email == req.email).first():
+        raise HTTPException(status_code=409, detail="Email already registered")
+    user = User(
+        email=req.email,
+        name=req.name,
+        hashed_password=hash_password(req.password),
+        role=req.role,
+        team=req.team,
+    )
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+    return user
+
+
+@app.patch("/auth/users/{user_id}", response_model=UserOut, tags=["Auth — Users"])
+async def update_user(user_id: int, req: UserUpdate, db: Session = Depends(get_db), _=Depends(require_admin)):
+    from app.models import User
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    for field, value in req.model_dump(exclude_none=True).items():
+        setattr(user, field, value)
+    db.commit()
+    db.refresh(user)
+    return user
+
+
+@app.delete("/auth/users/{user_id}", status_code=204, tags=["Auth — Users"])
+async def delete_user(user_id: int, db: Session = Depends(get_db), current_user=Depends(require_admin)):
+    from app.models import User
+    if user_id == current_user.id:
+        raise HTTPException(status_code=400, detail="Cannot delete your own account")
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    db.delete(user)
+    db.commit()
 
 
 # ─── AI Gateway ───────────────────────────────────────────────────────────────
 
 @app.post("/ask", response_model=AskResponse, tags=["POST — Ask / Create"])
-async def ask(req: AskRequest, db: Session = Depends(get_db)):
+async def ask(req: AskRequest, db: Session = Depends(get_db), _=Depends(get_current_user)):
 
     # 1. PII / sensitive data scan
     scan_result = scan(req.prompt)
@@ -178,7 +274,7 @@ async def ask(req: AskRequest, db: Session = Depends(get_db)):
 # ─── Multi-turn Chat ─────────────────────────────────────────────────────────
 
 @app.post("/chat", response_model=ChatResponse, tags=["POST — Ask / Create"])
-async def chat(req: ChatRequest, db: Session = Depends(get_db)):
+async def chat(req: ChatRequest, db: Session = Depends(get_db), _=Depends(get_current_user)):
 
     # Scan the latest user message only
     last_user = next((m.content for m in reversed(req.messages) if m.role == "user"), "")
@@ -242,12 +338,13 @@ def get_telemetry(
     skip: int = Query(default=0, ge=0),
     limit: int = Query(default=100, ge=1, le=1000),
     db: Session = Depends(get_db),
+    _=Depends(get_current_user),
 ):
     return tel.get_all(db, skip=skip, limit=limit)
 
 
 @app.get("/telemetry/summary", response_model=TelemetrySummary, tags=["GET — Read / Monitor"])
-def get_summary(db: Session = Depends(get_db)):
+def get_summary(db: Session = Depends(get_db), _=Depends(get_current_user)):
     return tel.get_summary(db)
 
 
@@ -262,6 +359,7 @@ def get_audit(
     skip: int = Query(default=0, ge=0),
     limit: int = Query(default=100, ge=1, le=1000),
     db: Session = Depends(get_db),
+    _=Depends(get_current_user),
 ):
     return tel.get_audit(db, team=team, agent=agent,
                          sensitive_only=sensitive_only, blocked_only=blocked_only,
@@ -281,38 +379,38 @@ def security_scan(req: ScanRequest):
 
 
 @app.get("/security/alerts", tags=["GET — Read / Monitor"])
-def security_alerts(db: Session = Depends(get_db)):
+def security_alerts(db: Session = Depends(get_db), _=Depends(get_current_user)):
     return tel.get_security_alerts(db)
 
 
 # ─── Budgets ──────────────────────────────────────────────────────────────────
 
 @app.post("/budgets", response_model=BudgetRuleOut, status_code=201, tags=["POST — Ask / Create"])
-def create_budget(rule: BudgetRuleCreate, db: Session = Depends(get_db)):
+def create_budget(rule: BudgetRuleCreate, db: Session = Depends(get_db), _=Depends(require_admin)):
     return bud.create_rule(db, team=rule.team, agent=rule.agent,
                            limit_usd=rule.limit_usd, period=rule.period, action=rule.action)
 
 
 @app.get("/budgets", response_model=list[BudgetRuleOut], tags=["GET — Read / Monitor"])
-def list_budgets(db: Session = Depends(get_db)):
+def list_budgets(db: Session = Depends(get_db), _=Depends(get_current_user)):
     return bud.get_rules(db)
 
 
 @app.delete("/budgets/{rule_id}", status_code=204, tags=["DELETE — Remove"])
-def delete_budget(rule_id: int, db: Session = Depends(get_db)):
+def delete_budget(rule_id: int, db: Session = Depends(get_db), _=Depends(require_admin)):
     if not bud.delete_rule(db, rule_id):
         raise HTTPException(status_code=404, detail="Budget rule not found")
 
 
 @app.get("/budgets/status", response_model=list[BudgetStatusItem], tags=["GET — Read / Monitor"])
-def budget_status(db: Session = Depends(get_db)):
+def budget_status(db: Session = Depends(get_db), _=Depends(get_current_user)):
     return bud.get_status(db)
 
 
 # ─── Chat Sessions ────────────────────────────────────────────────────────────
 
 @app.post("/sessions", response_model=SessionOut, status_code=201, tags=["POST — Ask / Create"])
-def create_session(req: SessionCreate, db: Session = Depends(get_db)):
+def create_session(req: SessionCreate, db: Session = Depends(get_db), _=Depends(get_current_user)):
     sess.expire_inactive(db)
     return sess.create_session(
         db, user_name=req.user_name, user_role=req.user_role,
@@ -321,19 +419,19 @@ def create_session(req: SessionCreate, db: Session = Depends(get_db)):
 
 
 @app.get("/sessions", response_model=list[SessionOut], tags=["GET — Read / Monitor"])
-def list_sessions(active_only: bool = Query(default=True), db: Session = Depends(get_db)):
+def list_sessions(active_only: bool = Query(default=True), db: Session = Depends(get_db), _=Depends(get_current_user)):
     sess.expire_inactive(db)
     return sess.list_sessions(db, active_only=active_only)
 
 
 @app.delete("/sessions/{session_uuid}", status_code=204, tags=["DELETE — Remove"])
-def close_session(session_uuid: str, db: Session = Depends(get_db)):
+def close_session(session_uuid: str, db: Session = Depends(get_db), _=Depends(get_current_user)):
     if not sess.close_session(db, session_uuid):
         raise HTTPException(status_code=404, detail="Session not found")
 
 
 @app.get("/sessions/{session_uuid}/messages", response_model=list[SessionMessageOut], tags=["GET — Read / Monitor"])
-def get_session_messages(session_uuid: str, db: Session = Depends(get_db)):
+def get_session_messages(session_uuid: str, db: Session = Depends(get_db), _=Depends(get_current_user)):
     s = sess.get_session(db, session_uuid)
     if not s:
         raise HTTPException(status_code=404, detail="Session not found")
@@ -341,7 +439,7 @@ def get_session_messages(session_uuid: str, db: Session = Depends(get_db)):
 
 
 @app.post("/sessions/{session_uuid}/chat", response_model=ChatResponse, tags=["POST — Ask / Create"])
-async def session_chat(session_uuid: str, req: SessionChatRequest, db: Session = Depends(get_db)):
+async def session_chat(session_uuid: str, req: SessionChatRequest, db: Session = Depends(get_db), _=Depends(get_current_user)):
     # Verify session exists and is active
     s = sess.get_session(db, session_uuid)
     if not s:
@@ -416,16 +514,16 @@ async def session_chat(session_uuid: str, req: SessionChatRequest, db: Session =
 # ─── Policies ─────────────────────────────────────────────────────────────────
 
 @app.post("/policies", response_model=PolicyRuleOut, status_code=201, tags=["POST — Ask / Create"])
-def create_policy(rule: PolicyRuleCreate, db: Session = Depends(get_db)):
+def create_policy(rule: PolicyRuleCreate, db: Session = Depends(get_db), _=Depends(require_admin)):
     return pol.create_rule(db, team=rule.team, rule_type=rule.rule_type, value=rule.value)
 
 
 @app.get("/policies", response_model=list[PolicyRuleOut], tags=["GET — Read / Monitor"])
-def list_policies(db: Session = Depends(get_db)):
+def list_policies(db: Session = Depends(get_db), _=Depends(get_current_user)):
     return pol.get_rules(db)
 
 
 @app.delete("/policies/{rule_id}", status_code=204, tags=["DELETE — Remove"])
-def delete_policy(rule_id: int, db: Session = Depends(get_db)):
+def delete_policy(rule_id: int, db: Session = Depends(get_db), _=Depends(require_admin)):
     if not pol.delete_rule(db, rule_id):
         raise HTTPException(status_code=404, detail="Policy rule not found")
