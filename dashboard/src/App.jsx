@@ -1361,11 +1361,15 @@ function LoginPage({ onLogin }) {
 
 // ─── Users Page (admin only) ──────────────────────────────────────────────────
 function UsersPage() {
-  const [users,   setUsers]   = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [form,    setForm]    = useState({ email:"", name:"", password:"", role:"analyst", team:"" });
-  const [saving,  setSaving]  = useState(false);
-  const [err,     setErr]     = useState(null);
+  const currentUser = useUser();
+  const [users,    setUsers]    = useState([]);
+  const [loading,  setLoading]  = useState(true);
+  const [form,     setForm]     = useState({ email:"", name:"", password:"", role:"analyst", team:"" });
+  const [saving,   setSaving]   = useState(false);
+  const [err,      setErr]      = useState(null);
+  // editing: { id, role, team } | null
+  const [editing,  setEditing]  = useState(null);
+  const [editSaving, setEditSaving] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -1397,6 +1401,31 @@ function UsersPage() {
     try { await deleteUser(id); await load(); }
     catch (e) { setErr(e.message); }
   };
+
+  const startEdit = (u) => setEditing({ id: u.id, role: u.role, team: u.team || "" });
+  const cancelEdit = () => setEditing(null);
+
+  const saveEdit = async () => {
+    setEditSaving(true); setErr(null);
+    try {
+      await updateUser(editing.id, { role: editing.role, team: editing.team });
+      setEditing(null);
+      await load();
+    } catch (e) { setErr(e.message); }
+    finally { setEditSaving(false); }
+  };
+
+  const inlineInput = (val, onChange, width = 100) => (
+    <input value={val} onChange={e => onChange(e.target.value)}
+      style={{ background:T.bg, color:T.text, border:`1px solid ${T.accent}44`, padding:"4px 8px", borderRadius:4, fontSize:12, fontFamily:FONT_MONO, width }} />
+  );
+
+  const inlineSelect = (val, onChange, options) => (
+    <select value={val} onChange={e => onChange(e.target.value)}
+      style={{ background:T.bg, color:T.text, border:`1px solid ${T.accent}44`, padding:"4px 8px", borderRadius:4, fontSize:12, fontFamily:FONT_MONO }}>
+      {options.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+    </select>
+  );
 
   if (loading) return <div style={{ color:T.textDim, fontFamily:FONT_MONO, padding:24 }}>Loading users…</div>;
 
@@ -1433,7 +1462,7 @@ function UsersPage() {
         {err && <div style={{ color:T.crit, fontFamily:FONT_MONO, fontSize:12, marginTop:10 }}>{err}</div>}
       </Card>
 
-      <Card title="Platform Users" subtitle={`${users.length} user${users.length===1?"":"s"} registered`}>
+      <Card title="Platform Users" subtitle={`${users.length} user${users.length===1?"":"s"} registered — click Edit to change role or team`}>
         <table style={{ width:"100%", borderCollapse:"collapse" }}>
           <thead>
             <tr style={{ borderBottom:`1px solid ${T.border}` }}>
@@ -1443,26 +1472,70 @@ function UsersPage() {
             </tr>
           </thead>
           <tbody>
-            {users.map(u => (
-              <tr key={u.id} style={{ borderBottom:`1px solid ${T.border}`, opacity:u.is_active?1:0.5 }}>
-                <td style={{ padding:"12px 8px", fontSize:12, color:T.text, fontWeight:500 }}>{u.name}</td>
-                <td style={{ padding:"12px 8px", fontFamily:FONT_MONO, fontSize:11, color:T.textDim }}>{u.email}</td>
-                <td style={{ padding:"12px 8px" }}><Pill color={ROLES[u.role]?.color ?? T.textDim}>{u.role}</Pill></td>
-                <td style={{ padding:"12px 8px", fontSize:12, color:T.textDim }}>{u.team || "—"}</td>
-                <td style={{ padding:"12px 8px" }}>{u.is_active ? <Pill color={T.accent}>active</Pill> : <Pill color={T.textMute}>inactive</Pill>}</td>
-                <td style={{ padding:"12px 8px", fontFamily:FONT_MONO, fontSize:11, color:T.textMute }}>{new Date(u.created_at).toLocaleDateString()}</td>
-                <td style={{ padding:"12px 8px", display:"flex", gap:6 }}>
-                  <button onClick={() => handleToggle(u)}
-                    style={{ background:"transparent", border:`1px solid ${T.border}`, color:u.is_active?T.warn:T.accent, padding:"4px 10px", borderRadius:3, fontSize:11, fontFamily:FONT_MONO, cursor:"pointer" }}>
-                    {u.is_active ? "Disable" : "Enable"}
-                  </button>
-                  <button onClick={() => handleDelete(u.id)}
-                    style={{ background:"transparent", border:`1px solid ${T.border}`, color:T.crit, padding:"4px 10px", borderRadius:3, fontSize:11, fontFamily:FONT_MONO, cursor:"pointer" }}>
-                    Delete
-                  </button>
-                </td>
-              </tr>
-            ))}
+            {users.map(u => {
+              const isEditing = editing?.id === u.id;
+              const isSelf    = u.id === currentUser?.id;
+              return (
+                <tr key={u.id} style={{ borderBottom:`1px solid ${T.border}`, opacity:u.is_active?1:0.5, background: isEditing ? `${T.accent}06` : "transparent" }}>
+                  <td style={{ padding:"12px 8px", fontSize:12, color:T.text, fontWeight:500 }}>{u.name}</td>
+                  <td style={{ padding:"12px 8px", fontFamily:FONT_MONO, fontSize:11, color:T.textDim }}>{u.email}</td>
+
+                  {/* Role cell */}
+                  <td style={{ padding:"10px 8px" }}>
+                    {isEditing
+                      ? inlineSelect(editing.role, v => setEditing({...editing, role:v}),
+                          Object.entries(ROLES).map(([r, m]) => [r, m.label]))
+                      : <Pill color={ROLES[u.role]?.color ?? T.textDim}>{u.role}</Pill>
+                    }
+                  </td>
+
+                  {/* Team cell */}
+                  <td style={{ padding:"10px 8px" }}>
+                    {isEditing
+                      ? inlineInput(editing.team, v => setEditing({...editing, team:v}), 90)
+                      : <span style={{ fontSize:12, color:T.textDim }}>{u.team || "—"}</span>
+                    }
+                  </td>
+
+                  <td style={{ padding:"12px 8px" }}>{u.is_active ? <Pill color={T.accent}>active</Pill> : <Pill color={T.textMute}>inactive</Pill>}</td>
+                  <td style={{ padding:"12px 8px", fontFamily:FONT_MONO, fontSize:11, color:T.textMute }}>{new Date(u.created_at).toLocaleDateString()}</td>
+
+                  {/* Actions */}
+                  <td style={{ padding:"10px 8px" }}>
+                    <div style={{ display:"flex", gap:6, flexWrap:"nowrap" }}>
+                      {isEditing ? (
+                        <>
+                          <button onClick={saveEdit} disabled={editSaving}
+                            style={{ background:`${T.accent}20`, border:`1px solid ${T.accent}55`, color:T.accent, padding:"4px 12px", borderRadius:3, fontSize:11, fontFamily:FONT_MONO, cursor:"pointer", fontWeight:600, opacity:editSaving?0.6:1 }}>
+                            {editSaving ? "…" : "Save"}
+                          </button>
+                          <button onClick={cancelEdit}
+                            style={{ background:"transparent", border:`1px solid ${T.border}`, color:T.textDim, padding:"4px 10px", borderRadius:3, fontSize:11, fontFamily:FONT_MONO, cursor:"pointer" }}>
+                            Cancel
+                          </button>
+                        </>
+                      ) : (
+                        <>
+                          <button onClick={() => startEdit(u)}
+                            style={{ background:`${T.info}15`, border:`1px solid ${T.info}44`, color:T.info, padding:"4px 10px", borderRadius:3, fontSize:11, fontFamily:FONT_MONO, cursor:"pointer" }}>
+                            Edit
+                          </button>
+                          <button onClick={() => handleToggle(u)}
+                            style={{ background:"transparent", border:`1px solid ${T.border}`, color:u.is_active?T.warn:T.accent, padding:"4px 10px", borderRadius:3, fontSize:11, fontFamily:FONT_MONO, cursor:"pointer" }}>
+                            {u.is_active ? "Disable" : "Enable"}
+                          </button>
+                          <button onClick={() => handleDelete(u.id)} disabled={isSelf}
+                            style={{ background:"transparent", border:`1px solid ${T.border}`, color:isSelf?T.textMute:T.crit, padding:"4px 10px", borderRadius:3, fontSize:11, fontFamily:FONT_MONO, cursor:isSelf?"not-allowed":"pointer", opacity:isSelf?0.4:1 }}
+                            title={isSelf ? "Cannot delete your own account" : ""}>
+                            Delete
+                          </button>
+                        </>
+                      )}
+                    </div>
+                  </td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </Card>
@@ -2312,7 +2385,7 @@ export default function App() {
           </div>
         </header>
 
-        {!["home","budgets","security","chat"].includes(page) && <FilterBar filters={filters} setFilters={setFilters} allTeams={allTeams} allAgents={allAgents}/>}
+        {!["home","budgets","security","chat","users"].includes(page) && <FilterBar filters={filters} setFilters={setFilters} allTeams={allTeams} allAgents={allAgents}/>}
 
         {renderPage()}
       </main>
