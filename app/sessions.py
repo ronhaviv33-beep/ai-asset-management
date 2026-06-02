@@ -1,5 +1,5 @@
 import json
-from datetime import datetime, timezone
+from datetime import datetime
 from sqlalchemy.orm import Session
 from app.models import ChatSession, ChatSessionMessage
 
@@ -34,7 +34,7 @@ def close_session(db: Session, session_uuid: str) -> bool:
     if not s:
         return False
     s.is_active = False
-    s.closed_at = datetime.now(timezone.utc)
+    s.closed_at = datetime.utcnow()
     db.commit()
     return True
 
@@ -42,15 +42,18 @@ def close_session(db: Session, session_uuid: str) -> bool:
 def expire_inactive(db: Session) -> int:
     """Mark sessions inactive if idle > SESSION_TIMEOUT_MINUTES. Returns count expired."""
     from datetime import timedelta
-    cutoff = datetime.now(timezone.utc) - timedelta(minutes=SESSION_TIMEOUT_MINUTES)
+    # Use utcnow() (timezone-naive) because SQLite strips timezone info on read,
+    # making timezone-aware comparisons silently fail.
+    cutoff = datetime.utcnow() - timedelta(minutes=SESSION_TIMEOUT_MINUTES)
     rows = (
         db.query(ChatSession)
         .filter(ChatSession.is_active == True, ChatSession.last_activity_at < cutoff)  # noqa: E712
         .all()
     )
+    now = datetime.utcnow()
     for s in rows:
         s.is_active = False
-        s.closed_at = datetime.now(timezone.utc)
+        s.closed_at = now
     db.commit()
     return len(rows)
 
@@ -75,7 +78,7 @@ def add_message(db: Session, *, session_uuid: str, role: str, content: str,
 
     s = get_session(db, session_uuid)
     if s:
-        s.last_activity_at = datetime.now(timezone.utc)
+        s.last_activity_at = datetime.utcnow()
         s.message_count += 1
         s.total_cost_usd += cost_usd
         s.total_tokens += prompt_tokens + completion_tokens
