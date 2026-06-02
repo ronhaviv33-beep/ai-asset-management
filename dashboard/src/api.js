@@ -1,6 +1,6 @@
-// In production VITE_API_BASE is the full backend origin (e.g. https://aifinops-backend.onrender.com).
-// In dev it's empty and Vite's proxy rewrites /api/* → http://localhost:8000/*.
-const BASE = (import.meta.env.VITE_API_BASE || '') + '/api'
+// In dev, VITE_API_BASE is empty and Vite proxy rewrites /api/* → http://localhost:8000/*.
+// In production, VITE_API_BASE is the full backend origin — no /api prefix needed.
+const BASE = import.meta.env.VITE_API_BASE || '/api'
 
 export function getToken() {
   return localStorage.getItem('token')
