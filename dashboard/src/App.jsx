@@ -377,7 +377,31 @@ function Home({ risk, savings, alerts, A, onNavigate }) {
         <div style={{ fontSize:15, color:T.textDim, marginTop:18, maxWidth:620, lineHeight:1.55 }}>
           Every enterprise running AI in production hits the same wall: opaque spend, runaway agents, ungoverned models, and no audit trail. AIFinOps Guard gives you the layer that sees, scores, and controls all of it.
         </div>
-        <div style={{ display:"grid", gridTemplateColumns:"repeat(4,1fr)", gap:14, marginTop:32, maxWidth:880 }}>
+        {/* 3-line pitch — the entire integration in one diff */}
+        <div style={{ marginTop:28, marginBottom:8, background:T.bg, border:`1px solid ${T.borderHi}`, borderRadius:6, padding:"16px 20px", maxWidth:720 }}>
+          <div style={{ fontFamily:FONT_MONO, fontSize:10, letterSpacing:"0.14em", textTransform:"uppercase", color:T.textMute, marginBottom:10 }}>The integration</div>
+          <div style={{ display:"grid", gridTemplateColumns:"1fr auto 1fr", gap:16, alignItems:"center" }}>
+            <div>
+              <div style={{ fontFamily:FONT_MONO, fontSize:10, color:T.crit, marginBottom:6, letterSpacing:"0.08em" }}>BEFORE</div>
+              <pre style={{ margin:0, fontFamily:FONT_MONO, fontSize:12, color:T.textDim, lineHeight:1.7 }}>{`client = openai.OpenAI(
+  api_key="sk-..."
+)`}</pre>
+            </div>
+            <div style={{ fontFamily:FONT_MONO, fontSize:18, color:T.accent, padding:"0 8px" }}>→</div>
+            <div>
+              <div style={{ fontFamily:FONT_MONO, fontSize:10, color:T.accent, marginBottom:6, letterSpacing:"0.08em" }}>AFTER</div>
+              <pre style={{ margin:0, fontFamily:FONT_MONO, fontSize:12, color:T.text, lineHeight:1.7 }}>{`client = openai.OpenAI(
+  base_url="http://your-server/api/v1",
+  api_key="<jwt>"
+)`}</pre>
+            </div>
+          </div>
+          <div style={{ marginTop:12, fontSize:11, color:T.textMute, lineHeight:1.6 }}>
+            Every call now gets PII scanning · budget enforcement · model policy · full audit log. Works with OpenAI, Anthropic, Google, and local models.
+          </div>
+        </div>
+
+        <div style={{ display:"grid", gridTemplateColumns:"repeat(4,1fr)", gap:14, marginTop:18, maxWidth:880 }}>
           {[
             { k:"Cost",      v:"Visibility",    desc:"See every $ across teams, agents, models",       to:"cost" },
             { k:"Behavior",  v:"Intelligence",  desc:"Detect loops, spikes, anomalies in real time",    to:"agents" },
@@ -2439,12 +2463,9 @@ client = openai.OpenAI(
     api_key="<your-jwt-token>",   # from POST /api/auth/login
 )
 
+# Non-streaming
 response = client.chat.completions.create(
-    # Pick any model your org has configured:
-    model="gpt-4o-mini",           # OpenAI
-    # model="claude-sonnet-4-5",   # Anthropic
-    # model="gemini-2.0-flash",    # Google
-    # model="llama-3.1-70b-local", # Local / self-hosted
+    model="gpt-4o-mini",           # or "claude-sonnet-4-5", "gemini-2.0-flash", etc.
     messages=[
         {"role": "user", "content": "Write a daily standup summary"}
     ],
@@ -2453,9 +2474,22 @@ response = client.chat.completions.create(
         "X-Guard-Agent": "${agentName}",
     },
 )
-
 print(response.choices[0].message.content)
-# Cost, PII findings, and budget warnings → response.x_guard`;
+
+# Streaming — works exactly the same way
+stream = client.chat.completions.create(
+    model="gpt-4o-mini",
+    messages=[{"role": "user", "content": "Write a daily standup summary"}],
+    stream=True,
+    extra_headers={
+        "X-Guard-Team":  "${teamName}",
+        "X-Guard-Agent": "${agentName}",
+    },
+)
+for chunk in stream:
+    print(chunk.choices[0].delta.content or "", end="", flush=True)
+
+# Cost, PII findings, budget warnings → response.x_guard (non-streaming only)`;
 
   const nodejsSnippet = `import OpenAI from "openai";
 
@@ -2494,6 +2528,36 @@ curl -X POST ${gatewayUrl}/v1/chat/completions \\
       {"role": "user", "content": "Write a daily standup summary"}
     ]
   }'`;
+
+  const anthropicSnippet = `import anthropic
+
+# Teams using the Anthropic SDK natively — no code changes needed.
+# Just point base_url at this server instead of api.anthropic.com.
+client = anthropic.Anthropic(
+    base_url="${window.location.origin}",   # note: no /v1 suffix — the SDK adds it
+    api_key="<your-jwt-token>",             # from POST /api/auth/login
+    default_headers={
+        "X-Guard-Team":  "${teamName}",
+        "X-Guard-Agent": "${agentName}",
+    },
+)
+
+# Non-streaming
+message = client.messages.create(
+    model="claude-haiku-4-5",
+    max_tokens=1024,
+    messages=[{"role": "user", "content": "Write a daily standup summary"}],
+)
+print(message.content[0].text)
+
+# Streaming
+with client.messages.stream(
+    model="claude-haiku-4-5",
+    max_tokens=1024,
+    messages=[{"role": "user", "content": "Write a daily standup summary"}],
+) as stream:
+    for text in stream.text_stream:
+        print(text, end="", flush=True)`;
 
   const langchainSnippet = `from langchain_openai import ChatOpenAI
 
@@ -2621,6 +2685,10 @@ print(response.content)`;
         <CodeBlock id="python" code={pythonSnippet.replace(/<your-jwt-token>/g, token || "<your-jwt-token>")} />
       </Card>
 
+      <Card title="Anthropic SDK (native)" subtitle="Teams using the Anthropic SDK directly — same one-line swap, full Anthropic Messages API + streaming">
+        <CodeBlock id="anthropic" code={anthropicSnippet.replace(/<your-jwt-token>/g, token || "<your-jwt-token>")} />
+      </Card>
+
       <Card title="LangChain" subtitle="Drop-in for any LangChain LLM — route GPT, Claude, Gemini through one gateway">
         <CodeBlock id="langchain" code={langchainSnippet.replace(/<your-jwt-token>/g, token || "<your-jwt-token>")} />
       </Card>
@@ -2631,6 +2699,46 @@ print(response.content)`;
 
       <Card title="curl" subtitle="Test the connection from a terminal">
         <CodeBlock id="curl" code={curlSnippet.replace(/<your-jwt-token>/g, token || "<your-jwt-token>")} />
+      </Card>
+
+      {/* Fail mode */}
+      <Card title="Gateway fail mode" subtitle="What happens if the gateway itself has an error">
+        <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:14, marginBottom:14 }}>
+          {[
+            { mode:"closed", color:T.crit,   label:"Fail-closed (default)", desc:"If enforcement encounters an unexpected error, the request is blocked and an HTTP 503 is returned. No unscanned call reaches the LLM. Correct default for security-sensitive teams." },
+            { mode:"open",   color:T.warn,   label:"Fail-open", desc:"If enforcement encounters an unexpected error, the request passes through to the LLM unchecked. Use for teams where availability is more critical than enforcement. Set GATEWAY_FAIL_MODE=open in .env." },
+          ].map(m => (
+            <div key={m.mode} style={{ background:T.panelHi, border:`1px solid ${m.color}44`, borderRadius:6, padding:"14px 16px" }}>
+              <div style={{ fontFamily:FONT_MONO, fontSize:11, color:m.color, marginBottom:6 }}>{m.label}</div>
+              <div style={{ fontSize:12, color:T.textDim, lineHeight:1.6 }}>{m.desc}</div>
+            </div>
+          ))}
+        </div>
+        <div style={{ fontSize:11, color:T.textMute, fontFamily:FONT_MONO }}>
+          Note: policy blocks (403) and budget blocks (429) always propagate regardless of fail mode — only unexpected internal errors are affected by this setting.
+        </div>
+      </Card>
+
+      {/* Security posture */}
+      <Card title="Security posture" subtitle="What we do and don't do — for enterprise conversations">
+        <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:14, marginBottom:12 }}>
+          {[
+            { label:"Data in transit", val:"TLS 1.2+ (via your reverse proxy / load balancer)", color:T.accent },
+            { label:"Auth", val:"HS256 JWT, 30-minute expiry, per-user roles (admin / analyst / viewer)", color:T.accent },
+            { label:"Secrets storage", val:"API keys stored in .env — never returned via API, only status exposed", color:T.accent },
+            { label:"Audit log", val:"Every request logged with team, agent, model, tokens, cost, PII findings", color:T.accent },
+            { label:"Data residency", val:"All data stays in your deployment — no telemetry leaves your environment", color:T.accent },
+            { label:"SOC 2", val:"Pre-certification. Full audit log, RBAC, and secrets isolation in place. Formal certification roadmap available on request.", color:T.warn },
+          ].map(i => (
+            <div key={i.label} style={{ display:"flex", gap:10, alignItems:"flex-start" }}>
+              <span style={{ color:i.color, fontFamily:FONT_MONO, fontSize:13, flexShrink:0 }}>{i.color === T.accent ? "✓" : "○"}</span>
+              <div>
+                <div style={{ fontSize:12, color:T.text, fontFamily:FONT_MONO, marginBottom:2 }}>{i.label}</div>
+                <div style={{ fontSize:12, color:T.textDim, lineHeight:1.5 }}>{i.val}</div>
+              </div>
+            </div>
+          ))}
+        </div>
       </Card>
 
       {/* What happens on each call */}
