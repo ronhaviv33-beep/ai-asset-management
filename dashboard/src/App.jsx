@@ -1421,8 +1421,8 @@ const UserContext = createContext(null);
 const useUser = () => useContext(UserContext);
 
 const ROLES = {
-  admin:   { label:"Admin",   color: T.crit,   pages: ["home","chat","overview","cost","agents","models","workflows","alerts","budgets","security","users","settings"] },
-  analyst: { label:"Analyst", color: T.warn,   pages: ["home","chat","overview","cost","agents","models","workflows","alerts","security"] },
+  admin:   { label:"Admin",   color: T.crit,   pages: ["home","chat","overview","cost","agents","models","workflows","alerts","budgets","security","users","settings","integrations"] },
+  analyst: { label:"Analyst", color: T.warn,   pages: ["home","chat","overview","cost","agents","models","workflows","alerts","security","integrations"] },
   viewer:  { label:"Viewer",  color: T.info,   pages: ["home","overview","cost","agents","models","workflows","alerts","security"] },
 };
 
@@ -2395,6 +2395,224 @@ function ChatPage() {
   );
 }
 
+// ─── Integrations page ────────────────────────────────────────────────────────
+function IntegrationsPage() {
+  const currentUser = useUser();
+  const [copied, setCopied] = useState(null);
+  const [token, setToken] = useState("");
+  const [teamName, setTeamName] = useState(currentUser?.team || "my-team");
+  const [agentName, setAgentName] = useState("my-agent");
+
+  const gatewayUrl = `${window.location.origin}/api`;
+
+  const copy = (id, text) => {
+    navigator.clipboard.writeText(text);
+    setCopied(id);
+    setTimeout(() => setCopied(null), 2000);
+  };
+
+  const CopyBtn = ({ id, text }) => (
+    <button onClick={() => copy(id, text)}
+      style={{ background: copied===id ? `${T.accent}20` : "transparent", border:`1px solid ${copied===id ? T.accent+"55" : T.border}`,
+        color: copied===id ? T.accent : T.textMute, padding:"3px 10px", borderRadius:3, fontSize:10, fontFamily:FONT_MONO, cursor:"pointer", flexShrink:0 }}>
+      {copied===id ? "✓ copied" : "copy"}
+    </button>
+  );
+
+  const CodeBlock = ({ id, code }) => (
+    <div style={{ position:"relative" }}>
+      <pre style={{ background:T.bg, border:`1px solid ${T.border}`, borderRadius:6, padding:"14px 16px", fontSize:12, fontFamily:FONT_MONO, color:T.text, lineHeight:1.7, overflow:"auto", margin:0, whiteSpace:"pre" }}>
+        {code}
+      </pre>
+      <div style={{ position:"absolute", top:8, right:8 }}>
+        <CopyBtn id={id} text={code} />
+      </div>
+    </div>
+  );
+
+  const pythonSnippet = `import openai
+
+client = openai.OpenAI(
+    base_url="${gatewayUrl}/v1",
+    api_key="<your-jwt-token>",   # from POST /api/auth/login
+)
+
+response = client.chat.completions.create(
+    model="gpt-4o-mini",          # or any supported model
+    messages=[
+        {"role": "user", "content": "Write a daily standup summary"}
+    ],
+    extra_headers={
+        "X-Guard-Team":  "${teamName}",
+        "X-Guard-Agent": "${agentName}",
+    },
+)
+
+print(response.choices[0].message.content)
+# Cost, PII findings, and budget warnings → response.x_guard`;
+
+  const nodejsSnippet = `import OpenAI from "openai";
+
+const client = new OpenAI({
+  baseURL: "${gatewayUrl}/v1",
+  apiKey: "<your-jwt-token>",     // from POST /api/auth/login
+});
+
+const response = await client.chat.completions.create({
+  model: "gpt-4o-mini",
+  messages: [
+    { role: "user", content: "Write a daily standup summary" }
+  ],
+  // @ts-ignore — guard-specific headers
+  headers: {
+    "X-Guard-Team":  "${teamName}",
+    "X-Guard-Agent": "${agentName}",
+  },
+});
+
+console.log(response.choices[0].message.content);`;
+
+  const curlSnippet = `curl -X POST ${gatewayUrl}/v1/chat/completions \\
+  -H "Authorization: Bearer <your-jwt-token>" \\
+  -H "Content-Type: application/json" \\
+  -H "X-Guard-Team: ${teamName}" \\
+  -H "X-Guard-Agent: ${agentName}" \\
+  -d '{
+    "model": "gpt-4o-mini",
+    "messages": [
+      {"role": "user", "content": "Write a daily standup summary"}
+    ]
+  }'`;
+
+  const langchainSnippet = `from langchain_openai import ChatOpenAI
+
+llm = ChatOpenAI(
+    model="gpt-4o-mini",
+    openai_api_base="${gatewayUrl}/v1",
+    openai_api_key="<your-jwt-token>",
+    default_headers={
+        "X-Guard-Team":  "${teamName}",
+        "X-Guard-Agent": "${agentName}",
+    },
+)
+
+response = llm.invoke("Write a daily standup summary")
+print(response.content)`;
+
+  return (
+    <div style={{ display:"flex", flexDirection:"column", gap:18, maxWidth:900 }}>
+
+      {/* Hero */}
+      <div style={{ background:`linear-gradient(135deg,${T.panel} 0%,${T.panelHi} 100%)`, border:`1px solid ${T.border}`, borderRadius:8, padding:"28px 32px" }}>
+        <div style={{ fontFamily:FONT_MONO, fontSize:10, letterSpacing:"0.16em", textTransform:"uppercase", color:T.accent, marginBottom:10 }}>◆ Drop-in Gateway</div>
+        <div style={{ fontSize:20, fontWeight:500, letterSpacing:"-0.01em", marginBottom:10, color:T.text }}>
+          Point any agent at AIFinOps Guard
+        </div>
+        <div style={{ fontSize:13, color:T.textDim, lineHeight:1.65, maxWidth:640 }}>
+          Your agents keep using the standard OpenAI SDK — just change <code style={{ background:T.panelHi, padding:"1px 6px", borderRadius:3, fontFamily:FONT_MONO, fontSize:12 }}>base_url</code> to this server.
+          Every call is automatically scanned for PII, checked against model policies and budget limits, and logged to the audit trail.
+        </div>
+        <div style={{ display:"flex", gap:10, marginTop:18, flexWrap:"wrap" }}>
+          {[
+            { label:"PII scanning",        color:T.warn },
+            { label:"Model policy",        color:T.info },
+            { label:"Budget enforcement",  color:T.crit },
+            { label:"Cost tracking",       color:T.accent },
+            { label:"Audit log",           color:T.purple },
+          ].map(b => (
+            <span key={b.label} style={{ display:"inline-flex", alignItems:"center", gap:5, padding:"5px 12px", borderRadius:4, background:`${b.color}15`, border:`1px solid ${b.color}33`, color:b.color, fontSize:11, fontFamily:FONT_MONO }}>
+              ✓ {b.label}
+            </span>
+          ))}
+        </div>
+      </div>
+
+      {/* Config builder */}
+      <Card title="Connection details" subtitle="Edit these to generate code snippets for your agent">
+        <div style={{ display:"flex", gap:12, flexWrap:"wrap", alignItems:"flex-end", marginBottom:16 }}>
+          {[
+            { label:"Gateway URL", val:gatewayUrl, set:null, width:280, mono:true, readOnly:true },
+            { label:"Team name",   val:teamName,   set:setTeamName,  width:140 },
+            { label:"Agent name",  val:agentName,  set:setAgentName, width:140 },
+          ].map(f => (
+            <div key={f.label} style={{ display:"flex", flexDirection:"column", gap:4 }}>
+              <label style={{ fontSize:9, fontFamily:FONT_MONO, letterSpacing:"0.12em", textTransform:"uppercase", color:T.textMute }}>{f.label}</label>
+              <input value={f.val} onChange={f.set ? e => f.set(e.target.value) : undefined} readOnly={f.readOnly}
+                style={{ background: f.readOnly ? T.bg : T.panelHi, color: f.readOnly ? T.textDim : T.text, border:`1px solid ${T.border}`, padding:"6px 10px", borderRadius:4, fontSize:12, fontFamily:FONT_MONO, width:f.width, cursor: f.readOnly ? "default" : "text" }}/>
+            </div>
+          ))}
+          <div style={{ display:"flex", flexDirection:"column", gap:4 }}>
+            <label style={{ fontSize:9, fontFamily:FONT_MONO, letterSpacing:"0.12em", textTransform:"uppercase", color:T.textMute }}>JWT Token <span style={{ textTransform:"none", color:T.textMute }}>(from login)</span></label>
+            <input type="password" placeholder="Paste your token to see it in snippets…" value={token} onChange={e => setToken(e.target.value)}
+              style={{ background:T.panelHi, color:T.text, border:`1px solid ${T.border}`, padding:"6px 10px", borderRadius:4, fontSize:12, fontFamily:FONT_MONO, width:220 }}/>
+          </div>
+        </div>
+        <div style={{ fontSize:11, color:T.textMute, fontFamily:FONT_MONO }}>
+          Get a token: <code style={{ color:T.info }}>POST {gatewayUrl}/auth/login</code> → copy <code style={{ color:T.accent }}>access_token</code>
+        </div>
+      </Card>
+
+      {/* How attribution works */}
+      <Card title="How team & agent attribution works" subtitle="Two HTTP headers on every request">
+        <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:14 }}>
+          {[
+            { header:"X-Guard-Team", example:teamName, desc:"Maps this call to a team for policy enforcement and cost attribution. Must match a team name used in your Budget and Policy rules." },
+            { header:"X-Guard-Agent", example:agentName, desc:"Identifies which agent or workflow made the call. Shows up in telemetry, cost charts, and the audit log." },
+          ].map(h => (
+            <div key={h.header} style={{ background:T.panelHi, border:`1px solid ${T.border}`, borderRadius:6, padding:"14px 16px" }}>
+              <div style={{ fontFamily:FONT_MONO, fontSize:12, color:T.info, marginBottom:6 }}>{h.header}</div>
+              <div style={{ fontFamily:FONT_MONO, fontSize:11, color:T.accent, marginBottom:8 }}>example: "{h.example}"</div>
+              <div style={{ fontSize:12, color:T.textDim, lineHeight:1.6 }}>{h.desc}</div>
+            </div>
+          ))}
+        </div>
+      </Card>
+
+      {/* Code snippets */}
+      <Card title="Python — openai SDK" subtitle="Works with any agent framework that uses the openai package">
+        <CodeBlock id="python" code={pythonSnippet.replace(/<your-jwt-token>/g, token || "<your-jwt-token>")} />
+      </Card>
+
+      <Card title="LangChain" subtitle="Drop-in replacement for ChatOpenAI">
+        <CodeBlock id="langchain" code={langchainSnippet.replace(/<your-jwt-token>/g, token || "<your-jwt-token>")} />
+      </Card>
+
+      <Card title="Node.js — openai SDK" subtitle="TypeScript / JavaScript agents">
+        <CodeBlock id="nodejs" code={nodejsSnippet.replace(/<your-jwt-token>/g, token || "<your-jwt-token>")} />
+      </Card>
+
+      <Card title="curl" subtitle="Test the connection from a terminal">
+        <CodeBlock id="curl" code={curlSnippet.replace(/<your-jwt-token>/g, token || "<your-jwt-token>")} />
+      </Card>
+
+      {/* What happens on each call */}
+      <Card title="What happens on every agent call" subtitle="The enforcement pipeline">
+        <div style={{ display:"flex", flexDirection:"column", gap:0 }}>
+          {[
+            { n:"1", label:"PII scan",          color:T.warn,   desc:"Prompt is scanned for API keys, passwords, credit card numbers, and PII. Findings are logged to the audit trail." },
+            { n:"2", label:"Model policy check", color:T.info,   desc:"Request is checked against your policy rules. If the model is blocked for the team, the call is rejected with HTTP 403 and logged." },
+            { n:"3", label:"Budget check",       color:T.crit,   desc:"Current team/agent spend is compared to budget rules. If over limit with action=block, the call is rejected with HTTP 429." },
+            { n:"4", label:"LLM call",           color:T.accent, desc:"Request is forwarded to the real provider (OpenAI, Anthropic, Google) and the response returned to the agent." },
+            { n:"5", label:"Telemetry saved",    color:T.purple, desc:"Tokens, cost, latency, model, team, agent, and security findings are all stored. Visible in Overview, Cost, and Audit Log pages." },
+          ].map((s, i, arr) => (
+            <div key={s.n} style={{ display:"flex", gap:16, paddingBottom: i<arr.length-1 ? 0 : 0 }}>
+              <div style={{ display:"flex", flexDirection:"column", alignItems:"center", flexShrink:0 }}>
+                <div style={{ width:28, height:28, borderRadius:"50%", background:`${s.color}20`, border:`1px solid ${s.color}44`, display:"flex", alignItems:"center", justifyContent:"center", fontFamily:FONT_MONO, fontSize:11, color:s.color, fontWeight:600 }}>{s.n}</div>
+                {i < arr.length - 1 && <div style={{ width:1, flex:1, background:T.border, minHeight:20, margin:"4px 0" }}/>}
+              </div>
+              <div style={{ paddingBottom:16 }}>
+                <div style={{ fontFamily:FONT_MONO, fontSize:12, color:s.color, marginBottom:4 }}>{s.label}</div>
+                <div style={{ fontSize:13, color:T.textDim, lineHeight:1.6 }}>{s.desc}</div>
+              </div>
+            </div>
+          ))}
+        </div>
+      </Card>
+
+    </div>
+  );
+}
+
 // ─── Settings page (admin only) ───────────────────────────────────────────────
 function SettingsPage() {
   const [keys,      setKeys]      = useState([]);
@@ -2575,7 +2793,8 @@ const PAGES = [
   { id:"budgets",   label:"Budgets" },
   { id:"security",  label:"Security" },
   { id:"users",     label:"Users" },
-  { id:"settings",  label:"Settings" },
+  { id:"settings",     label:"Settings" },
+  { id:"integrations", label:"Integrations" },
 ];
 
 // ─── Root ─────────────────────────────────────────────────────────────────────
@@ -2665,8 +2884,9 @@ export default function App() {
       case "budgets":   return <BudgetsPage />;
       case "security":  return <SecurityPage />;
       case "users":     return <UsersPage />;
-      case "settings":  return <SettingsPage />;
-      default:          return null;
+      case "settings":      return <SettingsPage />;
+      case "integrations":  return <IntegrationsPage />;
+      default:              return null;
     }
   };
 
@@ -2754,7 +2974,7 @@ export default function App() {
           </div>
         </header>
 
-        {!["home","budgets","security","chat","users","settings"].includes(page) && <FilterBar filters={filters} setFilters={setFilters} allTeams={allTeams} allAgents={allAgents}/>}
+        {!["home","budgets","security","chat","users","settings","integrations"].includes(page) && <FilterBar filters={filters} setFilters={setFilters} allTeams={allTeams} allAgents={allAgents}/>}
 
         {renderPage()}
       </main>

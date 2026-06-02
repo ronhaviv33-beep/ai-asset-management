@@ -647,3 +647,114 @@ def update_key(req: KeyUpdateRequest, _=Depends(require_admin)):
     os.environ[req.key] = req.value
 
     return {"key": req.key, "updated": True}
+
+
+# ─── OpenAI-Compatible Proxy (/v1/chat/completions) ──────────────────────────
+#
+# Agents point their openai client at this server:
+#   client = openai.OpenAI(base_url="http://your-server/v1", api_key="<jwt>")
+#
+# Team and agent are read from request headers:
+#   X-Guard-Team:  <team name>   (defaults to "unknown")
+#   X-Guard-Agent: <agent name>  (defaults to "unknown")
+
+from fastapi import Request as FastAPIRequest
+import uuid as _uuid_mod
+import time as _time_mod
+
+
+@app.post("/v1/chat/completions", tags=["POST — Ask / Create"])
+async def openai_compat_chat(
+    request: FastAPIRequest,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    """
+    OpenAI-compatible chat completions endpoint.
+
+    Agents can use the standard openai SDK — just set base_url to this server.
+    Full enforcement pipeline applies: PII scan → policy → budget → LLM → telemetry.
+
+    Headers:
+    - X-Guard-Team:  team name for cost attribution and policy lookup
+    - X-Guard-Agent: agent name for telemetry
+    """
+    body = await request.json()
+
+    model    = body.get("model", "gpt-4o-mini")
+    messages = body.get("messages", [])
+    stream   = body.get("stream", False)
+
+    if stream:
+        raise HTTPException(status_code=400, detail="Streaming is not supported by AIFinOps Guard. Set stream=False.")
+
+    team  = request.headers.get("X-Guard-Team",  "unknown")
+    agent = request.headers.get("X-Guard-Agent", "unknown")
+
+    # Extract last user message for scanning
+    last_user = next((m["content"] for m in reversed(messages) if m.get("role") == "user"), "")
+
+    # 1. PII scan
+    scan_result   = scan(last_user)
+    findings_list = scan_result.to_dict()
+
+    # 2. Policy enforcement
+    policy_check = pol.check_model(db, team=team, model=model)
+    if not policy_check["allowed"]:
+        tel.save_blocked(db, team=team, agent=agent, model=model,
+                         prompt=last_user, reason=policy_check["reason"],
+                         sensitive=scan_result.is_sensitive, sensitive_findings=findings_list)
+        raise HTTPException(status_code=403, detail=policy_check["reason"])
+
+    # 3. Budget enforcement
+    budget_check = bud.check(db, team=team, agent=agent)
+    if not budget_check["allowed"]:
+        blk = budget_check["blocked_by"]
+        reason = (
+            f"Budget limit exceeded for team '{blk['team']}': "
+            f"${blk['spend']:.4f} of ${blk['limit']:.2f} {blk['period']} limit."
+        )
+        tel.save_blocked(db, team=team, agent=agent, model=model,
+                         prompt=last_user, reason=reason,
+                         sensitive=scan_result.is_sensitive, sensitive_findings=findings_list)
+        raise HTTPException(status_code=429, detail=reason)
+
+    # 4. Call LLM
+    try:
+        result = await chat_complete(messages=messages, model=model)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"LLM error: {exc}")
+
+    # 5. Persist telemetry
+    tel.save(db=db, team=team, agent=agent, prompt=last_user, result=result,
+             sensitive=scan_result.is_sensitive, sensitive_findings=findings_list)
+
+    # 6. Return standard OpenAI response format
+    return {
+        "id": f"chatcmpl-guard-{_uuid_mod.uuid4().hex[:12]}",
+        "object": "chat.completion",
+        "created": int(_time_mod.time()),
+        "model": result.model,
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": result.content},
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {
+            "prompt_tokens":     result.prompt_tokens,
+            "completion_tokens": result.completion_tokens,
+            "total_tokens":      result.total_tokens,
+        },
+        "x_guard": {
+            "team":              team,
+            "agent":             agent,
+            "cost_usd":          round(result.prompt_tokens / 1_000_000 * 0.15 + result.completion_tokens / 1_000_000 * 0.60, 8),
+            "latency_ms":        result.latency_ms,
+            "policy_warnings":   budget_check["warnings"],
+            "security_findings": findings_list,
+        },
+    }
