@@ -1,6 +1,8 @@
 import os
+import json
 import time
 from dataclasses import dataclass
+from typing import AsyncIterator
 from dotenv import load_dotenv
 from openai import AsyncOpenAI
 
@@ -8,8 +10,6 @@ load_dotenv()
 
 
 # ─── Provider routing ─────────────────────────────────────────────────────────
-# Each provider gets its own lazy singleton client.
-# Add a new block here when you onboard a new provider.
 
 _clients: dict[str, AsyncOpenAI] = {}
 
@@ -38,7 +38,6 @@ def _get_client(model: str) -> AsyncOpenAI:
             key = os.getenv("ANTHROPIC_API_KEY", "")
             if not key:
                 raise RuntimeError("ANTHROPIC_API_KEY is not set in .env")
-            # Anthropic exposes an OpenAI-compatible endpoint
             _clients["anthropic"] = AsyncOpenAI(
                 api_key=key,
                 base_url="https://api.anthropic.com/v1",
@@ -48,14 +47,12 @@ def _get_client(model: str) -> AsyncOpenAI:
             key = os.getenv("GOOGLE_API_KEY", "")
             if not key:
                 raise RuntimeError("GOOGLE_API_KEY is not set in .env")
-            # Google AI Studio exposes an OpenAI-compatible endpoint
             _clients["google"] = AsyncOpenAI(
                 api_key=key,
                 base_url="https://generativelanguage.googleapis.com/v1beta/openai",
             )
 
         elif provider == "local":
-            # Ollama / vLLM / LM Studio — no auth needed
             base_url = os.getenv("LOCAL_LLM_URL", "http://localhost:11434/v1")
             _clients["local"] = AsyncOpenAI(
                 api_key="local",
@@ -111,7 +108,7 @@ async def complete(
 # ─── Multi-turn chat call ─────────────────────────────────────────────────────
 
 async def chat_complete(
-    messages: list[dict],  # full history: [{"role": "user"|"assistant"|"system", "content": "..."}]
+    messages: list[dict],
     model: str = "gpt-4o-mini",
 ) -> CompletionResult:
     client = _get_client(model)
@@ -131,3 +128,71 @@ async def chat_complete(
         total_tokens=usage.total_tokens,
         latency_ms=round(latency_ms, 2),
     )
+
+
+# ─── Proxy passthrough — forwards the entire request body as-is ───────────────
+# Used by /v1/chat/completions and /v1/messages so tool_calls, temperature,
+# response_format, seed, etc. all reach the upstream provider unchanged.
+
+async def proxy_chat_complete(body: dict) -> dict:
+    """
+    Forward an entire OpenAI-shaped request body to the upstream provider.
+    Returns the raw model_dump() of the response, preserving tool_calls and
+    all fields the caller sent (temperature, seed, response_format, etc.).
+    """
+    model  = body.get("model", "gpt-4o-mini")
+    client = _get_client(model)
+
+    t0   = time.perf_counter()
+    resp = await client.chat.completions.create(**body)
+    resp_dict = resp.model_dump()
+    resp_dict["_latency_ms"] = round((time.perf_counter() - t0) * 1000, 2)
+    return resp_dict
+
+
+async def proxy_chat_stream(
+    body: dict,
+    request=None,
+) -> AsyncIterator[str]:
+    """
+    Stream an OpenAI-shaped request to the upstream provider and relay SSE
+    chunks as they arrive.  Persists telemetry via the usage chunk at the end.
+
+    Yields raw SSE lines ("data: {...}\\n\\n" and "data: [DONE]\\n\\n").
+    Yields a special sentinel dict at the end for the caller to use for telemetry:
+      {"_guard_usage": {"prompt_tokens": ..., "completion_tokens": ..., "total_tokens": ..., "model": ...}}
+    """
+    model  = body.get("model", "gpt-4o-mini")
+    client = _get_client(model)
+
+    stream_body = {**body, "stream": True, "stream_options": {"include_usage": True}}
+
+    stream = await client.chat.completions.create(**stream_body)
+    try:
+        async for chunk in stream:
+            # Check for client disconnect before sending each chunk
+            if request is not None and await request.is_disconnected():
+                await stream.response.aclose()
+                return
+
+            chunk_dict = chunk.model_dump()
+
+            # The final chunk carries usage when stream_options.include_usage=True
+            if chunk_dict.get("usage"):
+                u = chunk_dict["usage"]
+                yield {"_guard_usage": {
+                    "prompt_tokens":     u.get("prompt_tokens", 0),
+                    "completion_tokens": u.get("completion_tokens", 0),
+                    "total_tokens":      u.get("total_tokens", 0),
+                    "model":             chunk_dict.get("model", model),
+                }}
+
+            yield f"data: {json.dumps(chunk_dict, default=str)}\n\n"
+
+        yield "data: [DONE]\n\n"
+    except Exception:
+        try:
+            await stream.response.aclose()
+        except Exception:
+            pass
+        raise

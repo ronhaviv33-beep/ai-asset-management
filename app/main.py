@@ -1,7 +1,7 @@
 import os
 import json
 import asyncio
-from typing import List, AsyncIterator
+from typing import List
 
 from fastapi import FastAPI, Depends, HTTPException, Query, Body
 from fastapi.middleware.cors import CORSMiddleware
@@ -27,7 +27,9 @@ from app import policy as pol
 from app import sessions as sess
 from app.scanner import scan
 from app.client import complete, chat_complete
-from app.auth import hash_password, verify_password, create_token, get_current_user, require_admin
+from app.auth import hash_password, verify_password, create_token, get_current_user, require_admin, get_proxy_caller
+from app.client import proxy_chat_complete, proxy_chat_stream
+from app.models import calculate_cost
 
 Base.metadata.create_all(bind=engine)
 
@@ -707,51 +709,19 @@ async def _run_enforcement_pipeline(
     return last_user, scan_result, findings_list, policy_check, budget_check
 
 
-async def _stream_openai_response(
-    result_content: str,
-    model: str,
-    completion_id: str,
-    created: int,
-) -> AsyncIterator[str]:
-    """Simulate SSE streaming by splitting completed content into chunks."""
-    words = result_content.split(" ")
-    for i, word in enumerate(words):
-        chunk_text = word + (" " if i < len(words) - 1 else "")
-        chunk = {
-            "id": completion_id,
-            "object": "chat.completion.chunk",
-            "created": created,
-            "model": model,
-            "choices": [{"index": 0, "delta": {"content": chunk_text}, "finish_reason": None}],
-        }
-        yield f"data: {json.dumps(chunk)}\n\n"
-        await asyncio.sleep(0)  # yield control so FastAPI can flush
-
-    # Final chunk — empty delta + finish_reason
-    final = {
-        "id": completion_id,
-        "object": "chat.completion.chunk",
-        "created": created,
-        "model": model,
-        "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
-    }
-    yield f"data: {json.dumps(final)}\n\n"
-    yield "data: [DONE]\n\n"
-
 
 @app.post("/v1/chat/completions", tags=["POST — Ask / Create"])
 async def openai_compat_chat(
     request: FastAPIRequest,
     db: Session = Depends(get_db),
-    current_user=Depends(get_current_user),
+    current_user=Depends(get_proxy_caller),
 ):
     """
-    OpenAI-compatible chat completions endpoint — supports both streaming and non-streaming.
+    OpenAI-compatible chat completions endpoint.
 
-    Point any OpenAI SDK here by setting `base_url`:
-    ```python
-    client = openai.OpenAI(base_url="http://your-server/v1", api_key="<jwt>")
-    ```
+    Accepts any Bearer token — either a dashboard JWT or an opaque gateway key.
+    Forwards the **entire request body** to the upstream provider so tool_calls,
+    temperature, response_format, seed, etc. all pass through unchanged.
 
     Full enforcement pipeline: PII scan → policy → budget → LLM → telemetry.
 
@@ -763,80 +733,102 @@ async def openai_compat_chat(
     - `closed` (default) — enforcement errors block the request
     - `open` — enforcement errors are logged but the request passes through
     """
-    body = await request.json()
-
+    body  = await request.json()
     model    = body.get("model", "gpt-4o-mini")
     messages = body.get("messages", [])
-    stream   = body.get("stream", False)
+    stream   = body.pop("stream", False)  # pop so body can be forwarded cleanly
 
     team  = request.headers.get("X-Guard-Team",  "unknown")
     agent = request.headers.get("X-Guard-Agent", "unknown")
 
-    # Run enforcement pipeline; respect fail mode on unexpected errors
+    # Enforcement pipeline
     last_user = ""
     findings_list = []
     budget_warnings = []
+    scan_result = None
     try:
         last_user, scan_result, findings_list, _, budget_check = \
             await _run_enforcement_pipeline(db, team, agent, model, messages)
         budget_warnings = budget_check["warnings"]
     except HTTPException:
-        raise  # policy/budget blocks always propagate regardless of fail mode
+        raise
     except Exception as exc:
-        if _FAIL_MODE == "open":
-            pass  # log and continue
-        else:
+        if _FAIL_MODE != "open":
             raise HTTPException(status_code=503, detail=f"Gateway enforcement error: {exc}")
 
-    # Call LLM
+    # ── Streaming ──────────────────────────────────────────────────────────────
+    if stream:
+        async def relay():
+            usage_data = None
+            t0 = _time_mod.perf_counter()
+            async for item in proxy_chat_stream(body, request=request):
+                if isinstance(item, dict) and "_guard_usage" in item:
+                    usage_data = item["_guard_usage"]
+                    usage_data["latency_ms"] = round((_time_mod.perf_counter() - t0) * 1000, 2)
+                else:
+                    yield item
+
+            # Persist telemetry once stream completes
+            if usage_data:
+                from app.client import CompletionResult as CR
+                tel.save(
+                    db=db, team=team, agent=agent, prompt=last_user,
+                    result=CR(
+                        content="",
+                        model=usage_data.get("model", model),
+                        prompt_tokens=usage_data["prompt_tokens"],
+                        completion_tokens=usage_data["completion_tokens"],
+                        total_tokens=usage_data["total_tokens"],
+                        latency_ms=usage_data["latency_ms"],
+                    ),
+                    sensitive=(scan_result.is_sensitive if scan_result else False),
+                    sensitive_findings=findings_list,
+                )
+
+        return StreamingResponse(
+            relay(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
+
+    # ── Non-streaming — forward entire body ───────────────────────────────────
     try:
-        result = await chat_complete(messages=messages, model=model)
+        resp_dict = await proxy_chat_complete(body)
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail=str(exc))
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"LLM error: {exc}")
 
+    latency_ms = resp_dict.pop("_latency_ms", 0.0)
+    usage      = resp_dict.get("usage", {})
+    pt = usage.get("prompt_tokens", 0)
+    ct = usage.get("completion_tokens", 0)
+    resp_model = resp_dict.get("model", model)
+
     # Persist telemetry
-    tel.save(db=db, team=team, agent=agent, prompt=last_user, result=result,
-             sensitive=(scan_result.is_sensitive if last_user else False),
-             sensitive_findings=findings_list)
+    from app.client import CompletionResult as CR
+    content = ""
+    choices = resp_dict.get("choices", [])
+    if choices:
+        content = (choices[0].get("message") or {}).get("content") or ""
+    tel.save(
+        db=db, team=team, agent=agent, prompt=last_user,
+        result=CR(content=content, model=resp_model,
+                  prompt_tokens=pt, completion_tokens=ct, total_tokens=pt + ct,
+                  latency_ms=latency_ms),
+        sensitive=(scan_result.is_sensitive if scan_result else False),
+        sensitive_findings=findings_list,
+    )
 
-    completion_id = f"chatcmpl-guard-{_uuid_mod.uuid4().hex[:12]}"
-    created       = int(_time_mod.time())
-
-    if stream:
-        return StreamingResponse(
-            _stream_openai_response(result.content, result.model, completion_id, created),
-            media_type="text/event-stream",
-            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-        )
-
-    return {
-        "id": completion_id,
-        "object": "chat.completion",
-        "created": created,
-        "model": result.model,
-        "choices": [
-            {
-                "index": 0,
-                "message": {"role": "assistant", "content": result.content},
-                "finish_reason": "stop",
-            }
-        ],
-        "usage": {
-            "prompt_tokens":     result.prompt_tokens,
-            "completion_tokens": result.completion_tokens,
-            "total_tokens":      result.total_tokens,
-        },
-        "x_guard": {
-            "team":              team,
-            "agent":             agent,
-            "cost_usd":          round(result.prompt_tokens / 1_000_000 * 0.15 + result.completion_tokens / 1_000_000 * 0.60, 8),
-            "latency_ms":        result.latency_ms,
-            "policy_warnings":   budget_warnings,
-            "security_findings": findings_list,
-        },
+    resp_dict["x_guard"] = {
+        "team":              team,
+        "agent":             agent,
+        "cost_usd":          calculate_cost(resp_model, pt, ct),
+        "latency_ms":        latency_ms,
+        "policy_warnings":   budget_warnings,
+        "security_findings": findings_list,
     }
+    return resp_dict
 
 
 # ─── Anthropic-Compatible Proxy (/v1/messages) ───────────────────────────────
@@ -852,19 +844,22 @@ async def openai_compat_chat(
 async def anthropic_compat_messages(
     request: FastAPIRequest,
     db: Session = Depends(get_db),
-    current_user=Depends(get_current_user),
+    current_user=Depends(get_proxy_caller),
 ):
     """
     Anthropic-compatible Messages API endpoint.
 
-    Teams using the Anthropic SDK point here by setting `base_url`:
+    Teams using the Anthropic SDK point here:
     ```python
     import anthropic
-    client = anthropic.Anthropic(base_url="http://your-server", api_key="<jwt>")
+    client = anthropic.Anthropic(base_url="http://your-server", api_key="<token>")
     ```
 
-    Accepts the standard Anthropic request shape (`model`, `messages`, `max_tokens`, `system`).
-    Returns the standard Anthropic response shape.
+    Accepts the standard Anthropic request shape and returns the standard
+    Anthropic response shape, including SSE streaming.
+
+    Note: only text-mode content blocks are supported; image/tool_use blocks
+    are passed through but not scanned for PII.
 
     Full enforcement pipeline: PII scan → policy → budget → LLM → telemetry.
 
@@ -872,104 +867,152 @@ async def anthropic_compat_messages(
     - `X-Guard-Team`:  team name for cost attribution
     - `X-Guard-Agent`: agent name for telemetry
     """
-    body = await request.json()
+    body  = await request.json()
+    model    = body.get("model", "claude-haiku-4-5")
+    system   = body.get("system", None)
+    stream   = body.get("stream", False)
 
-    model      = body.get("model", "claude-haiku-4-5")
-    max_tokens = body.get("max_tokens", 1024)
-    system     = body.get("system", None)
-    stream     = body.get("stream", False)
-
-    # Convert Anthropic message format → OpenAI format
+    # Transcode Anthropic messages → OpenAI format for enforcement scanning only
+    # (the actual LLM call uses proxy_chat_complete which forwards the body as-is
+    #  via OpenAI's Anthropic-compat endpoint, so structure is preserved)
     raw_messages = body.get("messages", [])
-    messages: list[dict] = []
+    oai_messages: list[dict] = []
     if system:
-        messages.append({"role": "system", "content": system})
+        oai_messages.append({"role": "system", "content": system if isinstance(system, str) else str(system)})
     for m in raw_messages:
         content = m.get("content", "")
-        # Anthropic content can be a list of blocks or a plain string
         if isinstance(content, list):
-            text_parts = [b.get("text", "") for b in content if b.get("type") == "text"]
+            text_parts = [b.get("text", "") for b in content if isinstance(b, dict) and b.get("type") == "text"]
             content = " ".join(text_parts)
-        messages.append({"role": m["role"], "content": content})
+        oai_messages.append({"role": m["role"], "content": content})
 
     team  = request.headers.get("X-Guard-Team",  "unknown")
     agent = request.headers.get("X-Guard-Agent", "unknown")
 
-    # Run enforcement pipeline
+    # Enforcement
     last_user = ""
     findings_list = []
     budget_warnings = []
+    scan_result = None
     try:
         last_user, scan_result, findings_list, _, budget_check = \
-            await _run_enforcement_pipeline(db, team, agent, model, messages)
+            await _run_enforcement_pipeline(db, team, agent, model, oai_messages)
         budget_warnings = budget_check["warnings"]
     except HTTPException:
         raise
     except Exception as exc:
-        if _FAIL_MODE == "open":
-            pass
-        else:
+        if _FAIL_MODE != "open":
             raise HTTPException(status_code=503, detail=f"Gateway enforcement error: {exc}")
 
-    # Call LLM
+    msg_id  = f"msg_guard_{_uuid_mod.uuid4().hex[:12]}"
+    created = int(_time_mod.time())
+
+    # Build the OpenAI-compat body to forward (Anthropic provider via OpenAI client)
+    oai_body = {
+        "model":    model,
+        "messages": oai_messages,
+        "max_tokens": body.get("max_tokens", 1024),
+    }
+    if body.get("temperature") is not None:
+        oai_body["temperature"] = body["temperature"]
+    if body.get("stop_sequences"):
+        oai_body["stop"] = body["stop_sequences"]
+
+    # ── Streaming ──────────────────────────────────────────────────────────────
+    if stream:
+        async def anthropic_relay():
+            # Send message_start before first content
+            yield f"event: message_start\ndata: {json.dumps({'type':'message_start','message':{'id':msg_id,'type':'message','role':'assistant','content':[],'model':model,'stop_reason':None,'stop_sequence':None,'usage':{'input_tokens':0,'output_tokens':0}}})}\n\n"
+            yield f"event: content_block_start\ndata: {json.dumps({'type':'content_block_start','index':0,'content_block':{'type':'text','text':''}})}\n\n"
+
+            usage_data = None
+            t0 = _time_mod.perf_counter()
+            async for item in proxy_chat_stream(oai_body, request=request):
+                if isinstance(item, dict) and "_guard_usage" in item:
+                    usage_data = item["_guard_usage"]
+                    usage_data["latency_ms"] = round((_time_mod.perf_counter() - t0) * 1000, 2)
+                    continue
+                # item is an SSE string like "data: {...}\n\n" — extract the content delta
+                if item.startswith("data: ") and item.strip() != "data: [DONE]":
+                    try:
+                        chunk = json.loads(item[6:])
+                        delta_content = ""
+                        for ch in chunk.get("choices", []):
+                            delta_content += (ch.get("delta") or {}).get("content") or ""
+                        if delta_content:
+                            yield f"event: content_block_delta\ndata: {json.dumps({'type':'content_block_delta','index':0,'delta':{'type':'text_delta','text':delta_content}})}\n\n"
+                    except Exception:
+                        pass
+
+            yield f"event: content_block_stop\ndata: {json.dumps({'type':'content_block_stop','index':0})}\n\n"
+            out_tokens = (usage_data or {}).get("completion_tokens", 0)
+            in_tokens  = (usage_data or {}).get("prompt_tokens", 0)
+            yield f"event: message_delta\ndata: {json.dumps({'type':'message_delta','delta':{'stop_reason':'end_turn','stop_sequence':None},'usage':{'output_tokens':out_tokens}})}\n\n"
+            yield f"event: message_stop\ndata: {json.dumps({'type':'message_stop'})}\n\n"
+
+            if usage_data:
+                from app.client import CompletionResult as CR
+                tel.save(
+                    db=db, team=team, agent=agent, prompt=last_user,
+                    result=CR(content="", model=usage_data.get("model", model),
+                               prompt_tokens=in_tokens, completion_tokens=out_tokens,
+                               total_tokens=in_tokens + out_tokens,
+                               latency_ms=usage_data["latency_ms"]),
+                    sensitive=(scan_result.is_sensitive if scan_result else False),
+                    sensitive_findings=findings_list,
+                )
+
+        return StreamingResponse(
+            anthropic_relay(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
+
+    # ── Non-streaming ─────────────────────────────────────────────────────────
     try:
-        result = await chat_complete(messages=messages, model=model)
+        resp_dict = await proxy_chat_complete(oai_body)
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail=str(exc))
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"LLM error: {exc}")
 
-    # Persist telemetry
-    tel.save(db=db, team=team, agent=agent, prompt=last_user, result=result,
-             sensitive=(scan_result.is_sensitive if last_user else False),
-             sensitive_findings=findings_list)
+    latency_ms = resp_dict.pop("_latency_ms", 0.0)
+    usage      = resp_dict.get("usage", {})
+    pt = usage.get("prompt_tokens", 0)
+    ct = usage.get("completion_tokens", 0)
+    resp_model = resp_dict.get("model", model)
+    content    = ""
+    choices    = resp_dict.get("choices", [])
+    if choices:
+        content = (choices[0].get("message") or {}).get("content") or ""
 
-    msg_id  = f"msg_guard_{_uuid_mod.uuid4().hex[:12]}"
-    created = int(_time_mod.time())
+    from app.client import CompletionResult as CR
+    tel.save(
+        db=db, team=team, agent=agent, prompt=last_user,
+        result=CR(content=content, model=resp_model,
+                  prompt_tokens=pt, completion_tokens=ct, total_tokens=pt + ct,
+                  latency_ms=latency_ms),
+        sensitive=(scan_result.is_sensitive if scan_result else False),
+        sensitive_findings=findings_list,
+    )
 
-    if stream:
-        async def _anthropic_stream() -> AsyncIterator[str]:
-            # message_start
-            yield f"event: message_start\ndata: {json.dumps({'type':'message_start','message':{'id':msg_id,'type':'message','role':'assistant','content':[],'model':result.model,'stop_reason':None,'stop_sequence':None,'usage':{'input_tokens':result.prompt_tokens,'output_tokens':0}}})}\n\n"
-            # content_block_start
-            yield f"event: content_block_start\ndata: {json.dumps({'type':'content_block_start','index':0,'content_block':{'type':'text','text':''}})}\n\n"
-            # stream words as deltas
-            words = result.content.split(" ")
-            for i, word in enumerate(words):
-                chunk_text = word + (" " if i < len(words) - 1 else "")
-                yield f"event: content_block_delta\ndata: {json.dumps({'type':'content_block_delta','index':0,'delta':{'type':'text_delta','text':chunk_text}})}\n\n"
-                await asyncio.sleep(0)
-            # content_block_stop
-            yield f"event: content_block_stop\ndata: {json.dumps({'type':'content_block_stop','index':0})}\n\n"
-            # message_delta
-            yield f"event: message_delta\ndata: {json.dumps({'type':'message_delta','delta':{'stop_reason':'end_turn','stop_sequence':None},'usage':{'output_tokens':result.completion_tokens}})}\n\n"
-            # message_stop
-            yield f"event: message_stop\ndata: {json.dumps({'type':'message_stop'})}\n\n"
-
-        return StreamingResponse(
-            _anthropic_stream(),
-            media_type="text/event-stream",
-            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-        )
-
-    # Standard Anthropic response shape
     return {
-        "id":           msg_id,
-        "type":         "message",
-        "role":         "assistant",
-        "content":      [{"type": "text", "text": result.content}],
-        "model":        result.model,
-        "stop_reason":  "end_turn",
+        "id":            msg_id,
+        "type":          "message",
+        "role":          "assistant",
+        "content":       [{"type": "text", "text": content}],
+        "model":         resp_model,
+        "stop_reason":   "end_turn",
         "stop_sequence": None,
         "usage": {
-            "input_tokens":  result.prompt_tokens,
-            "output_tokens": result.completion_tokens,
+            "input_tokens":  pt,
+            "output_tokens": ct,
         },
         "x_guard": {
             "team":              team,
             "agent":             agent,
-            "cost_usd":          round(result.prompt_tokens / 1_000_000 * 0.15 + result.completion_tokens / 1_000_000 * 0.60, 8),
-            "latency_ms":        result.latency_ms,
+            "cost_usd":          calculate_cost(resp_model, pt, ct),
+            "latency_ms":        latency_ms,
             "policy_warnings":   budget_warnings,
             "security_findings": findings_list,
         },

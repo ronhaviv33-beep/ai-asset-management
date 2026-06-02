@@ -88,3 +88,45 @@ async def require_admin(user=Depends(get_current_user)):
     if user.role != "admin":
         raise HTTPException(status_code=403, detail="Admin access required")
     return user
+
+
+async def get_proxy_caller(
+    credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
+    db: Session = Depends(get_db),
+):
+    """
+    Auth dependency for proxy routes (/v1/chat/completions, /v1/messages).
+
+    Accepts two token forms:
+    - Valid dashboard JWT  → returns the real User object (full role/team info)
+    - Any other Bearer token → accepted as an opaque gateway key; returns a
+      synthetic identity dict so existing agent code needs no changes
+
+    This means customers can pass their own arbitrary api_key strings and the
+    gateway will accept them, attribute calls by the token prefix, and apply
+    whatever team/agent headers they send.
+    """
+    if not credentials:
+        raise HTTPException(status_code=401, detail="Authorization: Bearer <token> required")
+
+    token = credentials.credentials
+
+    # Try to decode as a dashboard JWT first
+    try:
+        payload = _decode_token(token)
+        from app.models import User
+        user = db.query(User).filter(
+            User.id == int(payload["sub"]), User.is_active == True  # noqa: E712
+        ).first()
+        if user:
+            return user
+    except (ValueError, Exception):
+        pass
+
+    # Accept as opaque gateway key — synthetic identity, team comes from header
+    return {
+        "id":   None,
+        "name": f"key_{token[:8]}",
+        "team": "unknown",
+        "role": "client",
+    }
