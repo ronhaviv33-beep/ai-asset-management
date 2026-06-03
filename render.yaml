@@ -38,9 +38,9 @@ services:
     buildCommand: cd dashboard && npm install && npm run build
     staticPublishPath: dashboard/dist
     envVars:
-      # Render injects the backend's host here at build time.
-      # Vite bakes it into the JS bundle as import.meta.env.VITE_API_BASE.
-      - key: VITE_API_URL
+      # Render injects the backend's host here at build time (e.g. aifinops-backend.onrender.com).
+      # The frontend normalizes a bare host to https:// — see dashboard/src/api.js resolveBase().
+      - key: VITE_API_BASE
         fromService:
           name: aifinops-backend
           type: web

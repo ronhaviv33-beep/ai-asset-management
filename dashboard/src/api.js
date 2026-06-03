@@ -1,6 +1,16 @@
 // In dev, VITE_API_BASE is empty and Vite proxy rewrites /api/* → http://localhost:8000/*.
 // In production, VITE_API_BASE is the full backend origin — no /api prefix needed.
-export const BASE = import.meta.env.VITE_API_BASE || '/api'
+// Accept either VITE_API_BASE (preferred) or VITE_API_URL (Render fromService host),
+// and normalize a bare hostname like "aifinops-backend.onrender.com" to a full https URL.
+function resolveBase() {
+  let raw = import.meta.env.VITE_API_BASE || import.meta.env.VITE_API_URL || ''
+  raw = raw.trim().replace(/\/+$/, '')                    // strip trailing slashes
+  if (!raw) return '/api'                                 // dev: Vite proxy handles /api/*
+  if (!/^https?:\/\//i.test(raw)) raw = `https://${raw}`  // bare host → add scheme
+  return raw
+}
+
+export const BASE = resolveBase()
 
 export function getToken() {
   return localStorage.getItem('token')
