@@ -2761,6 +2761,16 @@ function IntegrationsPage() {
     </div>
   );
 
+  const SectionHeader = ({ n, title, desc }) => (
+    <div style={{ display:"flex", alignItems:"baseline", gap:12, marginTop:14, marginBottom:2, paddingBottom:8, borderBottom:`1px solid ${T.border}` }}>
+      <span style={{ fontFamily:FONT_MONO, fontSize:11, color:T.accent, letterSpacing:"0.1em" }}>{n}</span>
+      <div>
+        <div style={{ fontSize:15, fontWeight:600, color:T.text, letterSpacing:"-0.01em" }}>{title}</div>
+        {desc && <div style={{ fontSize:12, color:T.textMute, marginTop:2 }}>{desc}</div>}
+      </div>
+    </div>
+  );
+
   const pythonSnippet = `import openai
 
 # Works with ANY model — GPT, Claude, Gemini, Llama, and more.
@@ -2922,6 +2932,8 @@ print(response.content)`;
         </div>
       </div>
 
+      <SectionHeader n="01" title="Get started" desc="Configure your connection and onboard a customer agent" />
+
       {/* Config builder */}
       <Card title="Connection details" subtitle="Edit these to generate code snippets for your agent">
         <div style={{ display:"flex", gap:12, flexWrap:"wrap", alignItems:"flex-end", marginBottom:16 }}>
@@ -2983,6 +2995,8 @@ print(resp.choices[0].message.content)`} />
         </div>
       </Card>
 
+      <SectionHeader n="02" title="Reference" desc="Attribution headers and the models you can route to" />
+
       {/* How attribution works */}
       <Card title="How team & agent attribution works" subtitle="Two HTTP headers on every request">
         <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:14 }}>
@@ -3023,6 +3037,8 @@ print(resp.choices[0].message.content)`} />
         </div>
       </Card>
 
+      <SectionHeader n="03" title="Code examples" desc="Copy-paste snippets for your stack — Python, Anthropic SDK, LangChain, Node.js, curl" />
+
       {/* Code snippets */}
       <Card title="Python" subtitle="Works with any LLM — change the model name to switch between OpenAI, Anthropic, Google, or local">
         <CodeBlock id="python" code={pythonSnippet.replace(/<your-jwt-token>/g, token || "<your-jwt-token>")} />
@@ -3042,6 +3058,32 @@ print(resp.choices[0].message.content)`} />
 
       <Card title="curl" subtitle="Test the connection from a terminal">
         <CodeBlock id="curl" code={curlSnippet.replace(/<your-jwt-token>/g, token || "<your-jwt-token>")} />
+      </Card>
+
+      <SectionHeader n="04" title="How it works & security" desc="The enforcement pipeline, fail-mode behavior, and security posture" />
+
+      {/* What happens on each call */}
+      <Card title="What happens on every agent call" subtitle="The enforcement pipeline">
+        <div style={{ display:"flex", flexDirection:"column", gap:0 }}>
+          {[
+            { n:"1", label:"PII scan",          color:T.warn,   desc:"Prompt is scanned for API keys, passwords, credit card numbers, and PII. Findings are logged to the audit trail." },
+            { n:"2", label:"Model policy check", color:T.info,   desc:"Request is checked against your policy rules. If the model is blocked for the team, the call is rejected with HTTP 403 and logged." },
+            { n:"3", label:"Budget check",       color:T.crit,   desc:"Current team/agent spend is compared to budget rules. If over limit with action=block, the call is rejected with HTTP 429." },
+            { n:"4", label:"LLM call",           color:T.accent, desc:"Request is forwarded to the real provider (OpenAI, Anthropic, Google) and the response returned to the agent." },
+            { n:"5", label:"Telemetry saved",    color:T.purple, desc:"Tokens, cost, latency, model, team, agent, and security findings are all stored. Visible in Overview, Cost, and Audit Log pages." },
+          ].map((s, i, arr) => (
+            <div key={s.n} style={{ display:"flex", gap:16, paddingBottom: i<arr.length-1 ? 0 : 0 }}>
+              <div style={{ display:"flex", flexDirection:"column", alignItems:"center", flexShrink:0 }}>
+                <div style={{ width:28, height:28, borderRadius:"50%", background:`${s.color}20`, border:`1px solid ${s.color}44`, display:"flex", alignItems:"center", justifyContent:"center", fontFamily:FONT_MONO, fontSize:11, color:s.color, fontWeight:600 }}>{s.n}</div>
+                {i < arr.length - 1 && <div style={{ width:1, flex:1, background:T.border, minHeight:20, margin:"4px 0" }}/>}
+              </div>
+              <div style={{ paddingBottom:16 }}>
+                <div style={{ fontFamily:FONT_MONO, fontSize:12, color:s.color, marginBottom:4 }}>{s.label}</div>
+                <div style={{ fontSize:13, color:T.textDim, lineHeight:1.6 }}>{s.desc}</div>
+              </div>
+            </div>
+          ))}
+        </div>
       </Card>
 
       {/* Fail mode */}
@@ -3078,30 +3120,6 @@ print(resp.choices[0].message.content)`} />
               <div>
                 <div style={{ fontSize:12, color:T.text, fontFamily:FONT_MONO, marginBottom:2 }}>{i.label}</div>
                 <div style={{ fontSize:12, color:T.textDim, lineHeight:1.5 }}>{i.val}</div>
-              </div>
-            </div>
-          ))}
-        </div>
-      </Card>
-
-      {/* What happens on each call */}
-      <Card title="What happens on every agent call" subtitle="The enforcement pipeline">
-        <div style={{ display:"flex", flexDirection:"column", gap:0 }}>
-          {[
-            { n:"1", label:"PII scan",          color:T.warn,   desc:"Prompt is scanned for API keys, passwords, credit card numbers, and PII. Findings are logged to the audit trail." },
-            { n:"2", label:"Model policy check", color:T.info,   desc:"Request is checked against your policy rules. If the model is blocked for the team, the call is rejected with HTTP 403 and logged." },
-            { n:"3", label:"Budget check",       color:T.crit,   desc:"Current team/agent spend is compared to budget rules. If over limit with action=block, the call is rejected with HTTP 429." },
-            { n:"4", label:"LLM call",           color:T.accent, desc:"Request is forwarded to the real provider (OpenAI, Anthropic, Google) and the response returned to the agent." },
-            { n:"5", label:"Telemetry saved",    color:T.purple, desc:"Tokens, cost, latency, model, team, agent, and security findings are all stored. Visible in Overview, Cost, and Audit Log pages." },
-          ].map((s, i, arr) => (
-            <div key={s.n} style={{ display:"flex", gap:16, paddingBottom: i<arr.length-1 ? 0 : 0 }}>
-              <div style={{ display:"flex", flexDirection:"column", alignItems:"center", flexShrink:0 }}>
-                <div style={{ width:28, height:28, borderRadius:"50%", background:`${s.color}20`, border:`1px solid ${s.color}44`, display:"flex", alignItems:"center", justifyContent:"center", fontFamily:FONT_MONO, fontSize:11, color:s.color, fontWeight:600 }}>{s.n}</div>
-                {i < arr.length - 1 && <div style={{ width:1, flex:1, background:T.border, minHeight:20, margin:"4px 0" }}/>}
-              </div>
-              <div style={{ paddingBottom:16 }}>
-                <div style={{ fontFamily:FONT_MONO, fontSize:12, color:s.color, marginBottom:4 }}>{s.label}</div>
-                <div style={{ fontSize:13, color:T.textDim, lineHeight:1.6 }}>{s.desc}</div>
               </div>
             </div>
           ))}
