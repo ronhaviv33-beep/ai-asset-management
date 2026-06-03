@@ -240,9 +240,11 @@ function runDetections(events) {
     if (age < DAY)             byAgentToday[e.agent] = (byAgentToday[e.agent] || 0) + e.cost;
     if (age >= DAY && age < 8 * DAY) byAgent7d[e.agent]  = (byAgent7d[e.agent]  || 0) + e.cost;
   });
+  // Cost spike: 7-day comparison OR high absolute spend today (> $0.05)
   Object.keys(byAgentToday).forEach((a) => {
     const today = byAgentToday[a]; const avg7 = (byAgent7d[a] || 0) / 7;
-    if (avg7 > 0.5 && today > 2 * avg7) alerts.push({ type: "agent_cost_spike", sev: "critical", entity: a, msg: `Agent cost $${today.toFixed(2)} today vs $${avg7.toFixed(2)} 7-day avg`, action: "Inspect prompt construction and tool-call loops", ts: now - 720_000 });
+    const spike = (avg7 > 0.01 && today > 2 * avg7) || (avg7 === 0 && today > 0.05);
+    if (spike) alerts.push({ type: "agent_cost_spike", sev: "critical", entity: a, msg: `Agent cost $${today.toFixed(4)} today vs $${avg7.toFixed(4)} 7-day avg`, action: "Inspect prompt construction and tool-call loops", ts: now - 720_000 });
   });
   events.filter((e) => e.tokens_total > 30000).slice(0, 5).forEach((e) => alerts.push({ type: "high_token_prompt", sev: "warning", entity: e.agent, msg: `${e.tokens_total.toLocaleString()} tokens in single request (${e.model})`, action: "Add context compaction or retrieval truncation", ts: e.ts }));
   const wfFails = {}, wfTotal = {};
@@ -252,11 +254,12 @@ function runDetections(events) {
   if (cheapCandidates.length > 5) alerts.push({ type: "expensive_model_usage", sev: "warning", entity: cheapCandidates[0].agent, msg: `${cheapCandidates.length} premium-model calls under 200 tokens`, action: "Route short prompts to gpt-4o-mini or claude-sonnet", ts: now - 5_400_000 });
   const afterHoursAgents = {};
   events.filter((e) => now - e.ts < 7 * DAY && e.afterHours).forEach((e) => { afterHoursAgents[e.agent] = (afterHoursAgents[e.agent] || 0) + 1; });
-  Object.keys(afterHoursAgents).forEach((a) => { if (afterHoursAgents[a] > 15) alerts.push({ type: "unusual_after_hours_usage", sev: "info", entity: a, msg: `${afterHoursAgents[a]} calls outside 07:00–20:00 in last 7d`, action: "Confirm batch job is intentional; otherwise rotate keys", ts: now - 10_800_000 }); });
+  Object.keys(afterHoursAgents).forEach((a) => { if (afterHoursAgents[a] > 5) alerts.push({ type: "unusual_after_hours_usage", sev: "info", entity: a, msg: `${afterHoursAgents[a]} calls outside 07:00–20:00 in last 7d`, action: "Confirm batch job is intentional; otherwise rotate keys", ts: now - 10_800_000 }); });
+  // Loop detection: >5 calls from same agent in any 30-min window (was 40 — unreachable in practice)
   const buckets = {};
   events.forEach((e) => { const k = `${e.agent}:${Math.floor(e.ts / 1_800_000)}`; buckets[k] = (buckets[k] || 0) + 1; });
   const flagged = new Set();
-  Object.entries(buckets).forEach(([k, v]) => { const [agent] = k.split(":"); if (v > 40 && !flagged.has(agent)) { flagged.add(agent); alerts.push({ type: "repeated_agent_loop", sev: "critical", entity: agent, msg: `${v} calls in single 30-min window`, action: "Check for tool-call retry loop or missing termination", ts: now - 1_200_000 }); } });
+  Object.entries(buckets).forEach(([k, v]) => { const [agent] = k.split(":"); if (v > 5 && !flagged.has(agent)) { flagged.add(agent); alerts.push({ type: "repeated_agent_loop", sev: "critical", entity: agent, msg: `${v} calls in a single 30-min window`, action: "Check for tool-call retry loop or missing termination", ts: now - 1_200_000 }); } });
   const unapproved = events.filter((e) => !approvedModel(e.model));
   if (unapproved.length > 0) alerts.push({ type: "unapproved_model_usage", sev: "warning", entity: unapproved[0].agent, msg: `${unapproved.length} calls to non-allowlisted model "${unapproved[0].model}"`, action: "Block at gateway or request governance approval", ts: now - 14_400_000 });
   const sensitive = events.filter((e) => e.sensitive);
