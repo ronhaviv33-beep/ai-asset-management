@@ -23,6 +23,7 @@ from app.schemas import (
     SessionCreate, SessionOut, SessionMessageOut, SessionChatRequest,
     UserCreate, UserUpdate, UserOut, LoginRequest, TokenResponse,
     ApiKeyCreate, ApiKeyOut, ApiKeyCreated,
+    GuardModeOut, GuardModeUpdate, HealthResponse,
 )
 from app import telemetry as tel
 from app import budget as bud
@@ -35,6 +36,61 @@ from app.client import proxy_chat_complete, proxy_chat_stream
 from app.models import calculate_cost
 
 Base.metadata.create_all(bind=engine)
+
+_START_TIME = time.time()
+
+
+# ─── Guard mode (Visibility First → Governance Later) ─────────────────────────
+# Platform default comes from GUARD_MODE; per-team overrides live in the
+# guard_modes table. Effective mode = team override (if any) else platform default.
+#
+#   observe — evaluate + log + shadow-block, never block, no alerts
+#   alert   — evaluate + log + shadow-block + fire alerts, never block
+#   enforce — evaluate + act: PII/policy/budget blocks return 4xx
+#
+# Backward compat: legacy GATEWAY_FAIL_MODE maps closed→enforce, open→observe.
+_VALID_MODES = {"observe", "alert", "enforce"}
+
+def _platform_default_mode() -> str:
+    raw = os.getenv("GUARD_MODE", "").lower().strip()
+    if raw in _VALID_MODES:
+        return raw
+    legacy = os.getenv("GATEWAY_FAIL_MODE", "closed").lower().strip()
+    return "observe" if legacy == "open" else "enforce"
+
+_PLATFORM_MODE = _platform_default_mode()
+
+
+# ─── Circuit breaker (protects callers during enforcement outages) ────────────
+_LLM_TIMEOUT      = float(os.getenv("GATEWAY_LLM_TIMEOUT_SECS", "30"))
+_ENFORCE_TIMEOUT  = float(os.getenv("GATEWAY_ENFORCE_TIMEOUT_SECS", "5"))
+_CB_THRESHOLD     = 5     # consecutive failures
+_CB_WINDOW        = 60    # seconds
+_circuit = {"failures": 0, "tripped_at": None, "first_failure_at": None}
+
+def _circuit_state() -> str:
+    if _circuit["tripped_at"] is None:
+        return "closed"
+    if time.time() - _circuit["tripped_at"] > _CB_WINDOW:
+        _circuit["tripped_at"] = None
+        _circuit["failures"] = 0
+        _circuit["first_failure_at"] = None
+        return "closed"
+    return "open"
+
+def _circuit_record_failure():
+    now = time.time()
+    if _circuit["first_failure_at"] is None or now - _circuit["first_failure_at"] > _CB_WINDOW:
+        _circuit["first_failure_at"] = now
+        _circuit["failures"] = 0
+    _circuit["failures"] += 1
+    if _circuit["failures"] >= _CB_THRESHOLD:
+        _circuit["tripped_at"] = now
+
+def _circuit_record_success():
+    if _circuit["tripped_at"] is None:
+        _circuit["failures"] = 0
+        _circuit["first_failure_at"] = None
 
 
 # ─── Login rate limiter (bounded LRU, per IP) ─────────────────────────────────
@@ -354,6 +410,105 @@ async def delete_api_key(key_id: int, db: Session = Depends(get_db), actor=Depen
     db.commit()
 
 
+# ─── Guard modes (per-team governance) ────────────────────────────────────────
+
+@app.get("/guard-modes", response_model=list[GuardModeOut], tags=["GET — Read / Monitor"])
+def list_guard_modes(db: Session = Depends(get_db), _=Depends(require_admin)):
+    """
+    One row per team that appears in telemetry, showing its effective mode,
+    whether it's an explicit override, and how many requests would have been
+    blocked in the last 30 days (shadow-block preview).
+    """
+    from app.models import GuardMode, Telemetry
+    overrides = {g.team: g for g in db.query(GuardMode).all()}
+    shadow = tel.would_block_counts(db, days=30)
+    # Union of teams seen in telemetry + teams with overrides
+    teams = set(shadow.keys()) | set(overrides.keys())
+    teams |= {r[0] for r in db.query(Telemetry.team).distinct().all()}
+    out = []
+    for team in sorted(t for t in teams if t):
+        ov = overrides.get(team)
+        out.append(GuardModeOut(
+            team=team,
+            mode=ov.mode if ov else _PLATFORM_MODE,
+            is_override=ov is not None,
+            would_block_30d=shadow.get(team, 0),
+            updated_at=ov.updated_at if ov else None,
+        ))
+    return out
+
+
+@app.put("/guard-modes/{team}", response_model=GuardModeOut, tags=["POST — Ask / Create"])
+def set_guard_mode(team: str, req: GuardModeUpdate, db: Session = Depends(get_db), actor=Depends(require_admin)):
+    """
+    Set a team's guard mode. mode="default" removes the override so the team
+    falls back to the platform default. Every change is written to the audit log.
+    """
+    from app.models import GuardMode
+    old = db.query(GuardMode).filter(GuardMode.team == team).first()
+    old_mode = old.mode if old else f"default({_PLATFORM_MODE})"
+
+    if req.mode == "default":
+        if old:
+            db.delete(old)
+            db.commit()
+        new_mode = f"default({_PLATFORM_MODE})"
+        effective = _PLATFORM_MODE
+        is_override = False
+        updated_at = None
+    else:
+        if old:
+            old.mode = req.mode
+            old.updated_by_id = actor.id
+        else:
+            db.add(GuardMode(team=team, mode=req.mode, updated_by_id=actor.id))
+        db.commit()
+        row = db.query(GuardMode).filter(GuardMode.team == team).first()
+        new_mode = req.mode
+        effective = req.mode
+        is_override = True
+        updated_at = row.updated_at
+
+    # Audit: server log + dashboard-visible governance row
+    import logging
+    logging.getLogger("aifinops.security").warning(
+        "GUARD MODE: team=%s %s -> %s by=%s", team, old_mode, new_mode, actor.email
+    )
+    tel.save_blocked(
+        db, team=team, agent="guard-mode", model="-",
+        prompt=f"Guard mode change by {actor.email}",
+        reason=f"GUARD_MODE: team '{team}' {old_mode} → {new_mode} by {actor.email}",
+    )
+
+    shadow = tel.would_block_counts(db, days=30)
+    return GuardModeOut(team=team, mode=effective, is_override=is_override,
+                        would_block_30d=shadow.get(team, 0), updated_at=updated_at)
+
+
+# ─── Health ───────────────────────────────────────────────────────────────────
+
+@app.get("/health", response_model=HealthResponse, tags=["GET — Read / Monitor"])
+def health(db: Session = Depends(get_db)):
+    """Liveness + readiness. Public — customers use this for their own fallback logic."""
+    db_ok = True
+    try:
+        from sqlalchemy import text
+        db.execute(text("SELECT 1"))
+    except Exception:
+        db_ok = False
+    return HealthResponse(
+        status="ok" if db_ok else "degraded",
+        db=db_ok,
+        uptime_seconds=int(time.time() - _START_TIME),
+        platform_mode=_PLATFORM_MODE,
+        circuit_breaker={
+            "state": _circuit_state(),
+            "consecutive_failures": _circuit["failures"],
+            "tripped_at": _circuit["tripped_at"],
+        },
+    )
+
+
 # ─── AI Gateway ───────────────────────────────────────────────────────────────
 
 @app.post("/ask", response_model=AskResponse, tags=["POST — Ask / Create"])
@@ -369,12 +524,9 @@ async def ask(req: AskRequest, db: Session = Depends(get_db), _=Depends(get_curr
     # 2. Policy enforcement — model allowlist / blocklist
     policy_check = pol.check_model(db, team=req.team, model=req.model)
     if not policy_check["allowed"]:
-        tel.save_blocked(
-            db, team=req.team, agent=req.agent, model=req.model,
-            prompt=req.prompt, reason=policy_check["reason"],
-            sensitive=scan_result.is_sensitive, sensitive_findings=findings_list,
-        )
-        raise HTTPException(status_code=403, detail=policy_check["reason"])
+        _shadow_or_block_inline(db, team=req.team, agent=req.agent, model=req.model,
+                                prompt=req.prompt, reason=policy_check["reason"], status=403,
+                                scan_result=scan_result, findings_list=findings_list)
 
     # 3. Budget enforcement
     budget_check = bud.check(db, team=req.team, agent=req.agent)
@@ -385,12 +537,9 @@ async def ask(req: AskRequest, db: Session = Depends(get_db), _=Depends(get_curr
             + (f", agent '{blk['agent']}'" if blk["agent"] else "")
             + f": ${blk['spend']:.4f} spent of ${blk['limit']:.2f} {blk['period']} limit."
         )
-        tel.save_blocked(
-            db, team=req.team, agent=req.agent, model=req.model,
-            prompt=req.prompt, reason=reason,
-            sensitive=scan_result.is_sensitive, sensitive_findings=findings_list,
-        )
-        raise HTTPException(status_code=429, detail=reason)
+        _shadow_or_block_inline(db, team=req.team, agent=req.agent, model=req.model,
+                                prompt=req.prompt, reason=reason, status=429,
+                                scan_result=scan_result, findings_list=findings_list)
 
     # 4. Call LLM
     try:
@@ -466,10 +615,9 @@ async def chat(req: ChatRequest, db: Session = Depends(get_db), _=Depends(get_cu
     # Policy check
     policy_check = pol.check_model(db, team=req.team, model=req.model)
     if not policy_check["allowed"]:
-        tel.save_blocked(db, team=req.team, agent=req.agent, model=req.model,
-                         prompt=last_user, reason=policy_check["reason"],
-                         sensitive=scan_result.is_sensitive, sensitive_findings=findings_list)
-        raise HTTPException(status_code=403, detail=policy_check["reason"])
+        _shadow_or_block_inline(db, team=req.team, agent=req.agent, model=req.model,
+                                prompt=last_user, reason=policy_check["reason"], status=403,
+                                scan_result=scan_result, findings_list=findings_list)
 
     # Budget check
     budget_check = bud.check(db, team=req.team, agent=req.agent)
@@ -477,10 +625,9 @@ async def chat(req: ChatRequest, db: Session = Depends(get_db), _=Depends(get_cu
         blk = budget_check["blocked_by"]
         reason = (f"Budget limit exceeded for team '{blk['team']}': "
                   f"${blk['spend']:.4f} of ${blk['limit']:.2f} {blk['period']} limit.")
-        tel.save_blocked(db, team=req.team, agent=req.agent, model=req.model,
-                         prompt=last_user, reason=reason,
-                         sensitive=scan_result.is_sensitive, sensitive_findings=findings_list)
-        raise HTTPException(status_code=429, detail=reason)
+        _shadow_or_block_inline(db, team=req.team, agent=req.agent, model=req.model,
+                                prompt=last_user, reason=reason, status=429,
+                                scan_result=scan_result, findings_list=findings_list)
 
     # Build messages list — prepend system prompt if given
     messages = []
@@ -686,10 +833,9 @@ async def session_chat(session_uuid: str, req: SessionChatRequest, db: Session =
     # Policy check
     policy_check = pol.check_model(db, team=req.team, model=req.model)
     if not policy_check["allowed"]:
-        tel.save_blocked(db, team=req.team, agent=req.agent, model=req.model,
-                         prompt=last_user, reason=policy_check["reason"],
-                         sensitive=scan_result.is_sensitive, sensitive_findings=findings_list)
-        raise HTTPException(status_code=403, detail=policy_check["reason"])
+        _shadow_or_block_inline(db, team=req.team, agent=req.agent, model=req.model,
+                                prompt=last_user, reason=policy_check["reason"], status=403,
+                                scan_result=scan_result, findings_list=findings_list)
 
     # Budget check
     budget_check = bud.check(db, team=req.team, agent=req.agent)
@@ -697,10 +843,9 @@ async def session_chat(session_uuid: str, req: SessionChatRequest, db: Session =
         blk = budget_check["blocked_by"]
         reason = (f"Budget limit exceeded for team '{blk['team']}': "
                   f"${blk['spend']:.4f} of ${blk['limit']:.2f} {blk['period']} limit.")
-        tel.save_blocked(db, team=req.team, agent=req.agent, model=req.model,
-                         prompt=last_user, reason=reason,
-                         sensitive=scan_result.is_sensitive, sensitive_findings=findings_list)
-        raise HTTPException(status_code=429, detail=reason)
+        _shadow_or_block_inline(db, team=req.team, agent=req.agent, model=req.model,
+                                prompt=last_user, reason=reason, status=429,
+                                scan_result=scan_result, findings_list=findings_list)
 
     # Build messages list
     messages = []
@@ -863,40 +1008,77 @@ from fastapi import Request as FastAPIRequest
 import uuid as _uuid_mod
 import time as _time_mod
 
-_FAIL_MODE = os.getenv("GATEWAY_FAIL_MODE", "closed").lower()  # "open" | "closed"
+def _resolve_guard_mode(db: Session, team: str) -> str:
+    """Effective mode for a team: explicit override if present, else platform default."""
+    from app.models import GuardMode
+    try:
+        row = db.query(GuardMode).filter(GuardMode.team == team).first()
+        if row and row.mode in _VALID_MODES:
+            return row.mode
+    except Exception:
+        pass
+    return _PLATFORM_MODE
+
+
+def _shadow_or_block_inline(db, *, team, agent, model, prompt, reason, status,
+                            scan_result, findings_list):
+    """
+    Mode-aware block used by /ask and /chat inline enforcement.
+    enforce → save_blocked + raise; observe/alert → append would_block finding.
+    """
+    mode = _resolve_guard_mode(db, team)
+    if mode == "enforce":
+        tel.save_blocked(db, team=team, agent=agent, model=model, prompt=prompt,
+                         reason=reason, sensitive=scan_result.is_sensitive,
+                         sensitive_findings=findings_list)
+        raise HTTPException(status_code=status, detail=reason)
+    findings_list.append({"type": "would_block", "severity": "warning",
+                          "sample": f"WOULD BLOCK in enforce mode ({status}): {reason}"})
 
 
 async def _run_enforcement_pipeline(
     db: Session, team: str, agent: str, model: str, messages: list
 ):
     """
-    Runs PII scan → policy → budget.
-    Returns (scan_result, findings_list, policy_check, budget_check, large_prompt).
-    Raises HTTPException on block (in closed mode, caller handles open mode).
-    Large prompts are flagged in findings but never blocked — budget enforces spend.
+    Mode-aware enforcement. ALWAYS evaluates PII scan → policy → budget so the
+    dashboard can show shadow blocks ("would block in enforce mode"). Only the
+    `enforce` mode actually blocks; observe/alert record a would_block finding
+    and let the request proceed.
+
+    Returns (last_user, scan_result, findings_list, policy_check, budget_check, large_prompt).
+    Raises HTTPException only in enforce mode.
     """
+    mode = _resolve_guard_mode(db, team)
     last_user = next((m["content"] for m in reversed(messages) if m.get("role") == "user"), "")
     total_chars = sum(len(m.get("content", "") or "") for m in messages)
 
     scan_result   = scan(last_user)
     findings_list = scan_result.to_dict()
 
-    # Flag large prompts as a warning finding (warn only — budget handles the cost)
+    # Large prompts: warn only — budget handles the cost
     LARGE_PROMPT_CHARS = 40_000  # ~10k tokens
     large_prompt = total_chars > LARGE_PROMPT_CHARS
     if large_prompt:
         findings_list.append({
-            "type": "large_prompt",
-            "severity": "warning",
+            "type": "large_prompt", "severity": "warning",
             "sample": f"{total_chars:,} chars across {len(messages)} messages",
+        })
+
+    def _shadow_or_block(reason: str, status: int):
+        """In enforce mode: save_blocked + raise. Otherwise: record would_block finding."""
+        if mode == "enforce":
+            tel.save_blocked(db, team=team, agent=agent, model=model,
+                             prompt=last_user, reason=reason,
+                             sensitive=scan_result.is_sensitive, sensitive_findings=findings_list)
+            raise HTTPException(status_code=status, detail=reason)
+        findings_list.append({
+            "type": "would_block", "severity": "warning",
+            "sample": f"WOULD BLOCK in enforce mode ({status}): {reason}",
         })
 
     policy_check = pol.check_model(db, team=team, model=model)
     if not policy_check["allowed"]:
-        tel.save_blocked(db, team=team, agent=agent, model=model,
-                         prompt=last_user, reason=policy_check["reason"],
-                         sensitive=scan_result.is_sensitive, sensitive_findings=findings_list)
-        raise HTTPException(status_code=403, detail=policy_check["reason"])
+        _shadow_or_block(policy_check["reason"], 403)
 
     budget_check = bud.check(db, team=team, agent=agent)
     if not budget_check["allowed"]:
@@ -905,12 +1087,30 @@ async def _run_enforcement_pipeline(
             f"Budget limit exceeded for team '{blk['team']}': "
             f"${blk['spend']:.4f} of ${blk['limit']:.2f} {blk['period']} limit."
         )
-        tel.save_blocked(db, team=team, agent=agent, model=model,
-                         prompt=last_user, reason=reason,
-                         sensitive=scan_result.is_sensitive, sensitive_findings=findings_list)
-        raise HTTPException(status_code=429, detail=reason)
+        _shadow_or_block(reason, 429)
 
     return last_user, scan_result, findings_list, policy_check, budget_check, large_prompt
+
+
+def _handle_enforcement_error(db: Session, team: str, findings_list: list):
+    """
+    Called when the enforcement pipeline itself throws (DB down, scanner crash).
+    Records a circuit-breaker failure. If the breaker is open, OR the team's mode
+    is not enforce, the request is allowed through (fail-open) with a logged
+    critical bypass finding. In enforce mode with the breaker closed, raises 503.
+    """
+    import logging
+    _circuit_record_failure()
+    breaker_open = _circuit_state() == "open"
+    mode = _resolve_guard_mode(db, team)
+    if mode == "enforce" and not breaker_open:
+        logging.getLogger("aifinops").error("Enforcement error (enforce mode)", exc_info=True)
+        raise HTTPException(status_code=503, detail="Gateway enforcement error. Please try again.")
+    # Fail-open path — never silent
+    why = "circuit breaker OPEN" if breaker_open else f"{mode} mode"
+    logging.getLogger("aifinops").error("FAIL-OPEN BYPASS (%s): enforcement error swallowed", why, exc_info=True)
+    findings_list.append({"type": "enforcement_bypass", "severity": "critical",
+                          "sample": f"fail-open ({why}) swallowed an enforcement error"})
 
 
 
@@ -954,17 +1154,11 @@ async def openai_compat_chat(
         last_user, scan_result, findings_list, _, budget_check, _ = \
             await _run_enforcement_pipeline(db, team, agent, model, messages)
         budget_warnings = budget_check["warnings"]
+        _circuit_record_success()
     except HTTPException:
         raise
-    except Exception as exc:
-        import logging
-        if _FAIL_MODE != "open":
-            logging.getLogger("aifinops").error("Enforcement error", exc_info=True)
-            raise HTTPException(status_code=503, detail="Gateway enforcement error. Please try again.")
-        # Fail-open: never silent — log as a high-severity bypass and flag in telemetry
-        logging.getLogger("aifinops").error("FAIL-OPEN BYPASS: enforcement error swallowed", exc_info=True)
-        findings_list.append({"type": "enforcement_bypass", "severity": "critical",
-                              "sample": "fail-open mode swallowed an enforcement error"})
+    except Exception:
+        _handle_enforcement_error(db, team, findings_list)
 
     # ── Streaming ──────────────────────────────────────────────────────────────
     if stream:
@@ -1108,16 +1302,11 @@ async def anthropic_compat_messages(
         last_user, scan_result, findings_list, _, budget_check, _ = \
             await _run_enforcement_pipeline(db, team, agent, model, oai_messages)
         budget_warnings = budget_check["warnings"]
+        _circuit_record_success()
     except HTTPException:
         raise
-    except Exception as exc:
-        import logging
-        if _FAIL_MODE != "open":
-            logging.getLogger("aifinops").error("Enforcement error", exc_info=True)
-            raise HTTPException(status_code=503, detail="Gateway enforcement error. Please try again.")
-        logging.getLogger("aifinops").error("FAIL-OPEN BYPASS: enforcement error swallowed", exc_info=True)
-        findings_list.append({"type": "enforcement_bypass", "severity": "critical",
-                              "sample": "fail-open mode swallowed an enforcement error"})
+    except Exception:
+        _handle_enforcement_error(db, team, findings_list)
 
     msg_id  = f"msg_guard_{_uuid_mod.uuid4().hex[:12]}"
     created = int(_time_mod.time())

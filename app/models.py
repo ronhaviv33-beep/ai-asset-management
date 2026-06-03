@@ -118,6 +118,19 @@ class ApiKey(Base):
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
 
 
+class GuardMode(Base):
+    __tablename__ = "guard_modes"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    team: Mapped[str] = mapped_column(String(128), unique=True, index=True)
+    mode: Mapped[str] = mapped_column(String(16))   # observe | alert | enforce
+    updated_by_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("users.id"), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+    )
+
+
 class ChatSession(Base):
     __tablename__ = "chat_sessions"
 

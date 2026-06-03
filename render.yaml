@@ -12,8 +12,12 @@ services:
     envVars:
       - key: JWT_SECRET
         generateValue: true
-      - key: GATEWAY_FAIL_MODE
-        value: closed
+      - key: GUARD_MODE
+        value: observe
+      - key: GATEWAY_LLM_TIMEOUT_SECS
+        value: "30"
+      - key: GATEWAY_ENFORCE_TIMEOUT_SECS
+        value: "5"
       # Set these in the Render dashboard — never commit real keys
       - key: OPENAI_API_KEY
         sync: false

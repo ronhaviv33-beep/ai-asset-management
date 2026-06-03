@@ -105,6 +105,20 @@ def get_audit(
     return q.offset(skip).limit(limit).all()
 
 
+def would_block_counts(db: Session, days: int = 30) -> dict[str, int]:
+    """Count shadow-block ('would_block') findings per team over the last N days."""
+    from datetime import datetime, timezone, timedelta
+    since = datetime.now(timezone.utc) - timedelta(days=days)
+    rows = db.query(Telemetry).filter(
+        Telemetry.timestamp >= since,
+        Telemetry.sensitive_findings.like('%would_block%'),
+    ).all()
+    counts: dict[str, int] = {}
+    for r in rows:
+        counts[r.team] = counts.get(r.team, 0) + 1
+    return counts
+
+
 def get_security_alerts(db: Session) -> list[dict]:
     """Run detection rules against real telemetry and return live alerts."""
     from datetime import datetime, timezone, timedelta

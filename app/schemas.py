@@ -193,6 +193,26 @@ class ApiKeyCreated(ApiKeyOut):
     key: str
 
 
+class GuardModeOut(BaseModel):
+    team: str
+    mode: str               # observe | alert | enforce
+    is_override: bool       # True if set explicitly, False if inheriting platform default
+    would_block_30d: int = 0
+    updated_at: datetime | None = None
+
+
+class GuardModeUpdate(BaseModel):
+    mode: str = Field(..., pattern="^(observe|alert|enforce|default)$")
+
+
+class HealthResponse(BaseModel):
+    status: str
+    db: bool
+    uptime_seconds: int
+    platform_mode: str
+    circuit_breaker: dict
+
+
 class LoginRequest(BaseModel):
     email: str
     password: str

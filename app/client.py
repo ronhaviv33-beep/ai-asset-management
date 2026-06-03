@@ -57,12 +57,15 @@ def _provider_for(model: str) -> str:
 def _get_client(model: str) -> AsyncOpenAI:
     provider = _provider_for(model)
 
+    # Caps a hung upstream provider so the gateway never blocks a caller forever.
+    timeout = float(os.getenv("GATEWAY_LLM_TIMEOUT_SECS", "30"))
+
     if provider not in _clients:
         if provider == "openai":
             key = os.getenv("OPENAI_API_KEY", "")
             if not key or key == "your-openai-api-key-here":
                 raise RuntimeError("OPENAI_API_KEY is not set in .env")
-            _clients["openai"] = AsyncOpenAI(api_key=key)
+            _clients["openai"] = AsyncOpenAI(api_key=key, timeout=timeout)
 
         elif provider == "anthropic":
             key = os.getenv("ANTHROPIC_API_KEY", "")
@@ -71,6 +74,7 @@ def _get_client(model: str) -> AsyncOpenAI:
             _clients["anthropic"] = AsyncOpenAI(
                 api_key=key,
                 base_url="https://api.anthropic.com/v1",
+                timeout=timeout,
             )
 
         elif provider == "google":
@@ -80,6 +84,7 @@ def _get_client(model: str) -> AsyncOpenAI:
             _clients["google"] = AsyncOpenAI(
                 api_key=key,
                 base_url="https://generativelanguage.googleapis.com/v1beta/openai",
+                timeout=timeout,
             )
 
         elif provider == "local":
@@ -87,6 +92,7 @@ def _get_client(model: str) -> AsyncOpenAI:
             _clients["local"] = AsyncOpenAI(
                 api_key="local",
                 base_url=base_url,
+                timeout=timeout,
             )
 
     return _clients[provider]
