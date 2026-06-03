@@ -3,11 +3,11 @@ from pydantic import BaseModel, Field
 
 
 class AskRequest(BaseModel):
-    team: str = Field(..., examples=["SOC"])
-    agent: str = Field(..., examples=["IR-Agent"])
-    prompt: str = Field(..., examples=["Analyze this phishing email"])
-    model: str = Field(default="gpt-4o-mini", examples=["gpt-4o-mini"])
-    system_prompt: str | None = Field(default=None)
+    team: str = Field(..., examples=["SOC"], max_length=128)
+    agent: str = Field(..., examples=["IR-Agent"], max_length=128)
+    prompt: str = Field(..., examples=["Analyze this phishing email"], max_length=32_000)
+    model: str = Field(default="gpt-4o-mini", examples=["gpt-4o-mini"], max_length=64)
+    system_prompt: str | None = Field(default=None, max_length=8_000)
     session_uuid: str | None = Field(default=None, description="Attach this call to an existing chat session")
 
 
@@ -112,16 +112,16 @@ class PolicyRuleOut(BaseModel):
 # ── Chat ──────────────────────────────────────────────────────────────────────
 
 class ChatMessage(BaseModel):
-    role: str   # "user" | "assistant" | "system"
-    content: str
+    role: str = Field(..., pattern="^(user|assistant)$")
+    content: str = Field(..., max_length=32_000)
 
 
 class ChatRequest(BaseModel):
-    team: str = Field(..., examples=["SOC"])
-    agent: str = Field(..., examples=["IR-Agent"])
-    model: str = Field(default="gpt-4o-mini", examples=["gpt-4o-mini"])
-    messages: list[ChatMessage]          # full conversation history
-    system_prompt: str | None = Field(default=None)
+    team: str = Field(..., examples=["SOC"], max_length=128)
+    agent: str = Field(..., examples=["IR-Agent"], max_length=128)
+    model: str = Field(default="gpt-4o-mini", examples=["gpt-4o-mini"], max_length=64)
+    messages: list[ChatMessage] = Field(..., max_length=200)
+    system_prompt: str | None = Field(default=None, max_length=8_000)
 
 
 class ChatResponse(BaseModel):
@@ -184,11 +184,9 @@ class TokenResponse(BaseModel):
 # ── Sessions ─────────────────────────────────────────────────────────────────
 
 class SessionCreate(BaseModel):
-    user_name: str = Field(..., examples=["Ron"])
-    user_role: str = Field(..., pattern="^(admin|analyst|viewer)$")
-    team: str = Field(..., examples=["SOC"])
-    agent: str = Field(..., examples=["IR-Agent"])
-    model: str = Field(default="gpt-4o-mini")
+    team: str = Field(..., examples=["SOC"], max_length=128)
+    agent: str = Field(..., examples=["IR-Agent"], max_length=128)
+    model: str = Field(default="gpt-4o-mini", max_length=64)
 
 
 class SessionOut(BaseModel):
@@ -225,19 +223,17 @@ class SessionMessageOut(BaseModel):
 
 class SessionChatRequest(BaseModel):
     session_uuid: str
-    user_name: str
-    user_role: str = Field(..., pattern="^(admin|analyst|viewer)$")
-    team: str
-    agent: str
-    model: str = Field(default="gpt-4o-mini")
-    messages: list[ChatMessage]
-    system_prompt: str | None = Field(default=None)
+    team: str = Field(..., max_length=128)
+    agent: str = Field(..., max_length=128)
+    model: str = Field(default="gpt-4o-mini", max_length=64)
+    messages: list[ChatMessage] = Field(..., max_length=200)
+    system_prompt: str | None = Field(default=None, max_length=8_000)
 
 
 # ── Security scan ─────────────────────────────────────────────────────────────
 
 class ScanRequest(BaseModel):
-    text: str
+    text: str = Field(..., max_length=32_000)
 
 
 class ScanFinding(BaseModel):

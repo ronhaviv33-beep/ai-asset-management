@@ -2,7 +2,7 @@ import os
 import json
 import asyncio
 import time
-from collections import defaultdict
+from collections import OrderedDict
 from typing import List
 
 from fastapi import FastAPI, Depends, HTTPException, Query, Body, Request
@@ -36,17 +36,18 @@ from app.models import calculate_cost
 Base.metadata.create_all(bind=engine)
 
 
-# ─── Login rate limiter (in-memory, per IP) ───────────────────────────────────
-# Allows 5 attempts per 60 seconds per IP. Resets after the window expires.
-_login_attempts: dict = defaultdict(list)
-_RATE_LIMIT_MAX = 5
-_RATE_LIMIT_WINDOW = 60  # seconds
+# ─── Login rate limiter (bounded LRU, per IP) ─────────────────────────────────
+# Allows 5 attempts per 60 seconds per IP. Capped at 10 000 entries to prevent
+# unbounded memory growth under distributed brute-force / port-scan conditions.
+_RATE_LIMIT_MAX    = 5
+_RATE_LIMIT_WINDOW = 60   # seconds
+_RATE_LIMIT_CACHE_SIZE = 10_000
+_login_attempts: OrderedDict = OrderedDict()
 
 def _check_login_rate_limit(ip: str):
     now = time.time()
     window_start = now - _RATE_LIMIT_WINDOW
-    attempts = [t for t in _login_attempts[ip] if t > window_start]
-    _login_attempts[ip] = attempts
+    attempts = [t for t in _login_attempts.get(ip, []) if t > window_start]
     if len(attempts) >= _RATE_LIMIT_MAX:
         retry_after = int(_RATE_LIMIT_WINDOW - (now - attempts[0]))
         raise HTTPException(
@@ -54,7 +55,11 @@ def _check_login_rate_limit(ip: str):
             detail=f"Too many login attempts. Try again in {retry_after} seconds.",
             headers={"Retry-After": str(retry_after)},
         )
-    _login_attempts[ip].append(now)
+    attempts.append(now)
+    _login_attempts[ip] = attempts
+    _login_attempts.move_to_end(ip)
+    while len(_login_attempts) > _RATE_LIMIT_CACHE_SIZE:
+        _login_attempts.popitem(last=False)
 
 
 # ─── Startup seed ─────────────────────────────────────────────────────────────
@@ -116,6 +121,9 @@ tags_metadata = [
     },
 ]
 
+_DEBUG = os.getenv("DEBUG", "false").lower() == "true"
+_FRONTEND_ORIGIN = os.getenv("FRONTEND_ORIGIN", "")
+
 app = FastAPI(
     title="AIFinOps Guard",
     description=(
@@ -132,6 +140,9 @@ app = FastAPI(
     ),
     version="0.5.0",
     openapi_tags=tags_metadata,
+    # Disable interactive docs in production to avoid exposing API surface
+    docs_url="/docs" if _DEBUG else None,
+    redoc_url="/redoc" if _DEBUG else None,
 )
 
 # Add Bearer token support to Swagger UI
@@ -157,12 +168,29 @@ def custom_openapi():
 
 app.openapi = custom_openapi
 
+_ALLOWED_ORIGINS = (
+    [_FRONTEND_ORIGIN] if _FRONTEND_ORIGIN
+    else ["http://localhost:5173", "http://127.0.0.1:5173"]
+)
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=_ALLOWED_ORIGINS,
+    allow_credentials=True,
+    allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type", "X-Guard-Team", "X-Guard-Agent"],
 )
+
+
+@app.middleware("http")
+async def security_headers(request: Request, call_next):
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Strict-Transport-Security"] = "max-age=63072000; includeSubDomains; preload"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    response.headers["Permissions-Policy"] = "geolocation=(), microphone=(), camera=()"
+    return response
 
 
 # ─── Health ───────────────────────────────────────────────────────────────────
@@ -290,9 +318,9 @@ async def ask(req: AskRequest, db: Session = Depends(get_db), _=Depends(get_curr
             system_prompt=req.system_prompt,
         )
     except RuntimeError as exc:
-        raise HTTPException(status_code=503, detail=str(exc))
+        import logging; logging.getLogger("aifinops").error("Service error", exc_info=True); raise HTTPException(status_code=503, detail="Service temporarily unavailable. Please try again.")
     except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"LLM error: {exc}")
+        import logging; logging.getLogger("aifinops").error("LLM error", exc_info=True); raise HTTPException(status_code=502, detail="Upstream LLM error. Please try again.")
 
     # 5. Persist telemetry
     record = tel.save(
@@ -377,9 +405,9 @@ async def chat(req: ChatRequest, db: Session = Depends(get_db), _=Depends(get_cu
     try:
         result = await chat_complete(messages=messages, model=req.model)
     except RuntimeError as exc:
-        raise HTTPException(status_code=503, detail=str(exc))
+        import logging; logging.getLogger("aifinops").error("Service error", exc_info=True); raise HTTPException(status_code=503, detail="Service temporarily unavailable. Please try again.")
     except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"LLM error: {exc}")
+        import logging; logging.getLogger("aifinops").error("LLM error", exc_info=True); raise HTTPException(status_code=502, detail="Upstream LLM error. Please try again.")
 
     record = tel.save(db=db, team=req.team, agent=req.agent, prompt=last_user,
                       result=result, sensitive=scan_result.is_sensitive,
@@ -437,7 +465,7 @@ def get_audit(
 # ─── Security ─────────────────────────────────────────────────────────────────
 
 @app.post("/security/scan", response_model=ScanResponse, tags=["POST — Ask / Create"])
-def security_scan(req: ScanRequest):
+def security_scan(req: ScanRequest, _=Depends(get_current_user)):
     result = scan(req.text)
     return ScanResponse(
         is_sensitive=result.is_sensitive,
@@ -477,51 +505,66 @@ def budget_status(db: Session = Depends(get_db), _=Depends(get_current_user)):
 
 # ─── Chat Sessions ────────────────────────────────────────────────────────────
 
+def _assert_session_owner(s, current_user):
+    """Non-admin users can only access their own sessions."""
+    if current_user.role != "admin" and s.user_name != current_user.name:
+        raise HTTPException(status_code=403, detail="Access denied")
+
+
 @app.post("/sessions", response_model=SessionOut, status_code=201, tags=["POST — Ask / Create"])
-def create_session(req: SessionCreate, db: Session = Depends(get_db), _=Depends(get_current_user)):
+def create_session(req: SessionCreate, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
     sess.expire_inactive(db)
     return sess.create_session(
-        db, user_name=req.user_name, user_role=req.user_role,
+        db, user_name=current_user.name, user_role=current_user.role,
         team=req.team, agent=req.agent, model=req.model,
     )
 
 
 @app.get("/sessions", response_model=list[SessionOut], tags=["GET — Read / Monitor"])
-def list_sessions(active_only: bool = Query(default=True), db: Session = Depends(get_db), _=Depends(get_current_user)):
+def list_sessions(active_only: bool = Query(default=True), db: Session = Depends(get_db), current_user=Depends(get_current_user)):
     sess.expire_inactive(db)
     return sess.list_sessions(db, active_only=active_only)
 
 
 @app.get("/sessions/{session_uuid}", response_model=SessionOut, tags=["GET — Read / Monitor"])
-def get_session_by_uuid(session_uuid: str, db: Session = Depends(get_db), _=Depends(get_current_user)):
+def get_session_by_uuid(session_uuid: str, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
     s = sess.get_session(db, session_uuid)
     if not s:
         raise HTTPException(status_code=404, detail="Session not found")
+    _assert_session_owner(s, current_user)
     return s
 
 
 @app.delete("/sessions/{session_uuid}", status_code=204, tags=["DELETE — Remove"])
-def close_session(session_uuid: str, db: Session = Depends(get_db), _=Depends(get_current_user)):
-    if not sess.close_session(db, session_uuid):
-        raise HTTPException(status_code=404, detail="Session not found")
-
-
-@app.get("/sessions/{session_uuid}/messages", response_model=list[SessionMessageOut], tags=["GET — Read / Monitor"])
-def get_session_messages(session_uuid: str, db: Session = Depends(get_db), _=Depends(get_current_user)):
+def close_session(session_uuid: str, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
     s = sess.get_session(db, session_uuid)
     if not s:
         raise HTTPException(status_code=404, detail="Session not found")
+    _assert_session_owner(s, current_user)
+    sess.close_session(db, session_uuid)
+
+
+@app.get("/sessions/{session_uuid}/messages", response_model=list[SessionMessageOut], tags=["GET — Read / Monitor"])
+def get_session_messages(session_uuid: str, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
+    s = sess.get_session(db, session_uuid)
+    if not s:
+        raise HTTPException(status_code=404, detail="Session not found")
+    _assert_session_owner(s, current_user)
     return sess.get_messages(db, session_uuid)
 
 
 @app.post("/sessions/{session_uuid}/chat", response_model=ChatResponse, tags=["POST — Ask / Create"])
-async def session_chat(session_uuid: str, req: SessionChatRequest, db: Session = Depends(get_db), _=Depends(get_current_user)):
-    # Verify session exists and is active
+async def session_chat(session_uuid: str, req: SessionChatRequest, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
+    # Verify session exists, is active, and belongs to the requesting user
     s = sess.get_session(db, session_uuid)
     if not s:
         raise HTTPException(status_code=404, detail="Session not found")
+    _assert_session_owner(s, current_user)
     if not s.is_active:
         raise HTTPException(status_code=410, detail="Session has been closed or timed out")
+    # Only admins may supply a custom system prompt
+    if req.system_prompt and current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="Only admins may set a system prompt")
 
     # Scan last user message
     last_user = next((m.content for m in reversed(req.messages) if m.role == "user"), "")
@@ -556,9 +599,9 @@ async def session_chat(session_uuid: str, req: SessionChatRequest, db: Session =
     try:
         result = await chat_complete(messages=messages, model=req.model)
     except RuntimeError as exc:
-        raise HTTPException(status_code=503, detail=str(exc))
+        import logging; logging.getLogger("aifinops").error("Service error", exc_info=True); raise HTTPException(status_code=503, detail="Service temporarily unavailable. Please try again.")
     except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"LLM error: {exc}")
+        import logging; logging.getLogger("aifinops").error("LLM error", exc_info=True); raise HTTPException(status_code=502, detail="Upstream LLM error. Please try again.")
 
     record = tel.save(db=db, team=req.team, agent=req.agent, prompt=last_user,
                       result=result, sensitive=scan_result.is_sensitive,
@@ -672,9 +715,10 @@ def update_key(req: KeyUpdateRequest, _=Depends(require_admin)):
     """Write or update a provider API key in the .env file (admin only). The value is stored in the project root .env."""
     from dotenv import set_key, find_dotenv
 
-    valid_keys = {d["key"] for d in _KEY_DEFINITIONS}
+    _PROTECTED_KEYS = {"JWT_SECRET"}
+    valid_keys = {d["key"] for d in _KEY_DEFINITIONS} - _PROTECTED_KEYS
     if req.key not in valid_keys:
-        raise HTTPException(status_code=400, detail=f"Unknown key '{req.key}'. Valid keys: {sorted(valid_keys)}")
+        raise HTTPException(status_code=400, detail=f"Unknown or protected key '{req.key}'. Valid keys: {sorted(valid_keys)}")
 
     env_path = _ENV_FILE
     # Create .env if it doesn't exist
@@ -682,8 +726,10 @@ def update_key(req: KeyUpdateRequest, _=Depends(require_admin)):
         open(env_path, "a").close()
 
     set_key(env_path, req.key, req.value)
-    # Also update the current process environment so subsequent calls reflect the new value
     os.environ[req.key] = req.value
+    # Invalidate the cached LLM clients so they pick up the new key on next call
+    from app.client import _clients
+    _clients.clear()
 
     return {"key": req.key, "updated": True}
 
@@ -788,7 +834,7 @@ async def openai_compat_chat(
         raise
     except Exception as exc:
         if _FAIL_MODE != "open":
-            raise HTTPException(status_code=503, detail=f"Gateway enforcement error: {exc}")
+            import logging; logging.getLogger("aifinops").error("Enforcement error", exc_info=True); raise HTTPException(status_code=503, detail="Gateway enforcement error. Please try again.")
 
     # ── Streaming ──────────────────────────────────────────────────────────────
     if stream:
@@ -829,9 +875,9 @@ async def openai_compat_chat(
     try:
         resp_dict = await proxy_chat_complete(body)
     except RuntimeError as exc:
-        raise HTTPException(status_code=503, detail=str(exc))
+        import logging; logging.getLogger("aifinops").error("Service error", exc_info=True); raise HTTPException(status_code=503, detail="Service temporarily unavailable. Please try again.")
     except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"LLM error: {exc}")
+        import logging; logging.getLogger("aifinops").error("LLM error", exc_info=True); raise HTTPException(status_code=502, detail="Upstream LLM error. Please try again.")
 
     latency_ms = resp_dict.pop("_latency_ms", 0.0)
     usage      = resp_dict.get("usage", {})
@@ -936,7 +982,7 @@ async def anthropic_compat_messages(
         raise
     except Exception as exc:
         if _FAIL_MODE != "open":
-            raise HTTPException(status_code=503, detail=f"Gateway enforcement error: {exc}")
+            import logging; logging.getLogger("aifinops").error("Enforcement error", exc_info=True); raise HTTPException(status_code=503, detail="Gateway enforcement error. Please try again.")
 
     msg_id  = f"msg_guard_{_uuid_mod.uuid4().hex[:12]}"
     created = int(_time_mod.time())
@@ -1006,9 +1052,9 @@ async def anthropic_compat_messages(
     try:
         resp_dict = await proxy_chat_complete(oai_body)
     except RuntimeError as exc:
-        raise HTTPException(status_code=503, detail=str(exc))
+        import logging; logging.getLogger("aifinops").error("Service error", exc_info=True); raise HTTPException(status_code=503, detail="Service temporarily unavailable. Please try again.")
     except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"LLM error: {exc}")
+        import logging; logging.getLogger("aifinops").error("LLM error", exc_info=True); raise HTTPException(status_code=502, detail="Upstream LLM error. Please try again.")
 
     latency_ms = resp_dict.pop("_latency_ms", 0.0)
     usage      = resp_dict.get("usage", {})

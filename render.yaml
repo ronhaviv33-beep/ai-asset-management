@@ -23,6 +23,9 @@ services:
         sync: false
       - key: LOCAL_LLM_URL
         sync: false
+      # Frontend origin for CORS — set to your actual frontend URL after first deploy
+      - key: FRONTEND_ORIGIN
+        sync: false
 
   # ── Frontend (Vite / React static site) ───────────────────────────────────
   - type: web

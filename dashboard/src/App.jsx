@@ -2067,7 +2067,7 @@ function ChatPage() {
     if (sessionUuid) return sessionUuid;
     const r = await authFetch(`${BASE}/sessions`, {
       method: "POST",
-      body: JSON.stringify({ user_name: user?.name || "Unknown", user_role: user?.role || "analyst", team, agent, model }),
+      body: JSON.stringify({ team, agent, model }),
     });
     if (!r?.ok) throw new Error("Failed to create session");
     const data = await r.json();
@@ -2096,8 +2096,6 @@ function ChatPage() {
           method: "POST",
           body: JSON.stringify({
             session_uuid: uuid,
-            user_name: user?.name || "Unknown",
-            user_role: user?.role || "analyst",
             team, agent, model,
             system_prompt: systemPrompt || null,
             messages: newHistory.map(m => ({ role: m.role, content: m.content })),
@@ -2174,8 +2172,6 @@ function ChatPage() {
       const nr = await authFetch(`${BASE}/sessions`, {
         method: "POST",
         body: JSON.stringify({
-          user_name: user?.name || "Unknown",
-          user_role: user?.role || "analyst",
           team: s.team, agent: s.agent, model: s.model,
         }),
       });

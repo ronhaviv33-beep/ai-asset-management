@@ -10,7 +10,12 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session
 from app.database import get_db
 
-SECRET_KEY = os.getenv("JWT_SECRET", "change-me-in-production-use-a-long-random-string-32chars")
+SECRET_KEY = os.getenv("JWT_SECRET", "")
+if not SECRET_KEY:
+    raise RuntimeError(
+        "JWT_SECRET environment variable is not set. "
+        "Set it to a long random string before starting the server."
+    )
 TOKEN_EXPIRE_SECS = 8 * 3600
 
 pwd_context   = CryptContext(schemes=["pbkdf2_sha256"], deprecated="auto")
