@@ -162,3 +162,30 @@ export async function deleteApiKey(id) {
   const r = await authFetch(`${BASE}/api-keys/${id}`, { method: 'DELETE' })
   if (!r || !r.ok) throw new Error('Failed to delete API key')
 }
+
+// ── Guard modes ───────────────────────────────────────────────────────────────
+
+export async function fetchGuardModes() {
+  const r = await authFetch(`${BASE}/guard-modes`)
+  if (!r || !r.ok) throw new Error('Failed to fetch guard modes')
+  return r.json()
+}
+
+export async function setGuardMode(team, mode) {
+  const r = await authFetch(`${BASE}/guard-modes/${encodeURIComponent(team)}`, {
+    method: 'PUT',
+    body: JSON.stringify({ mode }),
+  })
+  if (!r || !r.ok) {
+    const err = await r.json().catch(() => ({}))
+    throw new Error(err.detail || 'Failed to set guard mode')
+  }
+  return r.json()
+}
+
+export async function fetchHealth() {
+  // Health is public — no auth needed
+  const r = await fetch(`${BASE}/health`)
+  if (!r.ok) throw new Error('Health check failed')
+  return r.json()
+}

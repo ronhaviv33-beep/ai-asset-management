@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useEffect, useCallback, useRef, createContext, useContext } from "react";
-import { login as apiLogin, fetchMe, fetchUsers, createUser, updateUser, deleteUser, getToken, setToken, authFetch, fetchKeyStatuses, updateKey, BASE, fetchApiKeys, createApiKey, revokeApiKey, deleteApiKey } from "./api.js";
+import { login as apiLogin, fetchMe, fetchUsers, createUser, updateUser, deleteUser, getToken, setToken, authFetch, fetchKeyStatuses, updateKey, BASE, fetchApiKeys, createApiKey, revokeApiKey, deleteApiKey, fetchGuardModes, setGuardMode, fetchHealth } from "./api.js";
 import {
   LineChart, Line, AreaChart, Area, BarChart, Bar,
   XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid,
@@ -3134,6 +3134,128 @@ print(resp.choices[0].message.content)`} />
 }
 
 // ─── Settings page (admin only) ───────────────────────────────────────────────
+const GUARD_MODE_META = {
+  observe: { color: "#3b82f6", label: "Observe", desc: "Log & shadow-block only — never blocks" },
+  alert:   { color: "#eab308", label: "Alert",   desc: "Logs + fires alerts — never blocks" },
+  enforce: { color: "#ef4444", label: "Enforce", desc: "Actively blocks violations" },
+};
+
+function GuardModesSection() {
+  const [rows,    setRows]    = useState([]);
+  const [health,  setHealth]  = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [err,     setErr]     = useState(null);
+  const [busy,    setBusy]    = useState(null);  // team currently saving
+
+  const load = useCallback(async () => {
+    try {
+      const [modes, h] = await Promise.all([fetchGuardModes(), fetchHealth().catch(() => null)]);
+      setRows(modes);
+      setHealth(h);
+    } catch (e) { setErr(e.message); }
+    finally { setLoading(false); }
+  }, []);
+
+  useEffect(() => { load(); }, [load]);
+
+  const handleChange = async (team, mode) => {
+    setBusy(team); setErr(null);
+    try { await setGuardMode(team, mode); await load(); }
+    catch (e) { setErr(e.message); }
+    finally { setBusy(null); }
+  };
+
+  const platformMode = health?.platform_mode || "observe";
+  const cb = health?.circuit_breaker;
+
+  return (
+    <Card title="Guard Modes" subtitle="Visibility First → Governance Later. Graduate each team independently from observe to enforce.">
+      {err && <div style={{ color:T.crit, fontFamily:FONT_MONO, fontSize:12, marginBottom:12 }}>{err}</div>}
+
+      {/* Platform default + health */}
+      <div style={{ display:"flex", gap:12, flexWrap:"wrap", marginBottom:16 }}>
+        <div style={{ background:T.panelHi, border:`1px solid ${T.border}`, borderRadius:6, padding:"10px 14px", flex:1, minWidth:200 }}>
+          <div style={{ fontSize:9, fontFamily:FONT_MONO, letterSpacing:"0.12em", textTransform:"uppercase", color:T.textMute }}>Platform default</div>
+          <div style={{ marginTop:6, display:"flex", alignItems:"center", gap:8 }}>
+            <span style={{ width:8, height:8, borderRadius:"50%", background:GUARD_MODE_META[platformMode]?.color }} />
+            <span style={{ fontFamily:FONT_MONO, fontSize:13, color:T.text, fontWeight:600 }}>{GUARD_MODE_META[platformMode]?.label || platformMode}</span>
+            <span style={{ fontFamily:FONT_MONO, fontSize:10, color:T.textMute }}>(GUARD_MODE env var)</span>
+          </div>
+        </div>
+        {cb && (
+          <div style={{ background:T.panelHi, border:`1px solid ${T.border}`, borderRadius:6, padding:"10px 14px", flex:1, minWidth:200 }}>
+            <div style={{ fontSize:9, fontFamily:FONT_MONO, letterSpacing:"0.12em", textTransform:"uppercase", color:T.textMute }}>Circuit breaker</div>
+            <div style={{ marginTop:6, display:"flex", alignItems:"center", gap:8 }}>
+              <span style={{ width:8, height:8, borderRadius:"50%", background: cb.state === "open" ? T.crit : T.accent }} />
+              <span style={{ fontFamily:FONT_MONO, fontSize:13, color:T.text, fontWeight:600 }}>{cb.state === "open" ? "OPEN (bypassing)" : "Closed (healthy)"}</span>
+              {health.uptime_seconds != null && (
+                <span style={{ fontFamily:FONT_MONO, fontSize:10, color:T.textMute }}>· up {Math.floor(health.uptime_seconds/3600)}h</span>
+              )}
+            </div>
+          </div>
+        )}
+      </div>
+
+      {loading ? (
+        <div style={{ color:T.textDim, fontFamily:FONT_MONO, fontSize:12, padding:12 }}>Loading…</div>
+      ) : (
+        <table style={{ width:"100%", borderCollapse:"collapse" }}>
+          <thead>
+            <tr style={{ borderBottom:`1px solid ${T.border}` }}>
+              {["Team","Effective Mode","Would block (30d)","Set mode"].map(h => (
+                <th key={h} style={{ textAlign:"left", padding:"10px 8px", fontFamily:FONT_MONO, fontSize:10, letterSpacing:"0.1em", textTransform:"uppercase", color:T.textDim, fontWeight:500 }}>{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {rows.length === 0 && (
+              <tr><td colSpan={4} style={{ padding:20, textAlign:"center", color:T.textMute, fontFamily:FONT_MONO, fontSize:12 }}>No teams seen yet — they appear here once traffic flows.</td></tr>
+            )}
+            {rows.map(r => {
+              const meta = GUARD_MODE_META[r.mode] || {};
+              return (
+                <tr key={r.team} style={{ borderBottom:`1px solid ${T.border}` }}>
+                  <td style={{ padding:"12px 8px", fontSize:12, color:T.text, fontWeight:500 }}>{r.team}</td>
+                  <td style={{ padding:"12px 8px" }}>
+                    <span style={{ display:"inline-flex", alignItems:"center", gap:6 }}>
+                      <span style={{ width:8, height:8, borderRadius:"50%", background:meta.color }} />
+                      <span style={{ fontFamily:FONT_MONO, fontSize:12, color:T.text }}>{meta.label || r.mode}</span>
+                      {!r.is_override && <span style={{ fontFamily:FONT_MONO, fontSize:9, color:T.textMute }}>(default)</span>}
+                    </span>
+                  </td>
+                  <td style={{ padding:"12px 8px" }}>
+                    <span style={{ fontFamily:FONT_MONO, fontSize:12, color: r.would_block_30d > 0 ? T.warn : T.textMute, fontWeight: r.would_block_30d > 0 ? 600 : 400 }}>
+                      {r.would_block_30d}
+                    </span>
+                  </td>
+                  <td style={{ padding:"10px 8px" }}>
+                    <select
+                      value={r.is_override ? r.mode : "default"}
+                      disabled={busy === r.team}
+                      onChange={e => handleChange(r.team, e.target.value)}
+                      style={{ background:T.bg, color:T.text, border:`1px solid ${T.border}`, padding:"5px 10px", borderRadius:4, fontSize:12, fontFamily:FONT_MONO, cursor:"pointer" }}>
+                      <option value="default">Default ({platformMode})</option>
+                      <option value="observe">Observe</option>
+                      <option value="alert">Alert</option>
+                      <option value="enforce">Enforce</option>
+                    </select>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      )}
+
+      <div style={{ marginTop:14, fontSize:11, fontFamily:FONT_MONO, color:T.textMute, lineHeight:1.7 }}>
+        <strong style={{ color:T.textDim }}>Would block (30d)</strong> shows how many requests <em>would</em> have been blocked
+        in enforce mode — watch this before graduating a team. Every mode change is written to the audit log.
+      </div>
+    </Card>
+  );
+}
+
+
 function SettingsPage() {
   const [keys,      setKeys]      = useState([]);
   const [loading,   setLoading]   = useState(true);
@@ -3207,6 +3329,9 @@ function SettingsPage() {
           </div>
         ))}
       </div>
+
+      {/* Guard modes (Visibility First → Governance Later) */}
+      <GuardModesSection />
 
       {/* Keys table */}
       <Card title="API Keys & Configuration" subtitle="Keys are stored in the server .env file. Values are never exposed — only status is shown.">
@@ -3358,6 +3483,13 @@ export default function App() {
 
   const { apiRecords, lastRefresh, isLive, refresh } = useLiveData(30_000);
 
+  // Platform guard mode badge (best-effort — silent if unauthenticated)
+  const [platformMode, setPlatformMode] = useState(null);
+  useEffect(() => {
+    if (!user) return;
+    fetchHealth().then(h => setPlatformMode(h?.platform_mode)).catch(() => {});
+  }, [user]);
+
   // Build event list and metadata from live data or demo fallback
   const { allEvents, allTeams, allAgents } = useMemo(() => {
     if (apiRecords === null) return { allEvents: [], allTeams: TEAMS, allAgents: AGENTS }; // still loading
@@ -3488,6 +3620,15 @@ export default function App() {
             <h1 style={{ fontSize:22, fontWeight:500, margin:"4px 0 0", letterSpacing:"-0.015em" }}>{PAGES.find((p)=>p.id===page)?.label}</h1>
           </div>
           <div style={{ display:"flex", gap:10, alignItems:"center", fontFamily:FONT_MONO, fontSize:11, color:T.textDim }}>
+            {platformMode && (
+              <>
+                <span title={GUARD_MODE_META[platformMode]?.desc}
+                  style={{ display:"inline-flex", alignItems:"center", gap:5, color:GUARD_MODE_META[platformMode]?.color }}>
+                  ● {(GUARD_MODE_META[platformMode]?.label || platformMode).toLowerCase()}
+                </span>
+                <span style={{ color:T.textMute }}>|</span>
+              </>
+            )}
             <span>{filters.team==="all"?"all teams":allTeams.find((t)=>t.id===filters.team)?.name}</span>
             <span style={{ color:T.textMute }}>|</span>
             <span>last {filters.range}d</span>
