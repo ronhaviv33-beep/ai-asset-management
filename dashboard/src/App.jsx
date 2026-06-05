@@ -3314,23 +3314,30 @@ function GuardModesSection() {
 
 // ─── Provider Credentials section (BYOK) ─────────────────────────────────────
 const PROVIDER_META = {
-  openai:    { label: "OpenAI",    prefix: "sk-",      placeholder: "sk-…" },
-  anthropic: { label: "Anthropic", prefix: "sk-ant-",  placeholder: "sk-ant-…" },
-  google:    { label: "Google",    prefix: "AIza",     placeholder: "AIza…" },
-  local:     { label: "Local LLM", prefix: "",         placeholder: "http://localhost:11434", isUrl: true },
+  openai:    { label: "OpenAI",    placeholder: "sk-…" },
+  anthropic: { label: "Anthropic", placeholder: "sk-ant-…" },
+  google:    { label: "Google",    placeholder: "AIza…" },
+  // Local LLM takes a base_url, not a secret key — treated separately because
+  // it's an SSRF surface (server makes outbound requests to this URL), not a
+  // credential surface. W-2: before any non-trusted admin can set base_url,
+  // add server-side validation: allowlist http/https, block private/link-local
+  // ranges and cloud metadata IPs (169.254.169.254, metadata.google.internal).
+  local:     { label: "Local LLM", placeholder: "http://localhost:11434", isUrl: true },
 };
 const ALL_PROVIDERS = Object.keys(PROVIDER_META);
 
 function ProviderCredentialsSection() {
-  const [creds,    setCreds]    = useState([]);
-  const [loading,  setLoading]  = useState(true);
-  const [err,      setErr]      = useState(null);
-  const [editing,  setEditing]  = useState(null);   // provider name currently open
-  const [keyVal,   setKeyVal]   = useState("");
-  const [urlVal,   setUrlVal]   = useState("");
-  const [saving,   setSaving]   = useState(false);
-  const [deleting, setDeleting] = useState(null);
-  const [flash,    setFlash]    = useState(null);   // provider that just saved
+  const [creds,       setCreds]       = useState([]);
+  const [loading,     setLoading]     = useState(true);
+  const [err,         setErr]         = useState(null);
+  const [editing,     setEditing]     = useState(null);   // provider currently open
+  const [keyVal,      setKeyVal]      = useState("");
+  const [urlVal,      setUrlVal]      = useState("");
+  const [saving,      setSaving]      = useState(false);
+  const [confirmDel,  setConfirmDel]  = useState(null);   // provider pending remove confirm
+  const [deleting,    setDeleting]    = useState(null);
+  const [flash,       setFlash]       = useState(null);
+  const [saveErr,     setSaveErr]     = useState(null);   // scoped to the open inline form
 
   const load = useCallback(async () => {
     try {
@@ -3342,36 +3349,32 @@ function ProviderCredentialsSection() {
 
   useEffect(() => { load(); }, [load]);
 
-  const configuredProviders = new Set(creds.map(c => c.provider));
-
   const startEdit = (provider) => {
     setEditing(provider);
     setKeyVal("");
     setUrlVal(creds.find(c => c.provider === provider)?.base_url || "");
-    setErr(null);
+    setSaveErr(null);
     setFlash(null);
+    setConfirmDel(null);
   };
-  const cancelEdit = () => { setEditing(null); setKeyVal(""); setUrlVal(""); };
+  const cancelEdit = () => { setEditing(null); setKeyVal(""); setUrlVal(""); setSaveErr(null); };
 
   const handleSave = async () => {
     const meta = PROVIDER_META[editing];
     if (!meta) return;
-    if (meta.isUrl) {
-      if (!urlVal.trim()) return;
-    } else {
-      if (!keyVal.trim()) return;
-    }
-    setSaving(true); setErr(null);
+    if (meta.isUrl ? !urlVal.trim() : !keyVal.trim()) return;
+    setSaving(true); setSaveErr(null);
     try {
       await upsertProviderCredential(editing, meta.isUrl ? "local" : keyVal.trim(), meta.isUrl ? urlVal.trim() : undefined);
       setFlash(editing);
       cancelEdit();
       await load();
-    } catch (e) { setErr(e.message); }
+    } catch (e) { setSaveErr(e.message); }
     finally { setSaving(false); }
   };
 
-  const handleDelete = async (provider) => {
+  const handleDeleteConfirmed = async (provider) => {
+    setConfirmDel(null);
     setDeleting(provider); setErr(null);
     try {
       await deleteProviderCredential(provider);
@@ -3396,16 +3399,18 @@ function ProviderCredentialsSection() {
           </thead>
           <tbody>
             {ALL_PROVIDERS.map(provider => {
-              const meta  = PROVIDER_META[provider];
-              const cred  = creds.find(c => c.provider === provider);
-              const isSet = !!cred;
-              const isOpen = editing === provider;
+              const meta    = PROVIDER_META[provider];
+              const cred    = creds.find(c => c.provider === provider);
+              const isSet   = !!cred;
+              const isOpen  = editing === provider;
+              const isPendingDel = confirmDel === provider;
 
               return (
                 <React.Fragment key={provider}>
-                  <tr style={{ borderBottom: isOpen ? "none" : `1px solid ${T.border}` }}>
+                  <tr style={{ borderBottom: (isOpen || isPendingDel) ? "none" : `1px solid ${T.border}` }}>
                     <td style={{ padding:"14px 8px", fontSize:13, color:T.text, fontWeight:500 }}>
                       {meta.label}
+                      {meta.isUrl && <span style={{ fontFamily:FONT_MONO, fontSize:9, color:T.textMute, marginLeft:6 }}>base_url</span>}
                     </td>
                     <td style={{ padding:"14px 8px" }}>
                       {isSet
@@ -3421,39 +3426,52 @@ function ProviderCredentialsSection() {
                         : <span style={{ color:T.textMute }}>—</span>}
                     </td>
                     <td style={{ padding:"14px 8px", display:"flex", gap:8, alignItems:"center" }}>
-                      {!isOpen && (
+                      {!isOpen && !isPendingDel && (
                         <button onClick={() => startEdit(provider)}
                           style={{ background:`${T.info}15`, border:`1px solid ${T.info}44`, color:T.info, padding:"5px 12px", borderRadius:3, fontSize:11, fontFamily:FONT_MONO, cursor:"pointer" }}>
-                          {isSet ? "Rotate" : "Set key"}
+                          {isSet ? "Update" : "Set key"}
                         </button>
                       )}
-                      {isSet && !isOpen && (
-                        <button onClick={() => handleDelete(provider)} disabled={deleting === provider}
+                      {isSet && !isOpen && !isPendingDel && (
+                        <button onClick={() => { setConfirmDel(provider); setEditing(null); }}
+                          disabled={deleting === provider}
                           style={{ background:`${T.crit}15`, border:`1px solid ${T.crit}44`, color:T.crit, padding:"5px 10px", borderRadius:3, fontSize:11, fontFamily:FONT_MONO, cursor:"pointer", opacity: deleting===provider ? 0.5 : 1 }}>
                           {deleting === provider ? "…" : "Remove"}
                         </button>
                       )}
                     </td>
                   </tr>
+
+                  {/* Inline key/url editor */}
                   {isOpen && (
                     <tr style={{ borderBottom:`1px solid ${T.border}` }}>
                       <td colSpan={4} style={{ padding:"0 8px 14px" }}>
                         <div style={{ display:"flex", flexDirection:"column", gap:8, background:`${T.info}08`, border:`1px solid ${T.info}22`, borderRadius:6, padding:"12px 14px" }}>
                           {meta.isUrl ? (
-                            <input autoFocus type="text" placeholder="http://localhost:11434"
-                              value={urlVal} onChange={e => setUrlVal(e.target.value)}
-                              onKeyDown={e => { if (e.key==="Enter") handleSave(); if (e.key==="Escape") cancelEdit(); }}
-                              style={{ flex:1, background:T.bg, color:T.text, border:`1px solid ${T.border}`, padding:"8px 12px", borderRadius:4, fontSize:13, fontFamily:FONT_MONO }} />
+                            <>
+                              <input autoFocus type="text" placeholder="http://localhost:11434"
+                                value={urlVal} onChange={e => setUrlVal(e.target.value)}
+                                onKeyDown={e => { if (e.key==="Enter") handleSave(); if (e.key==="Escape") cancelEdit(); }}
+                                style={{ flex:1, background:T.bg, color:T.text, border:`1px solid ${T.border}`, padding:"8px 12px", borderRadius:4, fontSize:13, fontFamily:FONT_MONO }} />
+                              <div style={{ fontSize:10, fontFamily:FONT_MONO, color:T.warn, lineHeight:1.5 }}>
+                                The server makes outbound requests to this URL. Only use trusted, controlled endpoints.
+                              </div>
+                            </>
                           ) : (
                             <input autoFocus type="password" placeholder={`Paste ${meta.label} key (${meta.placeholder})`}
                               value={keyVal} onChange={e => setKeyVal(e.target.value)}
                               onKeyDown={e => { if (e.key==="Enter") handleSave(); if (e.key==="Escape") cancelEdit(); }}
                               style={{ flex:1, background:T.bg, color:T.text, border:`1px solid ${T.border}`, padding:"8px 12px", borderRadius:4, fontSize:13, fontFamily:FONT_MONO }} />
                           )}
+                          {saveErr && (
+                            <div style={{ fontFamily:FONT_MONO, fontSize:11, color:T.crit, background:`${T.crit}10`, border:`1px solid ${T.crit}33`, borderRadius:4, padding:"8px 10px" }}>
+                              {saveErr}
+                            </div>
+                          )}
                           <div style={{ display:"flex", gap:8 }}>
                             <button onClick={handleSave} disabled={saving || (meta.isUrl ? !urlVal.trim() : !keyVal.trim())}
                               style={{ background:T.accent, color:T.bg, border:"none", padding:"8px 18px", borderRadius:4, fontSize:12, fontFamily:FONT_MONO, fontWeight:600, cursor:"pointer", opacity:(saving||(meta.isUrl?!urlVal.trim():!keyVal.trim()))?0.5:1 }}>
-                              {saving ? "Validating & saving…" : "Save"}
+                              {saving ? "Validating & saving…" : isSet ? "Rotate" : "Save"}
                             </button>
                             <button onClick={cancelEdit}
                               style={{ background:"transparent", border:`1px solid ${T.border}`, color:T.textDim, padding:"8px 12px", borderRadius:4, fontSize:12, fontFamily:FONT_MONO, cursor:"pointer" }}>
@@ -3461,7 +3479,32 @@ function ProviderCredentialsSection() {
                             </button>
                           </div>
                           <div style={{ fontSize:10, fontFamily:FONT_MONO, color:T.textMute }}>
-                            Key is validated against the provider before being stored as Fernet ciphertext. Only the last 4 characters are retained for display. Press Escape to cancel.
+                            {meta.isUrl
+                              ? "URL is saved immediately. The server will use it for the next request."
+                              : `Key is validated against ${meta.label} before being stored as ciphertext. If validation fails, nothing is saved. Only the last 4 characters are retained for display.`}
+                          </div>
+                        </div>
+                      </td>
+                    </tr>
+                  )}
+
+                  {/* Remove confirmation */}
+                  {isPendingDel && (
+                    <tr style={{ borderBottom:`1px solid ${T.border}` }}>
+                      <td colSpan={4} style={{ padding:"0 8px 14px" }}>
+                        <div style={{ background:`${T.crit}08`, border:`1px solid ${T.crit}33`, borderRadius:6, padding:"12px 14px", display:"flex", flexDirection:"column", gap:10 }}>
+                          <div style={{ fontFamily:FONT_MONO, fontSize:12, color:T.warn, lineHeight:1.6 }}>
+                            Removing the {meta.label} key will <strong style={{ color:T.crit }}>block all {meta.label} requests</strong> from your organization immediately — any agent using a {meta.label} model will receive a 402 error until a new key is set.
+                          </div>
+                          <div style={{ display:"flex", gap:8 }}>
+                            <button onClick={() => handleDeleteConfirmed(provider)}
+                              style={{ background:T.crit, color:"#fff", border:"none", padding:"7px 16px", borderRadius:4, fontSize:12, fontFamily:FONT_MONO, fontWeight:600, cursor:"pointer" }}>
+                              Remove anyway
+                            </button>
+                            <button onClick={() => setConfirmDel(null)}
+                              style={{ background:"transparent", border:`1px solid ${T.border}`, color:T.textDim, padding:"7px 12px", borderRadius:4, fontSize:12, fontFamily:FONT_MONO, cursor:"pointer" }}>
+                              Cancel
+                            </button>
                           </div>
                         </div>
                       </td>

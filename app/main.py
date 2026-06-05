@@ -546,7 +546,20 @@ def upsert_provider_credential(
     try:
         _asyncio.run(_validate())
     except Exception as exc:
-        raise HTTPException(status_code=422, detail=f"Key validation failed: {exc}")
+        # Scrub the raw upstream error — it can contain rate-limit details,
+        # org identifiers, or other provider internals the caller shouldn't see.
+        msg = str(exc).lower()
+        if "incorrect api key" in msg or "invalid api key" in msg or "unauthorized" in msg or "401" in msg:
+            reason = "key was rejected as invalid or inactive"
+        elif "rate limit" in msg or "429" in msg:
+            reason = "rate limit hit during validation — wait a moment and try again"
+        elif "quota" in msg or "402" in msg or "insufficient" in msg:
+            reason = "account quota exceeded or billing issue on this key"
+        elif "timeout" in msg or "connect" in msg:
+            reason = "could not reach the provider — check network or base_url"
+        else:
+            reason = "provider returned an error — check the key is correct and active"
+        raise HTTPException(status_code=422, detail=f"Key validation failed: {reason}")
 
     enc   = encrypt_credential(raw_key)
     last4 = raw_key[-4:] if len(raw_key) >= 4 else raw_key
