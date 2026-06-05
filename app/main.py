@@ -537,7 +537,7 @@ def upsert_provider_credential(
         )
 
     try:
-        _asyncio.get_event_loop().run_until_complete(_validate())
+        _asyncio.run(_validate())
     except Exception as exc:
         raise HTTPException(status_code=422, detail=f"Key validation failed: {exc}")
 
