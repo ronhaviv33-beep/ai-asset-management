@@ -3092,7 +3092,7 @@ print(resp.choices[0].message.content)`} />
           ))}
         </div>
         <div style={{ marginTop:12, fontSize:11, color:T.textMute, fontFamily:FONT_MONO }}>
-          Requires the corresponding API key to be configured in Settings → API Keys.
+          Requires the corresponding API key to be configured in <strong style={{ color:T.accent }}>Settings → Provider Keys</strong>.
         </div>
       </Card>
 
@@ -3125,11 +3125,13 @@ print(resp.choices[0].message.content)`} />
       <Card title="What happens on every agent call" subtitle="The enforcement pipeline">
         <div style={{ display:"flex", flexDirection:"column", gap:0 }}>
           {[
-            { n:"1", label:"PII scan",          color:T.warn,   desc:"Prompt is scanned for API keys, passwords, credit card numbers, and PII. Findings are logged to the audit trail." },
-            { n:"2", label:"Model policy check", color:T.info,   desc:"Request is checked against your policy rules. If the model is blocked for the team, the call is rejected with HTTP 403 and logged." },
-            { n:"3", label:"Budget check",       color:T.crit,   desc:"Current team/agent spend is compared to budget rules. If over limit with action=block, the call is rejected with HTTP 429." },
-            { n:"4", label:"LLM call",           color:T.accent, desc:"Request is forwarded to the real provider (OpenAI, Anthropic, Google) and the response returned to the agent." },
-            { n:"5", label:"Telemetry saved",    color:T.purple, desc:"Tokens, cost, latency, model, team, agent, and security findings are all stored. Visible in Overview, Cost, and Audit Log pages." },
+            { n:"1", label:"Auth + org resolved",  color:T.info,   desc:"JWT or API key is validated. The caller's organization is resolved from the database — never from the token. Null org_id is a hard 401." },
+            { n:"2", label:"PII scan",             color:T.warn,   desc:"Prompt is scanned for API keys, passwords, credit card numbers, and PII. Findings are logged to the audit trail." },
+            { n:"3", label:"Model policy check",   color:T.info,   desc:"Request is checked against your team's policy rules. Blocked model → HTTP 403." },
+            { n:"4", label:"Budget check",         color:T.crit,   desc:"Current team/agent spend is compared to budget rules. Over limit with action=block → HTTP 429." },
+            { n:"5", label:"Credential resolution",color:T.accent, desc:"Your org's encrypted provider key is decrypted and used to build the upstream client. No credential configured → HTTP 402. No fallback to shared keys." },
+            { n:"6", label:"LLM call",             color:T.accent, desc:"Request is forwarded to the provider using your org's own key — billed to your account, not a shared pool." },
+            { n:"7", label:"Telemetry saved",      color:T.purple, desc:"Tokens, cost, latency, model, team, agent, and security findings are stored — scoped to your org. No other tenant can read your records." },
           ].map((s, i, arr) => (
             <div key={s.n} style={{ display:"flex", gap:16, paddingBottom: i<arr.length-1 ? 0 : 0 }}>
               <div style={{ display:"flex", flexDirection:"column", alignItems:"center", flexShrink:0 }}>
@@ -3145,21 +3147,27 @@ print(resp.choices[0].message.content)`} />
         </div>
       </Card>
 
-      {/* Fail mode */}
-      <Card title="Gateway fail mode" subtitle="What happens if the gateway itself has an error">
-        <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:14, marginBottom:14 }}>
+      {/* Guard modes */}
+      <Card title="Guard modes — Visibility First → Governance Later" subtitle="Graduate each team from observe to enforce independently, without disrupting others">
+        <div style={{ display:"grid", gridTemplateColumns:"repeat(3,1fr)", gap:14, marginBottom:14 }}>
           {[
-            { mode:"closed", color:T.crit,   label:"Fail-closed (default)", desc:"If enforcement encounters an unexpected error, the request is blocked and an HTTP 503 is returned. No unscanned call reaches the LLM. Correct default for security-sensitive teams." },
-            { mode:"open",   color:T.warn,   label:"Fail-open", desc:"If enforcement encounters an unexpected error, the request passes through to the LLM unchecked. Use for teams where availability is more critical than enforcement. Set GATEWAY_FAIL_MODE=open in .env." },
+            { mode:"observe",  color:T.info,   label:"Observe",  desc:"Evaluate + log + count shadow-blocks. Never blocks traffic. Start here — get data, review what would have been blocked, before committing to enforce." },
+            { mode:"alert",    color:T.warn,   label:"Alert",    desc:"Evaluate + log + fire security alerts. Still never blocks. Use when you want to monitor violations in real time without risking agent downtime." },
+            { mode:"enforce",  color:T.crit,   label:"Enforce",  desc:"Evaluate + act. Policy blocks return 403, budget blocks return 429. Graduate a team here only after reviewing its shadow-block history in the Alerts and Budgets pages." },
           ].map(m => (
             <div key={m.mode} style={{ background:T.panelHi, border:`1px solid ${m.color}44`, borderRadius:6, padding:"14px 16px" }}>
-              <div style={{ fontFamily:FONT_MONO, fontSize:11, color:m.color, marginBottom:6 }}>{m.label}</div>
+              <div style={{ display:"flex", alignItems:"center", gap:7, marginBottom:8 }}>
+                <span style={{ width:8, height:8, borderRadius:"50%", background:m.color, flexShrink:0 }} />
+                <span style={{ fontFamily:FONT_MONO, fontSize:12, color:m.color, fontWeight:600 }}>{m.label}</span>
+              </div>
               <div style={{ fontSize:12, color:T.textDim, lineHeight:1.6 }}>{m.desc}</div>
             </div>
           ))}
         </div>
-        <div style={{ fontSize:11, color:T.textMute, fontFamily:FONT_MONO }}>
-          Note: policy blocks (403) and budget blocks (429) always propagate regardless of fail mode — only unexpected internal errors are affected by this setting.
+        <div style={{ fontSize:11, color:T.textMute, fontFamily:FONT_MONO, lineHeight:1.7 }}>
+          The platform default is set by the <code style={{ color:T.info }}>GUARD_MODE</code> env var.
+          Per-team overrides live in <strong style={{ color:T.accent }}>Settings → Guard Modes</strong> — change one team without touching others.
+          The <em>Would block (30d)</em> column shows how many requests would have been blocked in enforce mode — watch it before graduating.
         </div>
       </Card>
 
@@ -3167,12 +3175,13 @@ print(resp.choices[0].message.content)`} />
       <Card title="Security posture" subtitle="What we do and don't do — for enterprise conversations">
         <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:14, marginBottom:12 }}>
           {[
-            { label:"Data in transit", val:"TLS 1.2+ (via your reverse proxy / load balancer)", color:T.accent },
-            { label:"Auth", val:"HS256 JWT, 30-minute expiry, per-user roles (admin / analyst / viewer)", color:T.accent },
-            { label:"Secrets storage", val:"API keys stored in .env — never returned via API, only status exposed", color:T.accent },
-            { label:"Audit log", val:"Every request logged with team, agent, model, tokens, cost, PII findings", color:T.accent },
-            { label:"Data residency", val:"All data stays in your deployment — no telemetry leaves your environment", color:T.accent },
-            { label:"SOC 2", val:"Pre-certification. Full audit log, RBAC, and secrets isolation in place. Formal certification roadmap available on request.", color:T.warn },
+            { label:"Data in transit",       val:"TLS 1.2+ (via your reverse proxy / load balancer)", color:T.accent },
+            { label:"Auth",                  val:"HS256 JWT, 8h expiry, per-user roles (admin / analyst / viewer). API keys for production agents (gk-prefix, stored as SHA-256 hash).", color:T.accent },
+            { label:"Provider key isolation",val:"Each org's API keys stored as Fernet ciphertext (AES-128-CBC + HMAC-SHA256). Only the last 4 chars retained for display. Never decrypted to show; never returned by any API endpoint.", color:T.accent },
+            { label:"Tenant isolation",      val:"Every telemetry record carries organization_id NOT NULL. All four read paths (telemetry, summary, audit, security/alerts) filter by the caller's org. Cross-org reads are architecturally impossible — accepted via live two-directional test.", color:T.accent },
+            { label:"Audit log",             val:"Every LLM call logged with team, agent, model, tokens, cost, PII findings, org_id, and block reason. Immutable once written.", color:T.accent },
+            { label:"Data residency",        val:"All data stays in your deployment — no telemetry leaves your environment.", color:T.accent },
+            { label:"SOC 2",                 val:"Pre-certification. Full audit log, RBAC, secrets isolation, and tenant isolation in place. Formal certification roadmap available on request.", color:T.warn },
           ].map(i => (
             <div key={i.label} style={{ display:"flex", gap:10, alignItems:"flex-start" }}>
               <span style={{ color:i.color, fontFamily:FONT_MONO, fontSize:13, flexShrink:0 }}>{i.color === T.accent ? "✓" : "○"}</span>
