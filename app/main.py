@@ -1295,10 +1295,13 @@ async def openai_compat_chat(
     team  = request.headers.get("X-Guard-Team")  or _caller_team(current_user) or "unknown"
     agent = request.headers.get("X-Guard-Agent") or _caller_name(current_user) or "unknown"
 
-    # Resolve the org's provider client. Hard 402 if the org has no credential
-    # for this provider. Platform (internal) org falls through to env-var client.
+    # Resolve the org's provider client. Hard 401 if org_id is missing (should
+    # have been caught by get_proxy_caller, but never trust that implicitly).
+    # Hard 402 if the org has no credential for this provider.
     org_id = _caller_org_id(current_user)
-    org_client = get_client_for_org(org_id, model, db) if org_id is not None else None
+    if org_id is None:
+        raise HTTPException(status_code=401, detail="No organization resolved for this credential")
+    org_client = get_client_for_org(org_id, model, db)
 
     # Enforcement pipeline
     last_user = ""
@@ -1449,7 +1452,9 @@ async def anthropic_compat_messages(
     agent = request.headers.get("X-Guard-Agent") or _caller_name(current_user) or "unknown"
 
     org_id = _caller_org_id(current_user)
-    org_client = get_client_for_org(org_id, model, db) if org_id is not None else None
+    if org_id is None:
+        raise HTTPException(status_code=401, detail="No organization resolved for this credential")
+    org_client = get_client_for_org(org_id, model, db)
 
     # Enforcement
     last_user = ""

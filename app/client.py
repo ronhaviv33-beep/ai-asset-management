@@ -253,14 +253,14 @@ async def chat_complete(
 # Used by /v1/chat/completions and /v1/messages so tool_calls, temperature,
 # response_format, seed, etc. all reach the upstream provider unchanged.
 
-async def proxy_chat_complete(body: dict, org_client: AsyncOpenAI | None = None) -> dict:
+async def proxy_chat_complete(body: dict, org_client: AsyncOpenAI) -> dict:
     """
     Forward an entire OpenAI-shaped request body to the upstream provider.
-    org_client: the org-resolved client from get_client_for_org(). If None,
-    falls back to the platform env-var client (internal org only).
+    org_client must be the org-resolved client from get_client_for_org().
+    There is no env-var fallback — callers must resolve the client before calling this.
     """
     model  = body.get("model", "gpt-4o-mini")
-    client = org_client if org_client is not None else _get_client(model)
+    client = org_client
 
     t0   = time.perf_counter()
     resp = await client.chat.completions.create(**body)
@@ -272,15 +272,17 @@ async def proxy_chat_complete(body: dict, org_client: AsyncOpenAI | None = None)
 async def proxy_chat_stream(
     body: dict,
     request=None,
-    org_client: AsyncOpenAI | None = None,
+    org_client: AsyncOpenAI = None,
 ) -> AsyncIterator[str]:
     """
     Stream an OpenAI-shaped request to the upstream provider and relay SSE chunks.
-    org_client: the org-resolved client from get_client_for_org(). If None,
-    falls back to the platform env-var client (internal org only).
+    org_client must be the org-resolved client from get_client_for_org().
+    There is no env-var fallback — callers must resolve the client before calling this.
     """
+    if org_client is None:
+        raise RuntimeError("proxy_chat_stream called with no org_client — org resolution is required")
     model  = body.get("model", "gpt-4o-mini")
-    client = org_client if org_client is not None else _get_client(model)
+    client = org_client
 
     stream_body = {**body, "stream": True, "stream_options": {"include_usage": True}}
 
