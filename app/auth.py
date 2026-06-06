@@ -139,6 +139,13 @@ def require_page_access(page: str):
         user=Depends(get_current_user),
         db: "Session" = Depends(get_db),
     ):
+        # Admin bypasses page checks unconditionally — admin must always be able
+        # to reach every endpoint regardless of what's in the DB roles table.
+        # This is an explicit bypass, not implicit via list membership, so editing
+        # admin's pages in the DB can never lock admin out of an endpoint.
+        if user.role == "admin":
+            return user
+
         from app.models import Role as RoleModel
         role = db.query(RoleModel).filter(RoleModel.name == user.role).first()
         if role is None:
