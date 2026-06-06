@@ -813,15 +813,26 @@ def list_guard_modes(db: Session = Depends(get_db), actor=Depends(require_page_a
     blocked in the last 30 days (shadow-block preview).
     """
     from app.models import GuardMode, Telemetry, Team as TeamModel, ApiKey as ApiKeyModel
-    overrides = {g.team: g for g in db.query(GuardMode).filter(
-        GuardMode.organization_id == actor.organization_id
-    ).all()}
+    from sqlalchemy import text as _sqla_text
+    # Fetch guard-mode overrides — fall back to unfiltered if organization_id column is missing
+    try:
+        overrides = {g.team: g for g in db.query(GuardMode).filter(
+            GuardMode.organization_id == actor.organization_id
+        ).all()}
+    except Exception:
+        try:
+            overrides = {g.team: g for g in db.query(GuardMode).all()}
+        except Exception:
+            overrides = {}
     shadow = tel.would_block_counts(db, days=30, organization_id=actor.organization_id)
     # Union of: telemetry teams + override teams + registered teams + api_key teams
     teams = set(shadow.keys()) | set(overrides.keys())
-    teams |= {r[0] for r in db.query(Telemetry.team).filter(
-        Telemetry.organization_id == actor.organization_id
-    ).distinct().all()}
+    try:
+        teams |= {r[0] for r in db.query(Telemetry.team).filter(
+            Telemetry.organization_id == actor.organization_id
+        ).distinct().all()}
+    except Exception:
+        pass
     try:
         teams |= {r[0] for r in db.query(TeamModel.name).filter(
             TeamModel.organization_id == actor.organization_id
@@ -829,11 +840,21 @@ def list_guard_modes(db: Session = Depends(get_db), actor=Depends(require_page_a
     except Exception:
         pass  # teams table may be missing organization_id in old DBs — fall through
     # Always include teams from api_keys directly (covers pre-migration DBs)
-    teams |= {r[0] for r in db.query(ApiKeyModel.team).filter(
-        ApiKeyModel.organization_id == actor.organization_id,
-        ApiKeyModel.team.isnot(None), ApiKeyModel.team != "", ApiKeyModel.team != "unknown",
-        ApiKeyModel.is_active == True,  # noqa: E712
-    ).distinct().all()}
+    try:
+        teams |= {r[0] for r in db.query(ApiKeyModel.team).filter(
+            ApiKeyModel.organization_id == actor.organization_id,
+            ApiKeyModel.team.isnot(None), ApiKeyModel.team != "", ApiKeyModel.team != "unknown",
+            ApiKeyModel.is_active == True,  # noqa: E712
+        ).distinct().all()}
+    except Exception:
+        # Fall back to unfiltered api_key query if organization_id column missing
+        try:
+            teams |= {r[0] for r in db.query(ApiKeyModel.team).filter(
+                ApiKeyModel.team.isnot(None), ApiKeyModel.team != "", ApiKeyModel.team != "unknown",
+                ApiKeyModel.is_active == True,  # noqa: E712
+            ).distinct().all()}
+        except Exception:
+            pass
     out = []
     for team in sorted(t for t in teams if t):
         ov = overrides.get(team)

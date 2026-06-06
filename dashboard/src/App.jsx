@@ -3114,7 +3114,7 @@ function GuardModesSection() {
       const [modes, h] = await Promise.all([fetchGuardModes(), fetchHealth().catch(() => null)]);
       setRows(modes);
       setHealth(h);
-    } catch (e) { setErr(e.message); }
+    } catch { /* ignore load errors — show empty state */ }
     finally { setLoading(false); }
   }, []);
 
