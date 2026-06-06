@@ -1,4 +1,21 @@
-import React, { useState, useMemo, useEffect, useCallback, useRef, createContext, useContext } from "react";
+import React, { useState, useMemo, useEffect, useCallback, useRef, createContext, useContext, Component } from "react";
+
+class PageErrorBoundary extends Component {
+  constructor(props) { super(props); this.state = { error: null }; }
+  static getDerivedStateFromError(e) { return { error: e }; }
+  render() {
+    if (this.state.error) {
+      return (
+        <div style={{ padding: 24, fontFamily: "monospace", fontSize: 13, color: "#FF5C7A", background: "#1a1a1a", borderRadius: 8, border: "1px solid #FF5C7A44" }}>
+          <strong>Page error:</strong> {String(this.state.error.message || this.state.error)}
+          <br /><br />
+          <button onClick={() => this.setState({ error: null })} style={{ background: "transparent", border: "1px solid #FF5C7A", color: "#FF5C7A", padding: "4px 12px", borderRadius: 4, cursor: "pointer", fontFamily: "monospace" }}>Retry</button>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
 import { login as apiLogin, fetchMe, fetchUsers, createUser, updateUser, deleteUser, getToken, setToken, authFetch, fetchKeyStatuses, updateKey, BASE, fetchApiKeys, createApiKey, revokeApiKey, deleteApiKey, fetchGuardModes, setGuardMode, fetchHealth, fetchProviderCredentials, upsertProviderCredential, deleteProviderCredential, fetchRoles, createRole, updateRole, deleteRole } from "./api.js";
 import {
   LineChart, Line, AreaChart, Area, BarChart, Bar,
@@ -4453,7 +4470,7 @@ export default function App() {
 
         {!["home","budgets","security","chat","users","apikeys","settings","integrations","onboarding"].includes(page) && <FilterBar filters={filters} setFilters={setFilters} allTeams={allTeams} allAgents={allAgents}/>}
 
-        {renderPage()}
+        <PageErrorBoundary key={page}>{renderPage()}</PageErrorBoundary>
       </main>
     </div>
     </RolesContext.Provider>
