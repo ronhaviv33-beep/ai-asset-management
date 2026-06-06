@@ -47,6 +47,51 @@ def run():
         _add_column_if_missing(conn, "users",     "organization_id", "INTEGER REFERENCES organizations(id)")
         _add_column_if_missing(conn, "api_keys",  "organization_id", "INTEGER REFERENCES organizations(id)")
         _add_column_if_missing(conn, "telemetry", "organization_id", "INTEGER REFERENCES organizations(id)")
+
+        # Rebuild roles table if it predates the id/created_at/organization_id columns.
+        # The old schema had only (name, label, color, pages, can); the current ORM model
+        # requires id PK + organization_id FK + created_at. SQLite can't ALTER PRIMARY KEY,
+        # so we recreate the table and migrate the data.
+        from sqlalchemy import text as _text
+        roles_cols = {row[1] for row in conn.execute(_text("PRAGMA table_info(roles)"))}
+        if "id" not in roles_cols:
+            log.info("roles table missing 'id' column — rebuilding with full schema")
+            conn.execute(_text("PRAGMA foreign_keys=OFF"))
+            conn.execute(_text("""
+                CREATE TABLE roles_new (
+                    id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+                    organization_id INTEGER NOT NULL DEFAULT 1 REFERENCES organizations(id),
+                    name VARCHAR(64) NOT NULL,
+                    label VARCHAR(64),
+                    color VARCHAR(32),
+                    pages TEXT DEFAULT '[]',
+                    can TEXT DEFAULT '[]',
+                    created_at DATETIME,
+                    UNIQUE (organization_id, name)
+                )
+            """))
+            # Copy rows; supply defaults for new columns
+            conn.execute(_text("""
+                INSERT INTO roles_new (organization_id, name, label, color, pages, can)
+                SELECT
+                    COALESCE(organization_id, 1),
+                    name,
+                    label,
+                    color,
+                    COALESCE(pages, '[]'),
+                    COALESCE(can, '[]')
+                FROM roles
+            """))
+            conn.execute(_text("DROP TABLE roles"))
+            conn.execute(_text("ALTER TABLE roles_new RENAME TO roles"))
+            conn.execute(_text("CREATE INDEX IF NOT EXISTS ix_roles_organization_id ON roles(organization_id)"))
+            conn.execute(_text("CREATE INDEX IF NOT EXISTS ix_roles_name ON roles(name)"))
+            conn.execute(_text("PRAGMA foreign_keys=ON"))
+            log.info("roles table rebuilt successfully.")
+        else:
+            # Table exists with id — just ensure organization_id column is present
+            _add_column_if_missing(conn, "roles", "organization_id", "INTEGER NOT NULL DEFAULT 1 REFERENCES organizations(id)")
+
     log.info("Column migration complete.")
 
     db = SessionLocal()
