@@ -130,6 +130,11 @@ pip install -r requirements.txt
 
 cp .env.example .env              # then fill in your API keys
 
+# Install the pre-commit hook (blocks commits if isolation/structural checks fail)
+cp tests/pre-commit-hook .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit
+# Or run the harnesses manually at any time:
+# make verify
+
 uvicorn app.main:app
 # API + Swagger UI → http://localhost:8000/docs
 ```

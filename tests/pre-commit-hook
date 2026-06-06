@@ -1,0 +1,6 @@
+#!/bin/sh
+# Run isolation + structural harnesses before every commit.
+# Two working-tree corruptions (DATABASE_URL hardcode, GuardMode class merge)
+# reached committed state because verification was manual. This hook makes
+# the detector fire automatically.
+exec make verify
