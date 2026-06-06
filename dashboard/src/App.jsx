@@ -3482,6 +3482,15 @@ function RolesManagementSection() {
 
   return (
     <Card title="Role Management" subtitle="Define roles and their page access. Changes take effect on next login.">
+      {/* W-3 banner: backend enforcement not yet wired for custom roles */}
+      <div style={{ background:`${T.warn}12`, border:`1px solid ${T.warn}44`, borderRadius:6, padding:"10px 14px", marginBottom:14, display:"flex", gap:10, alignItems:"flex-start" }}>
+        <span style={{ color:T.warn, fontSize:13, flexShrink:0 }}>⚠</span>
+        <div style={{ fontSize:12, color:T.warn, lineHeight:1.6 }}>
+          <strong>Custom roles are not yet server-enforced.</strong>{" "}
+          Roles beyond <code style={{ fontFamily:FONT_MONO, fontSize:11 }}>admin</code>, <code style={{ fontFamily:FONT_MONO, fontSize:11 }}>analyst</code>, and <code style={{ fontFamily:FONT_MONO, fontSize:11 }}>viewer</code> control the UI only — backend endpoints still require admin.
+          Do not assign users to custom roles until server enforcement is complete.
+        </div>
+      </div>
       {err && <div style={{ color:T.crit, fontFamily:FONT_MONO, fontSize:12, marginBottom:10 }}>{err}</div>}
 
       <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
@@ -3834,14 +3843,15 @@ export default function App() {
       const token = getToken();
       if (token) {
         try {
-          // Race fetchRoles against a 5s timeout so a hanging server never
-          // prevents the spinner from resolving. fetchMe is the hard dependency;
-          // a hung roles fetch degrades to empty-map (deny-by-default), not hang.
-          const rolesOrNull = Promise.race([
-            fetchRoles().catch(() => null),
-            new Promise(resolve => setTimeout(() => resolve(null), 5000)),
+          // Both arms raced against 5s timeouts — a server that accepts the TCP
+          // connection but never responds can't hold the spinner open forever.
+          // Both race arms always resolve (never reject), so Promise.all can only
+          // fail if something else throws, which the outer catch covers.
+          const withTimeout = (p, ms) => Promise.race([p, new Promise(r => setTimeout(() => r(null), ms))]);
+          const [me, serverRoles] = await Promise.all([
+            withTimeout(fetchMe().catch(() => null), 5000),
+            withTimeout(fetchRoles().catch(() => null), 5000),
           ]);
-          const [me, serverRoles] = await Promise.all([fetchMe(), rolesOrNull]);
           if (me) {
             setUser(me);
             const map = {};
