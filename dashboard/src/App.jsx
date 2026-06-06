@@ -2732,14 +2732,341 @@ function ChatPage() {
 // ─── Integrations page ────────────────────────────────────────────────────────
 function IntegrationsPage() {
   const currentUser = useUser();
-  const [copied, setCopied] = useState(null);
-  const [authMode, setAuthMode] = useState("apikey");  // "apikey" (production) | "jwt" (testing)
-  const [apiKey, setApiKey] = useState("");
-  const [token, setToken] = useState("");
-  const [teamName, setTeamName] = useState(currentUser?.team || "my-team");
+  const isAdmin = currentUser?.role === "admin";
+  const [copied,    setCopied]    = useState(null);
+  const [authMode,  setAuthMode]  = useState("apikey");
+  const [apiKey,    setApiKey]    = useState("");
+  const [token,     setToken]     = useState("");
+  const [teamName,  setTeamName]  = useState(currentUser?.team || "my-team");
   const [agentName, setAgentName] = useState("my-agent");
+  const [codeTab,   setCodeTab]   = useState("python");
 
   const gatewayUrl = BASE.startsWith("http") ? BASE : window.location.origin;
+  const isApiKey   = authMode === "apikey";
+  const cred       = isApiKey ? (apiKey || "gk-...") : (token || "<your-jwt>");
+
+  const copy = (id, text) => {
+    navigator.clipboard.writeText(text).catch(() => {});
+    setCopied(id);
+    setTimeout(() => setCopied(null), 2000);
+  };
+
+  const CopyBtn = ({ id, text }) => (
+    <button onClick={() => copy(id, text)}
+      style={{ background: copied===id ? `${T.accent}20` : "transparent",
+        border:`1px solid ${copied===id ? T.accent+"55" : T.border}`,
+        color: copied===id ? T.accent : T.textMute,
+        padding:"3px 10px", borderRadius:3, fontSize:10, fontFamily:FONT_MONO, cursor:"pointer", flexShrink:0 }}>
+      {copied===id ? "✓ copied" : "copy"}
+    </button>
+  );
+
+  const CodeBlock = ({ id, code }) => (
+    <div style={{ position:"relative" }}>
+      <pre style={{ background:T.bg, border:`1px solid ${T.border}`, borderRadius:6,
+        padding:"14px 16px 14px 16px", fontSize:12, fontFamily:FONT_MONO, color:T.text,
+        lineHeight:1.7, overflow:"auto", margin:0, whiteSpace:"pre" }}>{code}</pre>
+      <div style={{ position:"absolute", top:8, right:8 }}>
+        <CopyBtn id={id} text={code} />
+      </div>
+    </div>
+  );
+
+  // ── Code snippets (trimmed — no wall-of-comments) ─────────────────────────
+  const snippets = {
+    python: `import openai
+
+client = openai.OpenAI(
+    base_url="${gatewayUrl}/v1",
+    api_key="${cred}",
+)
+
+response = client.chat.completions.create(
+    model="gpt-4o-mini",          # swap to claude-sonnet-4-5, gemini-2.0-flash, etc.
+    messages=[{"role": "user", "content": "Hello"}],
+    extra_headers={
+        "X-Guard-Team":  "${teamName}",
+        "X-Guard-Agent": "${agentName}",
+    },
+)
+print(response.choices[0].message.content)
+
+# Streaming
+stream = client.chat.completions.create(
+    model="gpt-4o-mini",
+    messages=[{"role": "user", "content": "Hello"}],
+    stream=True,
+    extra_headers={"X-Guard-Team": "${teamName}", "X-Guard-Agent": "${agentName}"},
+)
+for chunk in stream:
+    print(chunk.choices[0].delta.content or "", end="", flush=True)`,
+
+    nodejs: `import OpenAI from "openai";
+
+const client = new OpenAI({
+  baseURL: "${gatewayUrl}/v1",
+  apiKey: "${cred}",
+});
+
+const response = await client.chat.completions.create({
+  model: "gpt-4o-mini",         // or "claude-sonnet-4-5", "gemini-2.0-flash"
+  messages: [{ role: "user", content: "Hello" }],
+  headers: {
+    "X-Guard-Team":  "${teamName}",
+    "X-Guard-Agent": "${agentName}",
+  },
+});
+
+console.log(response.choices[0].message.content);`,
+
+    curl: `curl -X POST ${gatewayUrl}/v1/chat/completions \\
+  -H "Authorization: Bearer ${cred}" \\
+  -H "Content-Type: application/json" \\
+  -H "X-Guard-Team: ${teamName}" \\
+  -H "X-Guard-Agent: ${agentName}" \\
+  -d '{"model":"gpt-4o-mini","messages":[{"role":"user","content":"Hello"}]}'`,
+
+    anthropic: `import anthropic
+
+client = anthropic.Anthropic(
+    base_url="${gatewayUrl}",
+    api_key="${cred}",
+    default_headers={
+        "X-Guard-Team":  "${teamName}",
+        "X-Guard-Agent": "${agentName}",
+    },
+)
+
+message = client.messages.create(
+    model="claude-haiku-4-5",
+    max_tokens=1024,
+    messages=[{"role": "user", "content": "Hello"}],
+)
+print(message.content[0].text)`,
+
+    langchain: `from langchain_openai import ChatOpenAI
+
+llm = ChatOpenAI(
+    model="gpt-4o-mini",
+    openai_api_base="${gatewayUrl}/v1",
+    openai_api_key="${cred}",
+    default_headers={
+        "X-Guard-Team":  "${teamName}",
+        "X-Guard-Agent": "${agentName}",
+    },
+)
+print(llm.invoke("Hello").content)`,
+  };
+
+  return (
+    <div style={{ display:"flex", flexDirection:"column", gap:16, maxWidth:900 }}>
+
+      {/* ── Setup steps ── */}
+      <Card title="Connect your agent" subtitle="Three steps, no code changes to existing agents">
+        <div style={{ display:"flex", flexDirection:"column", gap:0 }}>
+          {[
+            {
+              n:"1", color:T.warn, done: false,
+              label: "Add your provider key",
+              detail: <>Go to <strong style={{ color:T.accent }}>Settings → Provider Keys</strong> and paste your OpenAI / Anthropic / Google key. It's encrypted at rest — only the last 4 chars are shown after saving.</>,
+              action: isAdmin ? { label:"Open Settings →", href:"settings" } : null,
+            },
+            {
+              n:"2", color:T.info, done: false,
+              label: "Create an API key for your agent",
+              detail: <>Go to <strong style={{ color:T.accent }}>API Keys → Generate Key</strong>. Give it a name and team. The <code style={{ color:T.accent, fontFamily:FONT_MONO, fontSize:11 }}>gk-…</code> key is shown <strong style={{ color:T.warn }}>once</strong> — copy it now.</>,
+              action: isAdmin ? { label:"Open API Keys →", href:"apikeys" } : null,
+            },
+            {
+              n:"3", color:T.accent, done: false,
+              label: "Point your agent at this gateway",
+              detail: <>Change <code style={{ color:T.info, fontFamily:FONT_MONO, fontSize:11 }}>base_url</code> to <code style={{ color:T.accent, fontFamily:FONT_MONO, fontSize:11 }}>{gatewayUrl}/v1</code> and use your <code style={{ color:T.accent, fontFamily:FONT_MONO, fontSize:11 }}>gk-…</code> key as <code style={{ color:T.info, fontFamily:FONT_MONO, fontSize:11 }}>api_key</code>. That's it — every model routes through here automatically.</>,
+            },
+          ].map((s, i, arr) => (
+            <div key={s.n} style={{ display:"flex", gap:16 }}>
+              <div style={{ display:"flex", flexDirection:"column", alignItems:"center", flexShrink:0 }}>
+                <div style={{ width:30, height:30, borderRadius:"50%", background:`${s.color}18`,
+                  border:`1px solid ${s.color}55`, display:"flex", alignItems:"center",
+                  justifyContent:"center", fontFamily:FONT_MONO, fontSize:12, color:s.color, fontWeight:700 }}>
+                  {s.n}
+                </div>
+                {i < arr.length-1 && <div style={{ width:1, flex:1, background:T.border, minHeight:24, margin:"4px 0" }}/>}
+              </div>
+              <div style={{ paddingBottom:20, flex:1 }}>
+                <div style={{ fontSize:13, fontWeight:600, color:T.text, marginBottom:4 }}>{s.label}</div>
+                <div style={{ fontSize:12, color:T.textDim, lineHeight:1.65 }}>{s.detail}</div>
+              </div>
+            </div>
+          ))}
+        </div>
+      </Card>
+
+      {/* ── Config builder + code tabs ── */}
+      <Card title="Code snippets" subtitle="Fill in your details — snippets update live">
+
+        {/* Inputs row */}
+        <div style={{ display:"flex", gap:10, flexWrap:"wrap", alignItems:"flex-end", marginBottom:16 }}>
+          {/* Auth toggle */}
+          <div style={{ display:"flex", flexDirection:"column", gap:4 }}>
+            <label style={{ fontSize:9, fontFamily:FONT_MONO, letterSpacing:"0.12em", textTransform:"uppercase", color:T.textMute }}>Auth</label>
+            <div style={{ display:"flex", background:T.bg, border:`1px solid ${T.border}`, borderRadius:5, padding:2, gap:2 }}>
+              {[{id:"apikey",label:"API key"},{id:"jwt",label:"JWT"}].map(m => (
+                <button key={m.id} onClick={() => setAuthMode(m.id)}
+                  style={{ background:authMode===m.id ? `${T.accent}22` : "transparent",
+                    border:`1px solid ${authMode===m.id ? T.accent+"44" : "transparent"}`,
+                    borderRadius:3, padding:"5px 12px", cursor:"pointer",
+                    color:authMode===m.id ? T.accent : T.textMute,
+                    fontSize:11, fontFamily:FONT_MONO }}>
+                  {m.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {[
+            { label:"Team",  val:teamName,  set:setTeamName,  w:130 },
+            { label:"Agent", val:agentName, set:setAgentName, w:130 },
+          ].map(f => (
+            <div key={f.label} style={{ display:"flex", flexDirection:"column", gap:4 }}>
+              <label style={{ fontSize:9, fontFamily:FONT_MONO, letterSpacing:"0.12em", textTransform:"uppercase", color:T.textMute }}>{f.label}</label>
+              <input value={f.val} onChange={e => f.set(e.target.value)}
+                style={{ background:T.panelHi, color:T.text, border:`1px solid ${T.border}`,
+                  padding:"6px 10px", borderRadius:4, fontSize:12, fontFamily:FONT_MONO, width:f.w }} />
+            </div>
+          ))}
+
+          <div style={{ display:"flex", flexDirection:"column", gap:4, flex:1, minWidth:200 }}>
+            <label style={{ fontSize:9, fontFamily:FONT_MONO, letterSpacing:"0.12em", textTransform:"uppercase", color:T.textMute }}>
+              {isApiKey ? "API Key (gk-…)" : "JWT token"}
+            </label>
+            <input type="password"
+              placeholder={isApiKey ? "Paste gk-… key to fill snippets" : "Paste JWT from /auth/login"}
+              value={isApiKey ? apiKey : token}
+              onChange={e => isApiKey ? setApiKey(e.target.value) : setToken(e.target.value)}
+              style={{ background:T.panelHi, color:T.text, border:`1px solid ${T.border}`,
+                padding:"6px 10px", borderRadius:4, fontSize:12, fontFamily:FONT_MONO }} />
+          </div>
+        </div>
+
+        {/* Warning for JWT mode */}
+        {!isApiKey && (
+          <div style={{ fontSize:11, color:T.warn, fontFamily:FONT_MONO, marginBottom:12,
+            background:`${T.warn}10`, border:`1px solid ${T.warn}33`, borderRadius:4, padding:"7px 12px" }}>
+            JWT expires in 8h — use an API key for production agents.
+          </div>
+        )}
+
+        {/* Language tabs */}
+        <div style={{ display:"flex", gap:2, marginBottom:0, borderBottom:`1px solid ${T.border}`, paddingBottom:0 }}>
+          {[
+            {id:"python",   label:"Python"},
+            {id:"nodejs",   label:"Node.js"},
+            {id:"curl",     label:"curl"},
+            {id:"anthropic",label:"Anthropic SDK"},
+            {id:"langchain",label:"LangChain"},
+          ].map(t => (
+            <button key={t.id} onClick={() => setCodeTab(t.id)}
+              style={{ background:"transparent", border:"none",
+                borderBottom: codeTab===t.id ? `2px solid ${T.accent}` : "2px solid transparent",
+                color: codeTab===t.id ? T.accent : T.textDim,
+                padding:"7px 14px", fontSize:11, fontFamily:FONT_MONO, cursor:"pointer",
+                marginBottom:"-1px" }}>
+              {t.label}
+            </button>
+          ))}
+        </div>
+        <div style={{ marginTop:0 }}>
+          <CodeBlock id={codeTab} code={snippets[codeTab]} />
+        </div>
+      </Card>
+
+      {/* ── Reference: headers + models ── */}
+      <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:16 }}>
+
+        {/* Attribution headers */}
+        <Card title="Attribution headers" subtitle="Add to every request">
+          <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
+            {[
+              { h:"X-Guard-Team",  ex:teamName,  desc:"Team for budget & policy enforcement" },
+              { h:"X-Guard-Agent", ex:agentName, desc:"Agent name for cost attribution" },
+            ].map(r => (
+              <div key={r.h} style={{ background:T.bg, border:`1px solid ${T.border}`, borderRadius:5, padding:"10px 12px" }}>
+                <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:4 }}>
+                  <code style={{ fontFamily:FONT_MONO, fontSize:12, color:T.info }}>{r.h}</code>
+                  <code style={{ fontFamily:FONT_MONO, fontSize:11, color:T.accent }}>"{r.ex}"</code>
+                </div>
+                <div style={{ fontSize:11, color:T.textMute }}>{r.desc}</div>
+              </div>
+            ))}
+          </div>
+        </Card>
+
+        {/* Supported models */}
+        <Card title="Supported models" subtitle="Swap the model name — routing is automatic">
+          <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
+            {[
+              { provider:"OpenAI",    color:T.info,   models:"gpt-4.1, gpt-4o, gpt-4o-mini, o3, o4-mini" },
+              { provider:"Anthropic", color:T.warn,   models:"claude-opus-4-5, claude-sonnet-4-5, claude-haiku-4-5" },
+              { provider:"Google",    color:T.accent, models:"gemini-2.5-pro, gemini-2.0-flash, gemini-1.5-pro" },
+              { provider:"Local",     color:T.purple, models:"llama-3.1-70b-local, llama-3.1-8b-local" },
+            ].map(g => (
+              <div key={g.provider} style={{ display:"flex", gap:10, alignItems:"baseline" }}>
+                <span style={{ fontFamily:FONT_MONO, fontSize:10, color:g.color, letterSpacing:"0.08em",
+                  textTransform:"uppercase", width:72, flexShrink:0 }}>{g.provider}</span>
+                <span style={{ fontFamily:FONT_MONO, fontSize:11, color:T.textDim }}>{g.models}</span>
+              </div>
+            ))}
+          </div>
+          <div style={{ marginTop:10, fontSize:10, color:T.textMute, fontFamily:FONT_MONO }}>
+            Provider key must be configured in <strong style={{ color:T.accent }}>Settings → Provider Keys</strong>
+          </div>
+        </Card>
+      </div>
+
+      {/* ── How it works (compact) ── */}
+      <Card title="What happens on every call" subtitle="The enforcement pipeline — in order">
+        <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:"4px 24px" }}>
+          {[
+            { n:"1", color:T.info,   label:"Auth",        desc:"JWT or API key validated; org resolved from DB" },
+            { n:"2", color:T.warn,   label:"PII scan",    desc:"Prompt scanned for secrets, PII, card numbers" },
+            { n:"3", color:T.info,   label:"Policy",      desc:"Blocked model for this team → 403" },
+            { n:"4", color:T.crit,   label:"Budget",      desc:"Over limit with action=block → 429" },
+            { n:"5", color:T.accent, label:"Credential",  desc:"Your org's encrypted key decrypted; no fallback → 402 if missing" },
+            { n:"6", color:T.accent, label:"LLM call",    desc:"Forwarded using your key, billed to your account" },
+            { n:"7", color:T.purple, label:"Telemetry",   desc:"Cost, tokens, findings stored — org-scoped, isolated" },
+          ].map(s => (
+            <div key={s.n} style={{ display:"flex", gap:10, alignItems:"baseline", padding:"8px 0",
+              borderBottom:`1px solid ${T.border}` }}>
+              <span style={{ fontFamily:FONT_MONO, fontSize:10, color:s.color, fontWeight:700, width:14, flexShrink:0 }}>{s.n}</span>
+              <span style={{ fontFamily:FONT_MONO, fontSize:11, color:s.color, width:76, flexShrink:0 }}>{s.label}</span>
+              <span style={{ fontSize:12, color:T.textDim }}>{s.desc}</span>
+            </div>
+          ))}
+        </div>
+      </Card>
+
+      {/* ── Guard modes (compact) ── */}
+      <Card title="Guard modes" subtitle="Graduate each team independently — Settings → Guard Modes">
+        <div style={{ display:"grid", gridTemplateColumns:"repeat(3,1fr)", gap:10 }}>
+          {[
+            { mode:"Observe",  color:T.info, desc:"Log + count shadow-blocks. Never blocks traffic. Start here." },
+            { mode:"Alert",    color:T.warn, desc:"Log + fire alerts. Still never blocks." },
+            { mode:"Enforce",  color:T.crit, desc:"Policy → 403, budget → 429. Graduate after reviewing shadow counts." },
+          ].map(m => (
+            <div key={m.mode} style={{ background:T.panelHi, border:`1px solid ${m.color}33`, borderRadius:6, padding:"12px 14px" }}>
+              <div style={{ display:"flex", alignItems:"center", gap:6, marginBottom:6 }}>
+                <span style={{ width:7, height:7, borderRadius:"50%", background:m.color }} />
+                <span style={{ fontFamily:FONT_MONO, fontSize:12, color:m.color, fontWeight:600 }}>{m.mode}</span>
+              </div>
+              <div style={{ fontSize:11, color:T.textDim, lineHeight:1.55 }}>{m.desc}</div>
+            </div>
+          ))}
+        </div>
+      </Card>
+
+    </div>
+  );
+}
 
   // The credential the snippets show. Production agents use a gk- API key;
   // manual testing uses a short-lived JWT from login.
@@ -2904,299 +3231,6 @@ llm = ChatOpenAI(
 response = llm.invoke("Write a daily standup summary")
 print(response.content)`;
 
-  return (
-    <div style={{ display:"flex", flexDirection:"column", gap:18, maxWidth:900 }}>
-
-      {/* Hero */}
-      <div style={{ background:`linear-gradient(135deg,${T.panel} 0%,${T.panelHi} 100%)`, border:`1px solid ${T.border}`, borderRadius:8, padding:"28px 32px" }}>
-        <div style={{ fontFamily:FONT_MONO, fontSize:10, letterSpacing:"0.16em", textTransform:"uppercase", color:T.accent, marginBottom:10 }}>◆ Universal AI Gateway</div>
-        <div style={{ fontSize:20, fontWeight:500, letterSpacing:"-0.01em", marginBottom:10, color:T.text }}>
-          Connect any agent to any LLM platform — through one gateway
-        </div>
-        <div style={{ fontSize:13, color:T.textDim, lineHeight:1.65, maxWidth:640 }}>
-          Your agents keep their existing code. Just change <code style={{ background:T.panelHi, padding:"1px 6px", borderRadius:3, fontFamily:FONT_MONO, fontSize:12 }}>base_url</code> to this server — and every call to <strong style={{ color:T.text }}>OpenAI, Anthropic, Google, or any local model</strong> is automatically observed, governed, and logged.
-        </div>
-        <div style={{ display:"flex", gap:10, marginTop:14, flexWrap:"wrap" }}>
-          {[
-            { label:"OpenAI",     color:T.info   },
-            { label:"Anthropic",  color:T.warn   },
-            { label:"Google",     color:T.accent },
-            { label:"Local LLMs", color:T.purple },
-          ].map(p => (
-            <span key={p.label} style={{ display:"inline-flex", alignItems:"center", gap:5, padding:"4px 10px", borderRadius:4, background:`${p.color}15`, border:`1px solid ${p.color}33`, color:p.color, fontSize:11, fontFamily:FONT_MONO }}>
-              {p.label}
-            </span>
-          ))}
-        </div>
-        <div style={{ display:"flex", gap:10, marginTop:18, flexWrap:"wrap" }}>
-          {[
-            { label:"PII scanning",        color:T.warn },
-            { label:"Model policy",        color:T.info },
-            { label:"Budget enforcement",  color:T.crit },
-            { label:"Cost tracking",       color:T.accent },
-            { label:"Audit log",           color:T.purple },
-          ].map(b => (
-            <span key={b.label} style={{ display:"inline-flex", alignItems:"center", gap:5, padding:"5px 12px", borderRadius:4, background:`${b.color}15`, border:`1px solid ${b.color}33`, color:b.color, fontSize:11, fontFamily:FONT_MONO }}>
-              ✓ {b.label}
-            </span>
-          ))}
-        </div>
-      </div>
-
-      <SectionHeader n="01" title="Get started" desc="Configure your connection and onboard a customer agent" />
-
-      {/* Config builder */}
-      <Card title="Connection details" subtitle="Pick how the caller authenticates, then the code snippets below fill in automatically">
-
-        {/* Auth mode toggle */}
-        <div style={{ display:"flex", gap:0, marginBottom:18, background:T.bg, border:`1px solid ${T.border}`, borderRadius:6, padding:3, width:"fit-content" }}>
-          {[
-            { id:"apikey", label:"Production agent", sub:"API key" },
-            { id:"jwt",    label:"Manual testing",   sub:"JWT login" },
-          ].map(m => (
-            <button key={m.id} onClick={() => setAuthMode(m.id)}
-              style={{ background: authMode===m.id ? T.accent+"22" : "transparent", border:`1px solid ${authMode===m.id ? T.accent+"55" : "transparent"}`,
-                borderRadius:4, padding:"7px 16px", cursor:"pointer", color: authMode===m.id ? T.accent : T.textMute, fontFamily:FONT_UI, textAlign:"left" }}>
-              <div style={{ fontSize:12, fontWeight:600 }}>{m.label}</div>
-              <div style={{ fontSize:10, fontFamily:FONT_MONO, opacity:0.8 }}>{m.sub}</div>
-            </button>
-          ))}
-        </div>
-
-        {/* Explainer per mode */}
-        <div style={{ fontSize:12, color:T.textDim, lineHeight:1.65, marginBottom:16, background:T.panelHi, border:`1px solid ${T.border}`, borderRadius:6, padding:"12px 14px" }}>
-          {isApiKey ? (
-            <>
-              <strong style={{ color:T.text }}>Use this for real customers and always-on agents.</strong> Generate a
-              <code style={{ color:T.accent, background:T.bg, padding:"1px 6px", borderRadius:3, margin:"0 4px" }}>gk-…</code>
-              key on the <strong style={{ color:T.accent }}>API Keys</strong> page. It never expires, carries its own team,
-              and can be revoked independently. The customer just drops it into their existing code as the <code style={{ color:T.info }}>api_key</code>.
-            </>
-          ) : (
-            <>
-              <strong style={{ color:T.text }}>Use this only for quick manual testing from your own machine.</strong> A dashboard
-              JWT expires after 8 hours, so it is <strong style={{ color:T.warn }}>not</strong> suitable for a deployed agent.
-              Get one with <code style={{ color:T.info }}>POST {gatewayUrl}/auth/login</code> → copy <code style={{ color:T.accent }}>access_token</code>.
-            </>
-          )}
-        </div>
-
-        <div style={{ display:"flex", gap:12, flexWrap:"wrap", alignItems:"flex-end", marginBottom:16 }}>
-          {[
-            { label:"Gateway URL", val:gatewayUrl, set:null, width:280, readOnly:true },
-            { label:"Team name",   val:teamName,   set:setTeamName,  width:140 },
-            { label:"Agent name",  val:agentName,  set:setAgentName, width:140 },
-          ].map(f => (
-            <div key={f.label} style={{ display:"flex", flexDirection:"column", gap:4 }}>
-              <label style={{ fontSize:9, fontFamily:FONT_MONO, letterSpacing:"0.12em", textTransform:"uppercase", color:T.textMute }}>{f.label}</label>
-              <input value={f.val} onChange={f.set ? e => f.set(e.target.value) : undefined} readOnly={f.readOnly}
-                style={{ background: f.readOnly ? T.bg : T.panelHi, color: f.readOnly ? T.textDim : T.text, border:`1px solid ${T.border}`, padding:"6px 10px", borderRadius:4, fontSize:12, fontFamily:FONT_MONO, width:f.width, cursor: f.readOnly ? "default" : "text" }}/>
-            </div>
-          ))}
-          <div style={{ display:"flex", flexDirection:"column", gap:4 }}>
-            <label style={{ fontSize:9, fontFamily:FONT_MONO, letterSpacing:"0.12em", textTransform:"uppercase", color:T.textMute }}>
-              {isApiKey ? <>API Key <span style={{ textTransform:"none", color:T.textMute }}>(gk-…)</span></>
-                        : <>JWT Token <span style={{ textTransform:"none", color:T.textMute }}>(from login)</span></>}
-            </label>
-            <input type="password"
-              placeholder={isApiKey ? "Paste a gk- key to see it in snippets…" : "Paste your JWT to see it in snippets…"}
-              value={isApiKey ? apiKey : token}
-              onChange={e => (isApiKey ? setApiKey(e.target.value) : setToken(e.target.value))}
-              style={{ background:T.panelHi, color:T.text, border:`1px solid ${T.border}`, padding:"6px 10px", borderRadius:4, fontSize:12, fontFamily:FONT_MONO, width:240 }}/>
-          </div>
-        </div>
-        <div style={{ fontSize:11, color:T.textMute, fontFamily:FONT_MONO }}>
-          {isApiKey
-            ? <>No key yet? Go to <strong style={{ color:T.accent }}>API Keys → Generate Key</strong>. Team & agent are attributed automatically from the key.</>
-            : <>Team & agent below are sent as <code style={{ color:T.info }}>X-Guard-Team</code> / <code style={{ color:T.info }}>X-Guard-Agent</code> headers in the snippets.</>}
-        </div>
-      </Card>
-
-      {/* How to give a customer access */}
-      <Card title="Onboarding a customer" subtitle="Issue a long-lived API key instead of sharing a dashboard login">
-        <div style={{ fontSize:12, color:T.textDim, fontFamily:FONT_MONO, lineHeight:1.7, marginBottom:14 }}>
-          Dashboard JWTs expire after 8 hours — fine for the UI, wrong for an always-on agent.
-          For customers and production agents, issue a dedicated <strong style={{ color:T.text }}>API key</strong> that
-          you can revoke independently without affecting anyone else.
-        </div>
-        <ol style={{ margin:0, paddingLeft:20, display:"flex", flexDirection:"column", gap:10 }}>
-          {[
-            <>Go to the <strong style={{ color:T.accent }}>API Keys</strong> page → <strong style={{ color:T.text }}>Generate Key</strong>. Set a <em>Name</em> (e.g. <code style={{ color:T.info }}>acme-prod-agent</code>) and the <em>Team</em> it belongs to.</>,
-            <>Copy the <code style={{ color:T.accent }}>gk-…</code> key from the popup — it is shown <strong style={{ color:T.warn }}>only once</strong> and stored only as a hash. Hand it to the customer over a secure channel.</>,
-            <>The customer drops it into their existing agent as the <code style={{ color:T.info }}>api_key</code> — no other code change. The <code style={{ color:T.info }}>base_url</code> is this gateway. Works the same whether they call <strong style={{ color:T.text }}>OpenAI, Anthropic, Google, or a local model</strong> — the gateway routes by model name.</>,
-            <>Every call is attributed to that key's team for budget &amp; policy enforcement, and the key's <em>last used</em> timestamp updates live on the API Keys page.</>,
-            <>To cut off access, click <strong style={{ color:T.warn }}>Revoke</strong> — that key stops working immediately; all other customers are unaffected.</>,
-          ].map((step, i) => (
-            <li key={i} style={{ fontSize:12, color:T.textDim, fontFamily:FONT_MONO, lineHeight:1.6 }}>{step}</li>
-          ))}
-        </ol>
-        <div style={{ marginTop:16 }}>
-          <CodeBlock id="customer-key" code={`# One gateway, every provider. The customer changes only base_url + api_key;
-# the "model" field decides which platform the call is routed to:
-#   OpenAI      → gpt-4o-mini, gpt-4o, o3 ...
-#   Anthropic   → claude-sonnet-4-5, claude-opus-4-5 ...
-#   Google      → gemini-2.5-pro, gemini-2.0-flash ...
-#   Local/Ollama→ llama-3.1-70b-local ...
-import openai
-
-client = openai.OpenAI(
-    base_url="${gatewayUrl}/v1",
-    api_key="gk-...",                      # the issued API key (not a JWT)
-)
-
-# Same code calls any provider — just swap the model name:
-resp = client.chat.completions.create(
-    model="claude-sonnet-4-5",             # ← or gpt-4o-mini, gemini-2.0-flash, llama-3.1-70b-local
-    messages=[{"role": "user", "content": "Hello"}],
-    extra_headers={"X-Guard-Agent": "acme-prod-agent"},
-)
-print(resp.choices[0].message.content)`} />
-        </div>
-      </Card>
-
-      <SectionHeader n="02" title="Reference" desc="Attribution headers and the models you can route to" />
-
-      {/* How attribution works */}
-      <Card title="How team & agent attribution works" subtitle="Two HTTP headers on every request">
-        <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:14 }}>
-          {[
-            { header:"X-Guard-Team", example:teamName, desc:"Maps this call to a team for policy enforcement and cost attribution. Must match a team name used in your Budget and Policy rules." },
-            { header:"X-Guard-Agent", example:agentName, desc:"Identifies which agent or workflow made the call. Shows up in telemetry, cost charts, and the audit log." },
-          ].map(h => (
-            <div key={h.header} style={{ background:T.panelHi, border:`1px solid ${T.border}`, borderRadius:6, padding:"14px 16px" }}>
-              <div style={{ fontFamily:FONT_MONO, fontSize:12, color:T.info, marginBottom:6 }}>{h.header}</div>
-              <div style={{ fontFamily:FONT_MONO, fontSize:11, color:T.accent, marginBottom:8 }}>example: "{h.example}"</div>
-              <div style={{ fontSize:12, color:T.textDim, lineHeight:1.6 }}>{h.desc}</div>
-            </div>
-          ))}
-        </div>
-      </Card>
-
-      {/* Supported models quick reference */}
-      <Card title="Supported models" subtitle="Use any of these as the model field — the gateway routes to the right provider automatically">
-        <div style={{ display:"grid", gridTemplateColumns:"repeat(4,1fr)", gap:10 }}>
-          {[
-            { provider:"OpenAI",    color:T.info,   models:["gpt-4.1","gpt-4.1-mini","gpt-4o","gpt-4o-mini","o3","o4-mini"] },
-            { provider:"Anthropic", color:T.warn,   models:["claude-opus-4-5","claude-sonnet-4-5","claude-haiku-4-5"] },
-            { provider:"Google",    color:T.accent, models:["gemini-2.5-pro","gemini-2.0-flash","gemini-1.5-pro"] },
-            { provider:"Local",     color:T.purple, models:["llama-3.1-70b-local","llama-3.1-8b-local"] },
-          ].map(g => (
-            <div key={g.provider} style={{ background:T.panelHi, border:`1px solid ${T.border}`, borderRadius:6, padding:"12px 14px" }}>
-              <div style={{ fontFamily:FONT_MONO, fontSize:10, letterSpacing:"0.12em", textTransform:"uppercase", color:g.color, marginBottom:10 }}>{g.provider}</div>
-              <div style={{ display:"flex", flexDirection:"column", gap:5 }}>
-                {g.models.map(m => (
-                  <code key={m} style={{ fontSize:11, fontFamily:FONT_MONO, color:T.textDim, background:T.bg, padding:"2px 6px", borderRadius:3, display:"block" }}>{m}</code>
-                ))}
-              </div>
-            </div>
-          ))}
-        </div>
-        <div style={{ marginTop:12, fontSize:11, color:T.textMute, fontFamily:FONT_MONO }}>
-          Requires the corresponding API key to be configured in <strong style={{ color:T.accent }}>Settings → Provider Keys</strong>.
-        </div>
-      </Card>
-
-      <SectionHeader n="03" title="Code examples" desc="Copy-paste snippets for your stack — Python, Anthropic SDK, LangChain, Node.js, curl" />
-
-      {/* Code snippets */}
-      <Card title="Python" subtitle="Works with any LLM — change the model name to switch between OpenAI, Anthropic, Google, or local">
-        <CodeBlock id="python" code={pythonSnippet} />
-      </Card>
-
-      <Card title="Anthropic SDK (native)" subtitle="Teams using the Anthropic SDK directly — same one-line swap, full Anthropic Messages API + streaming">
-        <CodeBlock id="anthropic" code={anthropicSnippet} />
-      </Card>
-
-      <Card title="LangChain" subtitle="Drop-in for any LangChain LLM — route GPT, Claude, Gemini through one gateway">
-        <CodeBlock id="langchain" code={langchainSnippet} />
-      </Card>
-
-      <Card title="Node.js" subtitle="TypeScript / JavaScript agents — any model, one endpoint">
-        <CodeBlock id="nodejs" code={nodejsSnippet} />
-      </Card>
-
-      <Card title="curl" subtitle="Test the connection from a terminal">
-        <CodeBlock id="curl" code={curlSnippet} />
-      </Card>
-
-      <SectionHeader n="04" title="How it works & security" desc="The enforcement pipeline, fail-mode behavior, and security posture" />
-
-      {/* What happens on each call */}
-      <Card title="What happens on every agent call" subtitle="The enforcement pipeline">
-        <div style={{ display:"flex", flexDirection:"column", gap:0 }}>
-          {[
-            { n:"1", label:"Auth + org resolved",  color:T.info,   desc:"JWT or API key is validated. The caller's organization is resolved from the database — never from the token. Null org_id is a hard 401." },
-            { n:"2", label:"PII scan",             color:T.warn,   desc:"Prompt is scanned for API keys, passwords, credit card numbers, and PII. Findings are logged to the audit trail." },
-            { n:"3", label:"Model policy check",   color:T.info,   desc:"Request is checked against your team's policy rules. Blocked model → HTTP 403." },
-            { n:"4", label:"Budget check",         color:T.crit,   desc:"Current team/agent spend is compared to budget rules. Over limit with action=block → HTTP 429." },
-            { n:"5", label:"Credential resolution",color:T.accent, desc:"Your org's encrypted provider key is decrypted and used to build the upstream client. No credential configured → HTTP 402. No fallback to shared keys." },
-            { n:"6", label:"LLM call",             color:T.accent, desc:"Request is forwarded to the provider using your org's own key — billed to your account, not a shared pool." },
-            { n:"7", label:"Telemetry saved",      color:T.purple, desc:"Tokens, cost, latency, model, team, agent, and security findings are stored — scoped to your org. No other tenant can read your records." },
-          ].map((s, i, arr) => (
-            <div key={s.n} style={{ display:"flex", gap:16, paddingBottom: i<arr.length-1 ? 0 : 0 }}>
-              <div style={{ display:"flex", flexDirection:"column", alignItems:"center", flexShrink:0 }}>
-                <div style={{ width:28, height:28, borderRadius:"50%", background:`${s.color}20`, border:`1px solid ${s.color}44`, display:"flex", alignItems:"center", justifyContent:"center", fontFamily:FONT_MONO, fontSize:11, color:s.color, fontWeight:600 }}>{s.n}</div>
-                {i < arr.length - 1 && <div style={{ width:1, flex:1, background:T.border, minHeight:20, margin:"4px 0" }}/>}
-              </div>
-              <div style={{ paddingBottom:16 }}>
-                <div style={{ fontFamily:FONT_MONO, fontSize:12, color:s.color, marginBottom:4 }}>{s.label}</div>
-                <div style={{ fontSize:13, color:T.textDim, lineHeight:1.6 }}>{s.desc}</div>
-              </div>
-            </div>
-          ))}
-        </div>
-      </Card>
-
-      {/* Guard modes */}
-      <Card title="Guard modes — Visibility First → Governance Later" subtitle="Graduate each team from observe to enforce independently, without disrupting others">
-        <div style={{ display:"grid", gridTemplateColumns:"repeat(3,1fr)", gap:14, marginBottom:14 }}>
-          {[
-            { mode:"observe",  color:T.info,   label:"Observe",  desc:"Evaluate + log + count shadow-blocks. Never blocks traffic. Start here — get data, review what would have been blocked, before committing to enforce." },
-            { mode:"alert",    color:T.warn,   label:"Alert",    desc:"Evaluate + log + fire security alerts. Still never blocks. Use when you want to monitor violations in real time without risking agent downtime." },
-            { mode:"enforce",  color:T.crit,   label:"Enforce",  desc:"Evaluate + act. Policy blocks return 403, budget blocks return 429. Graduate a team here only after reviewing its shadow-block history in the Alerts and Budgets pages." },
-          ].map(m => (
-            <div key={m.mode} style={{ background:T.panelHi, border:`1px solid ${m.color}44`, borderRadius:6, padding:"14px 16px" }}>
-              <div style={{ display:"flex", alignItems:"center", gap:7, marginBottom:8 }}>
-                <span style={{ width:8, height:8, borderRadius:"50%", background:m.color, flexShrink:0 }} />
-                <span style={{ fontFamily:FONT_MONO, fontSize:12, color:m.color, fontWeight:600 }}>{m.label}</span>
-              </div>
-              <div style={{ fontSize:12, color:T.textDim, lineHeight:1.6 }}>{m.desc}</div>
-            </div>
-          ))}
-        </div>
-        <div style={{ fontSize:11, color:T.textMute, fontFamily:FONT_MONO, lineHeight:1.7 }}>
-          The platform default is set by the <code style={{ color:T.info }}>GUARD_MODE</code> env var.
-          Per-team overrides live in <strong style={{ color:T.accent }}>Settings → Guard Modes</strong> — change one team without touching others.
-          The <em>Would block (30d)</em> column shows how many requests would have been blocked in enforce mode — watch it before graduating.
-        </div>
-      </Card>
-
-      {/* Security posture */}
-      <Card title="Security posture" subtitle="What we do and don't do — for enterprise conversations">
-        <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:14, marginBottom:12 }}>
-          {[
-            { label:"Data in transit",       val:"TLS 1.2+ (via your reverse proxy / load balancer)", color:T.accent },
-            { label:"Auth",                  val:"HS256 JWT, 8h expiry, per-user roles (admin / analyst / viewer). API keys for production agents (gk-prefix, stored as SHA-256 hash).", color:T.accent },
-            { label:"Provider key isolation",val:"Each org's API keys stored as Fernet ciphertext (AES-128-CBC + HMAC-SHA256). Only the last 4 chars retained for display. Never decrypted to show; never returned by any API endpoint.", color:T.accent },
-            { label:"Tenant isolation",      val:"Every telemetry record carries organization_id NOT NULL. All four read paths (telemetry, summary, audit, security/alerts) filter by the caller's org. Cross-org reads are architecturally impossible — accepted via live two-directional test.", color:T.accent },
-            { label:"Audit log",             val:"Every LLM call logged with team, agent, model, tokens, cost, PII findings, org_id, and block reason. Immutable once written.", color:T.accent },
-            { label:"Data residency",        val:"All data stays in your deployment — no telemetry leaves your environment.", color:T.accent },
-            { label:"SOC 2",                 val:"Pre-certification. Full audit log, RBAC, secrets isolation, and tenant isolation in place. Formal certification roadmap available on request.", color:T.warn },
-          ].map(i => (
-            <div key={i.label} style={{ display:"flex", gap:10, alignItems:"flex-start" }}>
-              <span style={{ color:i.color, fontFamily:FONT_MONO, fontSize:13, flexShrink:0 }}>{i.color === T.accent ? "✓" : "○"}</span>
-              <div>
-                <div style={{ fontSize:12, color:T.text, fontFamily:FONT_MONO, marginBottom:2 }}>{i.label}</div>
-                <div style={{ fontSize:12, color:T.textDim, lineHeight:1.5 }}>{i.val}</div>
-              </div>
-            </div>
-          ))}
-        </div>
-      </Card>
-
-    </div>
-  );
-}
 
 // ─── Settings page (admin only) ───────────────────────────────────────────────
 const GUARD_MODE_META = {
