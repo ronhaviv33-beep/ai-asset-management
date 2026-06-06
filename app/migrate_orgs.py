@@ -92,6 +92,22 @@ def run():
             # Table exists with id — just ensure organization_id column is present
             _add_column_if_missing(conn, "roles", "organization_id", "INTEGER NOT NULL DEFAULT 1 REFERENCES organizations(id)")
 
+        # Same fix for guard_modes — may be missing organization_id in old DBs.
+        gm_cols = {row[1] for row in conn.execute(_text("PRAGMA table_info(guard_modes)"))}
+        if "organization_id" not in gm_cols and gm_cols:
+            log.info("guard_modes table missing 'organization_id' — adding column")
+            conn.execute(_text("ALTER TABLE guard_modes ADD COLUMN organization_id INTEGER NOT NULL DEFAULT 1 REFERENCES organizations(id)"))
+            conn.execute(_text("CREATE INDEX IF NOT EXISTS ix_guard_modes_organization_id ON guard_modes(organization_id)"))
+            log.info("guard_modes.organization_id added.")
+
+        # Same fix for teams table.
+        teams_cols = {row[1] for row in conn.execute(_text("PRAGMA table_info(teams)"))}
+        if "organization_id" not in teams_cols and teams_cols:
+            log.info("teams table missing 'organization_id' — adding column")
+            conn.execute(_text("ALTER TABLE teams ADD COLUMN organization_id INTEGER NOT NULL DEFAULT 1 REFERENCES organizations(id)"))
+            conn.execute(_text("CREATE INDEX IF NOT EXISTS ix_teams_organization_id ON teams(organization_id)"))
+            log.info("teams.organization_id added.")
+
     log.info("Column migration complete.")
 
     db = SessionLocal()
