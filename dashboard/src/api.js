@@ -229,3 +229,43 @@ export async function fetchHealth() {
   if (!r.ok) throw new Error('Health check failed')
   return r.json()
 }
+
+// ── Role management ───────────────────────────────────────────────────────────
+
+export async function fetchRoles() {
+  const r = await authFetch(`${BASE}/roles`)
+  if (!r || !r.ok) throw new Error('Failed to fetch roles')
+  return r.json()
+}
+
+export async function createRole(data) {
+  const r = await authFetch(`${BASE}/roles`, {
+    method: 'POST',
+    body: JSON.stringify(data),
+  })
+  if (!r || !r.ok) {
+    const err = await r.json().catch(() => ({}))
+    throw new Error(err.detail || 'Failed to create role')
+  }
+  return r.json()
+}
+
+export async function updateRole(name, data) {
+  const r = await authFetch(`${BASE}/roles/${encodeURIComponent(name)}`, {
+    method: 'PATCH',
+    body: JSON.stringify(data),
+  })
+  if (!r || !r.ok) {
+    const err = await r.json().catch(() => ({}))
+    throw new Error(err.detail || 'Failed to update role')
+  }
+  return r.json()
+}
+
+export async function deleteRole(name) {
+  const r = await authFetch(`${BASE}/roles/${encodeURIComponent(name)}`, { method: 'DELETE' })
+  if (!r || !r.ok) {
+    const err = await r.json().catch(() => ({}))
+    throw new Error(err.detail || 'Failed to delete role')
+  }
+}

@@ -100,6 +100,24 @@ class ProviderCredential(Base):
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
 
 
+class Role(Base):
+    """
+    DB-managed role definitions. Each role declares which dashboard pages it can access
+    (pages JSON array) and which data/action capabilities it holds (can JSON array).
+    The three seed roles (admin, analyst, viewer) are upserted at startup.
+    """
+    __tablename__ = "roles"
+
+    name: Mapped[str] = mapped_column(String(64), primary_key=True)
+    label: Mapped[str] = mapped_column(String(64))
+    color: Mapped[str] = mapped_column(String(32))           # hex color for UI
+    pages: Mapped[str] = mapped_column(Text, default="[]")   # JSON list of page ids
+    can: Mapped[str] = mapped_column(Text, default="[]")     # JSON list of capabilities
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+    )
+
+
 class PolicyRule(Base):
     __tablename__ = "policy_rules"
 

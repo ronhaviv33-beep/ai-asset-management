@@ -124,6 +124,33 @@ async def require_admin(user=Depends(get_current_user)):
     return user
 
 
+def require_page_access(page: str):
+    """
+    Dependency factory: enforces that the caller's role includes `page` in its
+    DB-defined pages list. Unknown roles → 403 (deny-by-default, same rule as
+    the frontend canSeePage helper).
+
+    Usage:
+        @app.get("/cost", dependencies=[Depends(require_page_access("cost"))])
+    """
+    import json as _json
+
+    async def _check(
+        user=Depends(get_current_user),
+        db: "Session" = Depends(get_db),
+    ):
+        from app.models import Role as RoleModel
+        role = db.query(RoleModel).filter(RoleModel.name == user.role).first()
+        if role is None:
+            raise HTTPException(status_code=403, detail=f"Role '{user.role}' is not configured")
+        pages = _json.loads(role.pages or "[]")
+        if page not in pages:
+            raise HTTPException(status_code=403, detail=f"Role '{user.role}' cannot access page '{page}'")
+        return user
+
+    return _check
+
+
 async def get_proxy_caller(
     credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
     db: Session = Depends(get_db),

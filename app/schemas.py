@@ -140,19 +140,47 @@ class ChatResponse(BaseModel):
 
 # ── Security scan ─────────────────────────────────────────────────────────────
 
+# ── Roles ─────────────────────────────────────────────────────────────────────
+
+class RoleOut(BaseModel):
+    name: str
+    label: str
+    color: str
+    pages: list[str]
+    can: list[str]
+    model_config = {"from_attributes": True}
+
+
+class RoleCreate(BaseModel):
+    name: str = Field(..., min_length=1, max_length=64, pattern=r"^[a-z0-9_-]+$")
+    label: str = Field(..., min_length=1, max_length=64)
+    color: str = Field(default="#7A8499", pattern=r"^#[0-9a-fA-F]{6}$")
+    pages: list[str] = Field(default_factory=list)
+    can: list[str] = Field(default_factory=list)
+
+
+class RoleUpdate(BaseModel):
+    label: str | None = Field(default=None, min_length=1, max_length=64)
+    color: str | None = Field(default=None, pattern=r"^#[0-9a-fA-F]{6}$")
+    pages: list[str] | None = None
+    can: list[str] | None = None
+
+
 # ── Auth / Users ─────────────────────────────────────────────────────────────
 
 class UserCreate(BaseModel):
     email: str = Field(..., examples=["ron@company.com"])
     name: str = Field(..., examples=["Ron Haviv"])
     password: str = Field(..., min_length=8)
-    role: str = Field(default="analyst", pattern="^(admin|analyst|viewer)$")
+    # Role validated against DB roles table in the route handler (not a hardcoded regex)
+    role: str = Field(default="analyst", min_length=1, max_length=64)
     team: str = Field(default="")
 
 
 class UserUpdate(BaseModel):
     name: str | None = None
-    role: str | None = Field(default=None, pattern="^(admin|analyst|viewer)$")
+    # Role validated against DB roles table in the route handler when present
+    role: str | None = Field(default=None, min_length=1, max_length=64)
     team: str | None = None
     is_active: bool | None = None
     password: str | None = Field(default=None, min_length=8)

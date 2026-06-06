@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useEffect, useCallback, useRef, createContext, useContext } from "react";
-import { login as apiLogin, fetchMe, fetchUsers, createUser, updateUser, deleteUser, getToken, setToken, authFetch, fetchKeyStatuses, updateKey, BASE, fetchApiKeys, createApiKey, revokeApiKey, deleteApiKey, fetchGuardModes, setGuardMode, fetchHealth, fetchProviderCredentials, upsertProviderCredential, deleteProviderCredential } from "./api.js";
+import { login as apiLogin, fetchMe, fetchUsers, createUser, updateUser, deleteUser, getToken, setToken, authFetch, fetchKeyStatuses, updateKey, BASE, fetchApiKeys, createApiKey, revokeApiKey, deleteApiKey, fetchGuardModes, setGuardMode, fetchHealth, fetchProviderCredentials, upsertProviderCredential, deleteProviderCredential, fetchRoles, createRole, updateRole, deleteRole } from "./api.js";
 import {
   LineChart, Line, AreaChart, Area, BarChart, Bar,
   XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid,
@@ -1293,7 +1293,8 @@ function AuditLogTable({ audit, hasMore = false, loadingMore = false, onLoadMore
 // ─── Security page ────────────────────────────────────────────────────────────
 function SecurityPage() {
   const currentUser = useUser();
-  const isAdmin = canSeePage(currentUser, "settings");
+  const roles = useRoles();
+  const isAdmin = canSeePage(currentUser, "settings", roles);
 
   const [alerts,    setAlerts]    = useState([]);
   const [policies,      setPolicies]      = useState([]);
@@ -1544,6 +1545,10 @@ function SecurityPage() {
 const UserContext = createContext(null);
 const useUser = () => useContext(UserContext);
 
+// Roles loaded from the server at app init; keyed by role name for O(1) lookup
+const RolesContext = createContext({});
+const useRoles = () => useContext(RolesContext);
+
 const ROLES = {
   // pages  — controls navigation visibility and page-level UI gates
   // can    — explicit data/action capabilities not expressible as page visibility
@@ -1552,19 +1557,20 @@ const ROLES = {
   viewer:  { label:"Viewer",  color: T.info,   pages: ["home","overview","cost","agents","models","workflows","alerts","security"],                                                              can: [] },
 };
 
-// deny-by-default: unknown/null role → false, never crashes, never leaks
-function canSeePage(user, page) {
-  return (ROLES[user?.role]?.pages ?? []).includes(page);
+// deny-by-default: unknown/null role → false, never crashes, never leaks.
+// `rolesMap` defaults to the hardcoded ROLES during the brief init window before
+// the server roles have loaded; once loaded, components pass useRoles() here.
+function canSeePage(user, page, rolesMap = ROLES) {
+  return (rolesMap[user?.role]?.pages ?? []).includes(page);
 }
 
-// deny-by-default capability check — for data/action permissions that aren't page-visibility
-function userCan(user, capability) {
-  return (ROLES[user?.role]?.can ?? []).includes(capability);
+function userCan(user, capability, rolesMap = ROLES) {
+  return (rolesMap[user?.role]?.can ?? []).includes(capability);
 }
 
 // router alias — delegates to canSeePage so deny-by-default lives in one place
-function canAccess(role, page) {
-  return canSeePage({ role }, page);
+function canAccess(role, page, rolesMap = ROLES) {
+  return canSeePage({ role }, page, rolesMap);
 }
 
 // ─── Login Page ───────────────────────────────────────────────────────────────
@@ -1625,6 +1631,7 @@ function LoginPage({ onLogin }) {
 }
 
 function SortableUsersTable({ users, currentUser, editing, editSaving, setEditing, saveEdit, cancelEdit, handleToggle, handleDelete, inlineInput, inlineSelect, onChangePassword }) {
+  const roles = useRoles();
   const { sortKey, sortDir, toggle, sort } = useSortable("created_at");
   const colKey = { "Name":"name","Email":"email","Role":"role","Team":"team","Status":"is_active","Created":"created_at" };
   const sorted = sort(users, (u, k) => {
@@ -1656,8 +1663,8 @@ function SortableUsersTable({ users, currentUser, editing, editSaving, setEditin
               <td style={{ padding:"12px 8px", fontFamily:FONT_MONO, fontSize:11, color:T.textDim }}>{u.email}</td>
               <td style={{ padding:"10px 8px" }}>
                 {isEditing
-                  ? inlineSelect(editing.role, v => setEditing({...editing, role:v}), Object.entries(ROLES).map(([r, m]) => [r, m.label]))
-                  : <Pill color={ROLES[u.role]?.color ?? T.textDim}>{u.role}</Pill>}
+                  ? inlineSelect(editing.role, v => setEditing({...editing, role:v}), Object.entries(roles).map(([r, m]) => [r, m.label]))
+                  : <Pill color={roles[u.role]?.color ?? T.textDim}>{u.role}</Pill>}
               </td>
               <td style={{ padding:"10px 8px" }}>
                 {isEditing
@@ -1859,6 +1866,7 @@ function ApiKeysPage() {
 
 function UsersPage() {
   const currentUser = useUser();
+  const roles = useRoles();
   const [users,    setUsers]    = useState([]);
   const [loading,  setLoading]  = useState(true);
   const [form,     setForm]     = useState({ email:"", name:"", password:"", role:"analyst", team:"" });
@@ -1970,7 +1978,7 @@ function UsersPage() {
             <label style={{ fontSize:9, fontFamily:FONT_MONO, letterSpacing:"0.12em", textTransform:"uppercase", color:T.textMute }}>Role</label>
             <select value={form.role} onChange={e => setForm({...form, role:e.target.value})}
               style={{ background:T.panelHi, color:T.text, border:`1px solid ${T.border}`, padding:"6px 10px", borderRadius:4, fontSize:12, fontFamily:FONT_MONO, minWidth:120 }}>
-              {Object.entries(ROLES).map(([r, m]) => <option key={r} value={r}>{m.label}</option>)}
+              {Object.entries(roles).map(([r, m]) => <option key={r} value={r}>{m.label}</option>)}
             </select>
           </div>
           <button type="submit" disabled={saving}
@@ -2036,7 +2044,8 @@ const CHAT_SESSION_KEY = "guardChatSessionUuid";
 
 function ChatPage() {
   const user = useUser();
-  const isAdmin = userCan(user, "view_all_sessions");
+  const roles = useRoles();
+  const isAdmin = userCan(user, "view_all_sessions", roles);
 
   const [messages,      setMessages]      = useState([]);
   const [input,         setInput]         = useState("");
@@ -2363,7 +2372,7 @@ function ChatPage() {
   );
 
   const fmtSecs = (s) => s >= 60 ? `${Math.floor(s/60)}m ${s%60}s` : `${s}s`;
-  const roleColor = ROLES[user?.role]?.color ?? T.textDim;
+  const roleColor = roles[user?.role]?.color ?? T.textDim;
 
   if (restoring) return (
     <div style={{ display:"flex", alignItems:"center", justifyContent:"center", height:300, color:T.textDim, fontFamily:FONT_MONO, fontSize:13, gap:8 }}>
@@ -2407,7 +2416,7 @@ function ChatPage() {
                   return visible.map(s => {
                   const isMe = s.session_uuid === sessionUuid;
                   const idleMins = Math.floor((Date.now() - new Date(s.last_activity_at).getTime()) / 60000);
-                  const rc = ROLES[s.user_role]?.color ?? T.textDim;
+                  const rc = roles[s.user_role]?.color ?? T.textDim;
                   return (
                     <div key={s.session_uuid}
                       style={{ background: isMe ? `${T.accent}10` : T.panelHi, border:`1px solid ${isMe ? T.accent+"44" : T.border}`, borderRadius:6, padding:"10px 12px", display:"flex", flexDirection:"column", gap:5 }}>
@@ -2472,7 +2481,7 @@ function ChatPage() {
                   return visible.map(s => {
                   const isActive = s.is_active;
                   const isMe = s.session_uuid === sessionUuid;
-                  const rc = ROLES[s.user_role]?.color ?? T.textDim;
+                  const rc = roles[s.user_role]?.color ?? T.textDim;
                   const when = new Date(s.last_activity_at);
                   const timeAgo = (() => {
                     const diff = (Date.now() - when.getTime()) / 1000;
@@ -2745,7 +2754,8 @@ function ChatPage() {
 // ─── Integrations page ────────────────────────────────────────────────────────
 function IntegrationsPage({ onNavigate }) {
   const currentUser = useUser();
-  const isAdmin = canSeePage(currentUser, "apikeys");
+  const roles = useRoles();
+  const isAdmin = canSeePage(currentUser, "apikeys", roles);
   const [copied,    setCopied]    = useState(null);
   const [apiKey,    setApiKey]    = useState("");
   const [teamName,  setTeamName]  = useState(currentUser?.team || "my-team");
@@ -3395,6 +3405,218 @@ function ProviderCredentialsSection() {
 }
 
 
+// ─── Role management section ──────────────────────────────────────────────────
+const ALL_PAGES = ["home","chat","overview","cost","agents","models","workflows","alerts","budgets","security","users","apikeys","settings","integrations"];
+const ALL_CAPS  = ["view_all_sessions"];
+
+function RolesManagementSection() {
+  const rolesMap = useRoles();
+  const [serverRoles, setServerRoles] = useState(Object.values(rolesMap));
+  const [err, setErr] = useState(null);
+  const [adding, setAdding] = useState(false);
+  const [newForm, setNewForm] = useState({ name:"", label:"", color:"#7A8499", pages:[], can:[] });
+  const [saving, setSaving] = useState(false);
+  const [editingRole, setEditingRole] = useState(null); // role name being edited
+
+  const load = useCallback(async () => {
+    try {
+      const data = await fetchRoles();
+      setServerRoles(data);
+    } catch (e) { setErr(e.message); }
+  }, []);
+
+  useEffect(() => { load(); }, [load]);
+
+  const handleCreate = async () => {
+    if (!newForm.name || !newForm.label) { setErr("Name and label are required"); return; }
+    setSaving(true); setErr(null);
+    try {
+      await createRole(newForm);
+      setAdding(false);
+      setNewForm({ name:"", label:"", color:"#7A8499", pages:[], can:[] });
+      await load();
+    } catch (e) { setErr(e.message); }
+    finally { setSaving(false); }
+  };
+
+  const handleDelete = async (name) => {
+    if (!window.confirm(`Delete role "${name}"? Users assigned to it will be unable to log in until reassigned.`)) return;
+    setErr(null);
+    try { await deleteRole(name); await load(); }
+    catch (e) { setErr(e.message); }
+  };
+
+  const togglePage = (role, page) => {
+    const current = role.pages.includes(page) ? role.pages.filter(p => p !== page) : [...role.pages, page];
+    return { ...role, pages: current };
+  };
+
+  const toggleCap = (role, cap) => {
+    const current = role.can.includes(cap) ? role.can.filter(c => c !== cap) : [...role.can, cap];
+    return { ...role, can: current };
+  };
+
+  const saveEdit = async (role) => {
+    setSaving(true); setErr(null);
+    try {
+      await updateRole(role.name, { label: role.label, color: role.color, pages: role.pages, can: role.can });
+      setEditingRole(null);
+      await load();
+    } catch (e) { setErr(e.message); }
+    finally { setSaving(false); }
+  };
+
+  const PageToggle = ({ page, active, onChange }) => (
+    <button onClick={onChange} style={{ padding:"3px 8px", borderRadius:4, fontSize:10, fontFamily:FONT_MONO, cursor:"pointer",
+      background: active ? `${T.accent}22` : T.panelHi,
+      border: `1px solid ${active ? T.accent : T.border}`,
+      color: active ? T.accent : T.textDim }}>
+      {page}
+    </button>
+  );
+
+  return (
+    <Card title="Role Management" subtitle="Define roles and their page access. Changes take effect on next login.">
+      {err && <div style={{ color:T.crit, fontFamily:FONT_MONO, fontSize:12, marginBottom:10 }}>{err}</div>}
+
+      <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
+        {serverRoles.map(role => {
+          const isEditing = editingRole?.name === role.name;
+          const r = isEditing ? editingRole : role;
+          return (
+            <div key={role.name} style={{ background:T.panelHi, border:`1px solid ${T.border}`, borderRadius:8, padding:14 }}>
+              <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom: isEditing ? 12 : 0 }}>
+                <div style={{ width:10, height:10, borderRadius:"50%", background:r.color, flexShrink:0 }}/>
+                {isEditing ? (
+                  <input value={r.label} onChange={e => setEditingRole({...r, label:e.target.value})}
+                    style={{ background:T.panel, color:T.text, border:`1px solid ${T.border}`, padding:"4px 8px", borderRadius:4, fontSize:13, fontWeight:600, width:160 }}/>
+                ) : (
+                  <span style={{ fontSize:13, fontWeight:600, flex:1 }}>{r.label}</span>
+                )}
+                <span style={{ fontSize:10, fontFamily:FONT_MONO, color:T.textMute }}>{role.name}</span>
+                {isEditing && (
+                  <input type="color" value={r.color} onChange={e => setEditingRole({...r, color:e.target.value})}
+                    style={{ width:28, height:28, borderRadius:4, border:"none", background:"none", cursor:"pointer", padding:0 }}/>
+                )}
+                {role.name !== "admin" && !isEditing && (
+                  <button onClick={() => setEditingRole({...role})}
+                    style={{ background:"transparent", border:`1px solid ${T.border}`, color:T.textDim, borderRadius:4, padding:"3px 10px", fontSize:11, fontFamily:FONT_MONO, cursor:"pointer" }}>
+                    Edit
+                  </button>
+                )}
+                {role.name !== "admin" && !isEditing && (
+                  <button onClick={() => handleDelete(role.name)}
+                    style={{ background:`${T.crit}15`, border:`1px solid ${T.crit}44`, color:T.crit, borderRadius:4, padding:"3px 10px", fontSize:11, fontFamily:FONT_MONO, cursor:"pointer" }}>
+                    Delete
+                  </button>
+                )}
+              </div>
+
+              {isEditing && (
+                <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
+                  <div>
+                    <div style={{ fontSize:9, fontFamily:FONT_MONO, letterSpacing:"0.12em", textTransform:"uppercase", color:T.textMute, marginBottom:6 }}>Pages</div>
+                    <div style={{ display:"flex", flexWrap:"wrap", gap:5 }}>
+                      {ALL_PAGES.map(p => (
+                        <PageToggle key={p} page={p} active={r.pages.includes(p)} onChange={() => setEditingRole(togglePage(r, p))}/>
+                      ))}
+                    </div>
+                  </div>
+                  <div>
+                    <div style={{ fontSize:9, fontFamily:FONT_MONO, letterSpacing:"0.12em", textTransform:"uppercase", color:T.textMute, marginBottom:6 }}>Capabilities</div>
+                    <div style={{ display:"flex", flexWrap:"wrap", gap:5 }}>
+                      {ALL_CAPS.map(c => (
+                        <PageToggle key={c} page={c} active={r.can.includes(c)} onChange={() => setEditingRole(toggleCap(r, c))}/>
+                      ))}
+                    </div>
+                  </div>
+                  <div style={{ display:"flex", gap:8, marginTop:4 }}>
+                    <button onClick={() => saveEdit(r)} disabled={saving}
+                      style={{ background:T.accent, color:T.bg, border:"none", borderRadius:4, padding:"6px 16px", fontSize:11, fontFamily:FONT_MONO, fontWeight:600, cursor:"pointer", opacity:saving?0.6:1 }}>
+                      {saving ? "Saving…" : "Save"}
+                    </button>
+                    <button onClick={() => setEditingRole(null)}
+                      style={{ background:"transparent", border:`1px solid ${T.border}`, color:T.textDim, borderRadius:4, padding:"6px 12px", fontSize:11, fontFamily:FONT_MONO, cursor:"pointer" }}>
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {!isEditing && (
+                <div style={{ marginTop:8, display:"flex", flexWrap:"wrap", gap:4 }}>
+                  {role.pages.map(p => (
+                    <span key={p} style={{ fontSize:9, fontFamily:FONT_MONO, color:T.textMute, background:T.panel, border:`1px solid ${T.border}`, padding:"2px 6px", borderRadius:3 }}>{p}</span>
+                  ))}
+                </div>
+              )}
+            </div>
+          );
+        })}
+
+        {!adding && (
+          <button onClick={() => setAdding(true)}
+            style={{ background:`${T.accent}12`, border:`1px dashed ${T.accentDim}`, color:T.accent, borderRadius:6, padding:"10px 0", fontSize:12, fontFamily:FONT_MONO, cursor:"pointer" }}>
+            + Add Role
+          </button>
+        )}
+
+        {adding && (
+          <div style={{ background:T.panelHi, border:`1px solid ${T.borderHi}`, borderRadius:8, padding:14, display:"flex", flexDirection:"column", gap:10 }}>
+            <div style={{ fontSize:12, fontWeight:600, color:T.text }}>New Role</div>
+            <div style={{ display:"flex", gap:10, flexWrap:"wrap" }}>
+              <div style={{ display:"flex", flexDirection:"column", gap:4 }}>
+                <label style={{ fontSize:9, fontFamily:FONT_MONO, letterSpacing:"0.12em", textTransform:"uppercase", color:T.textMute }}>Name (slug)</label>
+                <input placeholder="billing-admin" value={newForm.name} onChange={e => setNewForm({...newForm, name:e.target.value.toLowerCase().replace(/[^a-z0-9_-]/g,"")})}
+                  style={{ background:T.panel, color:T.text, border:`1px solid ${T.border}`, padding:"6px 10px", borderRadius:4, fontSize:12, fontFamily:FONT_MONO, width:140 }}/>
+              </div>
+              <div style={{ display:"flex", flexDirection:"column", gap:4 }}>
+                <label style={{ fontSize:9, fontFamily:FONT_MONO, letterSpacing:"0.12em", textTransform:"uppercase", color:T.textMute }}>Display Label</label>
+                <input placeholder="Billing Admin" value={newForm.label} onChange={e => setNewForm({...newForm, label:e.target.value})}
+                  style={{ background:T.panel, color:T.text, border:`1px solid ${T.border}`, padding:"6px 10px", borderRadius:4, fontSize:12, fontFamily:FONT_MONO, width:160 }}/>
+              </div>
+              <div style={{ display:"flex", flexDirection:"column", gap:4 }}>
+                <label style={{ fontSize:9, fontFamily:FONT_MONO, letterSpacing:"0.12em", textTransform:"uppercase", color:T.textMute }}>Color</label>
+                <input type="color" value={newForm.color} onChange={e => setNewForm({...newForm, color:e.target.value})}
+                  style={{ width:40, height:34, borderRadius:4, border:`1px solid ${T.border}`, background:T.panel, cursor:"pointer", padding:2 }}/>
+              </div>
+            </div>
+            <div>
+              <div style={{ fontSize:9, fontFamily:FONT_MONO, letterSpacing:"0.12em", textTransform:"uppercase", color:T.textMute, marginBottom:6 }}>Pages</div>
+              <div style={{ display:"flex", flexWrap:"wrap", gap:5 }}>
+                {ALL_PAGES.map(p => (
+                  <PageToggle key={p} page={p} active={newForm.pages.includes(p)}
+                    onChange={() => setNewForm(f => ({...f, pages: f.pages.includes(p) ? f.pages.filter(x=>x!==p) : [...f.pages, p]}))}/>
+                ))}
+              </div>
+            </div>
+            <div>
+              <div style={{ fontSize:9, fontFamily:FONT_MONO, letterSpacing:"0.12em", textTransform:"uppercase", color:T.textMute, marginBottom:6 }}>Capabilities</div>
+              <div style={{ display:"flex", flexWrap:"wrap", gap:5 }}>
+                {ALL_CAPS.map(c => (
+                  <PageToggle key={c} page={c} active={newForm.can.includes(c)}
+                    onChange={() => setNewForm(f => ({...f, can: f.can.includes(c) ? f.can.filter(x=>x!==c) : [...f.can, c]}))}/>
+                ))}
+              </div>
+            </div>
+            <div style={{ display:"flex", gap:8 }}>
+              <button onClick={handleCreate} disabled={saving}
+                style={{ background:T.accent, color:T.bg, border:"none", borderRadius:4, padding:"7px 18px", fontSize:11, fontFamily:FONT_MONO, fontWeight:600, cursor:"pointer", opacity:saving?0.6:1 }}>
+                {saving ? "Creating…" : "Create Role"}
+              </button>
+              <button onClick={() => { setAdding(false); setErr(null); }}
+                style={{ background:"transparent", border:`1px solid ${T.border}`, color:T.textDim, borderRadius:4, padding:"7px 12px", fontSize:11, fontFamily:FONT_MONO, cursor:"pointer" }}>
+                Cancel
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+    </Card>
+  );
+}
+
+
 function SettingsPage() {
   const [keys,      setKeys]      = useState([]);
   const [loading,   setLoading]   = useState(true);
@@ -3549,6 +3771,8 @@ function SettingsPage() {
         </table>
       </Card>
 
+      <RolesManagementSection />
+
       {/* Info card */}
       <Card title="How to configure" subtitle="Environment variables are read on server startup">
         <div style={{ display:"flex", flexDirection:"column", gap:10, fontSize:13, color:T.textDim, lineHeight:1.7 }}>
@@ -3593,6 +3817,8 @@ export default function App() {
   // ── Real JWT auth ──
   const [user,         setUser]         = useState(null);
   const [authChecked,  setAuthChecked]  = useState(false);
+  // rolesMap: keyed by role name for O(1) canSeePage/userCan lookups
+  const [rolesMap,     setRolesMap]     = useState(ROLES);
 
   // On mount, validate stored token; also listen for mid-session expiry
   useEffect(() => {
@@ -3600,9 +3826,17 @@ export default function App() {
       const token = getToken();
       if (token) {
         try {
-          const me = await fetchMe();
-          if (me) { setUser(me); }
-          else    { setToken(null); }
+          const [me, serverRoles] = await Promise.all([fetchMe(), fetchRoles().catch(() => null)]);
+          if (me) {
+            setUser(me);
+            if (serverRoles) {
+              const map = {};
+              for (const r of serverRoles) map[r.name] = r;
+              setRolesMap(map);
+            }
+          } else {
+            setToken(null);
+          }
         } catch { setToken(null); }
       }
       setAuthChecked(true);
@@ -3659,11 +3893,11 @@ export default function App() {
   const pageProps = { events: filteredEvents, allTeams, allAgents, A, alerts, savings, risk };
 
   const renderPage = () => {
-    if (!canAccess(user?.role, page)) {
+    if (!canAccess(user?.role, page, rolesMap)) {
       return (
         <div style={{ display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", height:300, gap:12, color:T.textMute, fontFamily:FONT_MONO }}>
           <div style={{ fontSize:24, color:T.crit }}>⊘</div>
-          <div style={{ fontSize:14 }}>Access denied — <strong style={{ color:T.warn }}>{ROLES[user?.role]?.label}</strong> role cannot view this page</div>
+          <div style={{ fontSize:14 }}>Access denied — <strong style={{ color:T.warn }}>{rolesMap[user?.role]?.label}</strong> role cannot view this page</div>
         </div>
       );
     }
@@ -3696,6 +3930,7 @@ export default function App() {
 
   return (
     <UserContext.Provider value={user}>
+    <RolesContext.Provider value={rolesMap}>
     <div style={{ minHeight:"100vh", background:T.bg, color:T.text, fontFamily:FONT_UI, fontSize:14, display:"flex" }}>
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=Geist:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap');
@@ -3721,7 +3956,7 @@ export default function App() {
         <div style={{ fontSize:9, letterSpacing:"0.14em", textTransform:"uppercase", color:T.textMute, fontFamily:FONT_MONO, padding:"0 8px 10px" }}>Telemetry</div>
 
         <nav style={{ display:"flex", flexDirection:"column", gap:2 }}>
-          {PAGES.filter(p => canAccess(user?.role, p.id)).map((p)=>(
+          {PAGES.filter(p => canAccess(user?.role, p.id, rolesMap)).map((p)=>(
             <button key={p.id} onClick={()=>setPage(p.id)}
               style={{ background:page===p.id?T.panelHi:"transparent", border:"none", color:page===p.id?T.text:T.textDim, textAlign:"left", padding:"9px 10px", fontSize:13, borderRadius:4, cursor:"pointer", fontFamily:FONT_UI, display:"flex", alignItems:"center", gap:10, borderLeft:page===p.id?`2px solid ${T.accent}`:"2px solid transparent", transition:"all 0.12s" }}>
               {p.label}
@@ -3736,10 +3971,10 @@ export default function App() {
           {/* User badge */}
           {user && (
             <div style={{ background:T.panelHi, border:`1px solid ${T.border}`, borderRadius:6, padding:"8px 10px", display:"flex", alignItems:"center", gap:8 }}>
-              <div style={{ width:8, height:8, borderRadius:"50%", background: ROLES[user.role]?.color ?? T.textDim, flexShrink:0 }}/>
+              <div style={{ width:8, height:8, borderRadius:"50%", background: rolesMap[user.role]?.color ?? T.textDim, flexShrink:0 }}/>
               <div style={{ flex:1, overflow:"hidden" }}>
                 <div style={{ fontSize:12, fontWeight:500, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{user.name}</div>
-                <div style={{ fontSize:9, fontFamily:FONT_MONO, color: ROLES[user.role]?.color ?? T.textDim, textTransform:"uppercase", letterSpacing:"0.1em" }}>{user.role} · {user.team}</div>
+                <div style={{ fontSize:9, fontFamily:FONT_MONO, color: rolesMap[user.role]?.color ?? T.textDim, textTransform:"uppercase", letterSpacing:"0.1em" }}>{user.role} · {user.team}</div>
               </div>
               <button title="Sign out" onClick={handleLogout}
                 style={{ background:"transparent", border:"none", color:T.textMute, fontSize:12, cursor:"pointer", padding:"2px 4px", lineHeight:1, fontFamily:FONT_MONO }}>⏻</button>
@@ -3784,6 +4019,7 @@ export default function App() {
         {renderPage()}
       </main>
     </div>
+    </RolesContext.Provider>
     </UserContext.Provider>
   );
 }

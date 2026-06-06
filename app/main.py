@@ -24,6 +24,7 @@ from app.schemas import (
     UserCreate, UserUpdate, UserOut, LoginRequest, TokenResponse,
     ApiKeyCreate, ApiKeyOut, ApiKeyCreated,
     GuardModeOut, GuardModeUpdate, HealthResponse,
+    RoleCreate, RoleUpdate, RoleOut,
 )
 from app import telemetry as tel
 from app import budget as bud
@@ -31,9 +32,9 @@ from app import policy as pol
 from app import sessions as sess
 from app.scanner import scan
 from app.client import complete, chat_complete
-from app.auth import hash_password, verify_password, create_token, get_current_user, require_admin, get_proxy_caller, generate_api_key
+from app.auth import hash_password, verify_password, create_token, get_current_user, require_admin, require_page_access, get_proxy_caller, generate_api_key
 from app.client import proxy_chat_complete, proxy_chat_stream, get_client_for_org, invalidate_org_client
-from app.models import calculate_cost, Organization, ProviderCredential, encrypt_credential, decrypt_credential
+from app.models import calculate_cost, Organization, ProviderCredential, encrypt_credential, decrypt_credential, Role as RoleModel
 
 Base.metadata.create_all(bind=engine)
 
@@ -44,6 +45,48 @@ try:
 except Exception as _e:
     import logging as _logging
     _logging.getLogger("aifinops").warning("Org migration warning (non-fatal): %s", _e)
+
+# ── Seed built-in roles (idempotent — INSERT OR IGNORE pattern) ────────────────
+_SEED_ROLES = [
+    {
+        "name": "admin",
+        "label": "Admin",
+        "color": "#FF5C7A",
+        "pages": json.dumps(["home","chat","overview","cost","agents","models","workflows","alerts","budgets","security","users","apikeys","settings","integrations"]),
+        "can":   json.dumps(["view_all_sessions"]),
+    },
+    {
+        "name": "analyst",
+        "label": "Analyst",
+        "color": "#FFB547",
+        "pages": json.dumps(["home","chat","overview","cost","agents","models","workflows","alerts","security","integrations"]),
+        "can":   json.dumps([]),
+    },
+    {
+        "name": "viewer",
+        "label": "Viewer",
+        "color": "#6FA8FF",
+        "pages": json.dumps(["home","overview","cost","agents","models","workflows","alerts","security"]),
+        "can":   json.dumps([]),
+    },
+]
+
+def _seed_roles() -> None:
+    from app.database import SessionLocal
+    db = SessionLocal()
+    try:
+        for r in _SEED_ROLES:
+            if not db.query(RoleModel).filter(RoleModel.name == r["name"]).first():
+                db.add(RoleModel(**r))
+        db.commit()
+    finally:
+        db.close()
+
+try:
+    _seed_roles()
+except Exception as _e:
+    import logging as _logging
+    _logging.getLogger("aifinops").warning("Role seed warning (non-fatal): %s", _e)
 
 _START_TIME = time.time()
 
@@ -341,16 +384,19 @@ async def list_users(db: Session = Depends(get_db), _=Depends(require_admin)):
 
 
 @app.post("/auth/users", response_model=UserOut, status_code=201, tags=["Auth — Users"])
-async def create_user(req: UserCreate, db: Session = Depends(get_db), _=Depends(require_admin)):
+async def create_user(req: UserCreate, db: Session = Depends(get_db), actor=Depends(require_admin)):
     from app.models import User
     if db.query(User).filter(User.email == req.email).first():
         raise HTTPException(status_code=409, detail="Email already registered")
+    if not db.query(RoleModel).filter(RoleModel.name == req.role).first():
+        raise HTTPException(status_code=422, detail=f"Role '{req.role}' does not exist. Create it in Settings → Roles first.")
     user = User(
         email=req.email,
         name=req.name,
         hashed_password=hash_password(req.password),
         role=req.role,
         team=req.team,
+        organization_id=actor.organization_id,
     )
     db.add(user)
     db.commit()
@@ -372,6 +418,9 @@ async def update_user(user_id: int, req: UserUpdate, db: Session = Depends(get_d
         updates["hashed_password"] = hash_password(updates.pop("password"))
     else:
         updates.pop("current_password", None)
+    # Validate new role exists in DB before applying
+    if "role" in updates and not db.query(RoleModel).filter(RoleModel.name == updates["role"]).first():
+        raise HTTPException(status_code=422, detail=f"Role '{updates['role']}' does not exist.")
     # Audit privilege changes as a security event (H-1)
     if "role" in updates and updates["role"] != user.role:
         import logging
@@ -395,6 +444,75 @@ async def delete_user(user_id: int, db: Session = Depends(get_db), current_user=
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
     db.delete(user)
+    db.commit()
+
+
+# ─── Role management ─────────────────────────────────────────────────────────
+
+@app.get("/roles", response_model=list[RoleOut], tags=["Roles"])
+async def list_roles(db: Session = Depends(get_db), _=Depends(get_current_user)):
+    """Return all configured roles. Any authenticated user can read this (needed for dropdowns)."""
+    roles = db.query(RoleModel).order_by(RoleModel.name).all()
+    return [
+        RoleOut(
+            name=r.name,
+            label=r.label,
+            color=r.color,
+            pages=json.loads(r.pages or "[]"),
+            can=json.loads(r.can or "[]"),
+        )
+        for r in roles
+    ]
+
+
+@app.post("/roles", response_model=RoleOut, status_code=201, tags=["Roles"])
+async def create_role(req: RoleCreate, db: Session = Depends(get_db), _=Depends(require_admin)):
+    if db.query(RoleModel).filter(RoleModel.name == req.name).first():
+        raise HTTPException(status_code=409, detail=f"Role '{req.name}' already exists")
+    role = RoleModel(
+        name=req.name,
+        label=req.label,
+        color=req.color,
+        pages=json.dumps(req.pages),
+        can=json.dumps(req.can),
+    )
+    db.add(role)
+    db.commit()
+    db.refresh(role)
+    return RoleOut(name=role.name, label=role.label, color=role.color,
+                   pages=json.loads(role.pages), can=json.loads(role.can))
+
+
+@app.patch("/roles/{role_name}", response_model=RoleOut, tags=["Roles"])
+async def update_role(role_name: str, req: RoleUpdate, db: Session = Depends(get_db), _=Depends(require_admin)):
+    role = db.query(RoleModel).filter(RoleModel.name == role_name).first()
+    if not role:
+        raise HTTPException(status_code=404, detail=f"Role '{role_name}' not found")
+    if req.label is not None:
+        role.label = req.label
+    if req.color is not None:
+        role.color = req.color
+    if req.pages is not None:
+        role.pages = json.dumps(req.pages)
+    if req.can is not None:
+        role.can = json.dumps(req.can)
+    db.commit()
+    db.refresh(role)
+    return RoleOut(name=role.name, label=role.label, color=role.color,
+                   pages=json.loads(role.pages), can=json.loads(role.can))
+
+
+@app.delete("/roles/{role_name}", status_code=204, tags=["Roles"])
+async def delete_role(role_name: str, db: Session = Depends(get_db), _=Depends(require_admin)):
+    if role_name == "admin":
+        raise HTTPException(status_code=400, detail="Cannot delete the admin role")
+    role = db.query(RoleModel).filter(RoleModel.name == role_name).first()
+    if not role:
+        raise HTTPException(status_code=404, detail=f"Role '{role_name}' not found")
+    from app.models import User
+    if db.query(User).filter(User.role == role_name).first():
+        raise HTTPException(status_code=409, detail=f"Cannot delete role '{role_name}' — users are assigned to it")
+    db.delete(role)
     db.commit()
 
 
