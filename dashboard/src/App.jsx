@@ -131,7 +131,7 @@ function apiRecordToEvent(r, idx) {
     status:       "success",
     error:        null,
     afterHours,
-    sensitive:    false,
+    sensitive:    r.sensitive ?? false,
     _liveTeam:  r.team,
     _liveAgent: r.agent,
   };
