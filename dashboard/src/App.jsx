@@ -197,20 +197,26 @@ function genDemoEvents() {
 function useLiveData(intervalMs = 30_000) {
   const [apiRecords, setApiRecords] = useState(null); // null = loading, [] = empty
   const [serverTeams, setServerTeams] = useState([]);
+  const [serverAlerts, setServerAlerts] = useState([]);
   const [lastRefresh, setLastRefresh] = useState(null);
   const [isLive, setIsLive] = useState(false);
 
   const load = useCallback(async () => {
     if (!getToken()) { setApiRecords([]); return; }
     try {
-      const [telR, teamsR] = await Promise.all([
+      const [telR, teamsR, alertsR] = await Promise.all([
         authFetch(`${BASE}/telemetry?limit=1000`),
         fetchTeams().catch(() => []),
+        authFetch(`${BASE}/security/alerts`).catch(() => null),
       ]);
       if (!telR || !telR.ok) throw new Error("API error");
       const data = await telR.json();
       setApiRecords(data);
       setServerTeams(Array.isArray(teamsR) ? teamsR : []);
+      if (alertsR?.ok) {
+        const sa = await alertsR.json();
+        setServerAlerts(Array.isArray(sa) ? sa : []);
+      }
       setIsLive(data.length > 0);
       setLastRefresh(new Date());
     } catch {
@@ -224,7 +230,7 @@ function useLiveData(intervalMs = 30_000) {
     return () => clearInterval(id);
   }, [load, intervalMs]);
 
-  return { apiRecords, serverTeams, lastRefresh, isLive, refresh: load };
+  return { apiRecords, serverTeams, serverAlerts, lastRefresh, isLive, refresh: load };
 }
 
 // ─── Filter / aggregation helpers ────────────────────────────────────────────
@@ -4358,7 +4364,7 @@ export default function App() {
     setUser(null);
   };
 
-  const { apiRecords, serverTeams, lastRefresh, isLive, refresh } = useLiveData(30_000);
+  const { apiRecords, serverTeams, serverAlerts, lastRefresh, isLive, refresh } = useLiveData(30_000);
 
   // Platform guard mode badge (best-effort — silent if unauthenticated)
   const [platformMode, setPlatformMode] = useState(null);
@@ -4393,7 +4399,20 @@ export default function App() {
 
   const filteredEvents = useMemo(() => applyFilters(allEvents, filters), [allEvents, filters]);
   const A       = useMemo(() => agg(filteredEvents),               [filteredEvents]);
-  const alerts  = useMemo(() => runDetections(filteredEvents),     [filteredEvents]);
+  const alerts  = useMemo(() => {
+    const detected = runDetections(filteredEvents);
+    // Patch timestamps from server-stored security alerts (which have the exact
+    // time the backend first persisted each alert) so "X ago" reflects reality.
+    if (serverAlerts.length === 0) return detected;
+    const serverTsByType = {};
+    serverAlerts.forEach(sa => {
+      const t = new Date(sa.ts).getTime();
+      if (!serverTsByType[sa.type] || t > serverTsByType[sa.type]) {
+        serverTsByType[sa.type] = t;
+      }
+    });
+    return detected.map(a => serverTsByType[a.type] ? { ...a, ts: serverTsByType[a.type] } : a);
+  }, [filteredEvents, serverAlerts]);
   const savings = useMemo(() => estimateSavings(filteredEvents),   [filteredEvents]);
   const risk    = useMemo(() => computeRiskScore(filteredEvents, alerts), [filteredEvents, alerts]);
   const critCount = alerts.filter((a)=>a.sev==="critical").length;
