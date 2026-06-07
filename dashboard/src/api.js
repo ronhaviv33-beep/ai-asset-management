@@ -269,3 +269,9 @@ export async function deleteRole(name) {
     throw new Error(err.detail || 'Failed to delete role')
   }
 }
+
+export async function fetchTeams() {
+  const r = await authFetch(`${BASE}/teams`)
+  if (!r || !r.ok) throw new Error('Failed to fetch teams')
+  return r.json()
+}

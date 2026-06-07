@@ -16,7 +16,7 @@ class PageErrorBoundary extends Component {
     return this.props.children;
   }
 }
-import { login as apiLogin, fetchMe, fetchUsers, createUser, updateUser, deleteUser, getToken, setToken, authFetch, fetchKeyStatuses, updateKey, BASE, fetchApiKeys, createApiKey, revokeApiKey, deleteApiKey, fetchGuardModes, setGuardMode, fetchHealth, fetchProviderCredentials, upsertProviderCredential, deleteProviderCredential, fetchRoles, createRole, updateRole, deleteRole } from "./api.js";
+import { login as apiLogin, fetchMe, fetchUsers, createUser, updateUser, deleteUser, getToken, setToken, authFetch, fetchKeyStatuses, updateKey, BASE, fetchApiKeys, createApiKey, revokeApiKey, deleteApiKey, fetchGuardModes, setGuardMode, fetchHealth, fetchProviderCredentials, upsertProviderCredential, deleteProviderCredential, fetchRoles, createRole, updateRole, deleteRole, fetchTeams } from "./api.js";
 import {
   LineChart, Line, AreaChart, Area, BarChart, Bar,
   XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid,
@@ -196,16 +196,21 @@ function genDemoEvents() {
 // ─── Live data hook ───────────────────────────────────────────────────────────
 function useLiveData(intervalMs = 30_000) {
   const [apiRecords, setApiRecords] = useState(null); // null = loading, [] = empty
+  const [serverTeams, setServerTeams] = useState([]);
   const [lastRefresh, setLastRefresh] = useState(null);
   const [isLive, setIsLive] = useState(false);
 
   const load = useCallback(async () => {
     if (!getToken()) { setApiRecords([]); return; }
     try {
-      const r = await authFetch(`${BASE}/telemetry?limit=1000`);
-      if (!r || !r.ok) throw new Error("API error");
-      const data = await r.json();
+      const [telR, teamsR] = await Promise.all([
+        authFetch(`${BASE}/telemetry?limit=1000`),
+        fetchTeams().catch(() => []),
+      ]);
+      if (!telR || !telR.ok) throw new Error("API error");
+      const data = await telR.json();
       setApiRecords(data);
+      setServerTeams(Array.isArray(teamsR) ? teamsR : []);
       setIsLive(data.length > 0);
       setLastRefresh(new Date());
     } catch {
@@ -219,7 +224,7 @@ function useLiveData(intervalMs = 30_000) {
     return () => clearInterval(id);
   }, [load, intervalMs]);
 
-  return { apiRecords, lastRefresh, isLive, refresh: load };
+  return { apiRecords, serverTeams, lastRefresh, isLive, refresh: load };
 }
 
 // ─── Filter / aggregation helpers ────────────────────────────────────────────
@@ -4348,7 +4353,7 @@ export default function App() {
     setUser(null);
   };
 
-  const { apiRecords, lastRefresh, isLive, refresh } = useLiveData(30_000);
+  const { apiRecords, serverTeams, lastRefresh, isLive, refresh } = useLiveData(30_000);
 
   // Platform guard mode badge (best-effort — silent if unauthenticated)
   const [platformMode, setPlatformMode] = useState(null);
@@ -4357,21 +4362,29 @@ export default function App() {
     fetchHealth().then(h => setPlatformMode(h?.platform_mode)).catch(() => {});
   }, [user]);
 
-  // Build event list and metadata from live data or demo fallback
+  // Build event list and metadata from live data or demo fallback.
+  // serverTeams (from /teams) always includes every registered team even if it
+  // has no telemetry yet, so new teams appear in the filter dropdown immediately.
   const { allEvents, allTeams, allAgents } = useMemo(() => {
     if (apiRecords === null) return { allEvents: [], allTeams: TEAMS, allAgents: AGENTS }; // still loading
     if (apiRecords.length === 0) {
-      // No live data — use demo
-      return { allEvents: genDemoEvents(), allTeams: TEAMS, allAgents: AGENTS };
+      // No live data — use demo, but still surface any server-registered teams
+      const extraTeams = serverTeams.map(t => ({ id: `live_team_${t.name.replace(/\s+/g,"_").toLowerCase()}`, org: "org_live", name: t.name }));
+      const merged = extraTeams.length > 0 ? extraTeams : TEAMS;
+      return { allEvents: genDemoEvents(), allTeams: merged, allAgents: AGENTS };
     }
-    const { liveOrg, liveTeams, liveAgents } = buildLiveMetadata(apiRecords);
-    const liveEvents = apiRecords.map(apiRecordToEvent);
+    const { liveTeams, liveAgents } = buildLiveMetadata(apiRecords);
+    // Merge server-registered teams (no telemetry yet) into the dropdown list
+    const liveTeamNames = new Set(liveTeams.map(t => t.name));
+    const extraTeams = serverTeams
+      .filter(t => !liveTeamNames.has(t.name))
+      .map(t => ({ id: `live_team_${t.name.replace(/\s+/g,"_").toLowerCase()}`, org: "org_live", name: t.name }));
     return {
-      allEvents:  liveEvents,
-      allTeams:   liveTeams,
+      allEvents:  apiRecords.map(apiRecordToEvent),
+      allTeams:   [...liveTeams, ...extraTeams],
       allAgents:  liveAgents,
     };
-  }, [apiRecords]);
+  }, [apiRecords, serverTeams]);
 
   const filteredEvents = useMemo(() => applyFilters(allEvents, filters), [allEvents, filters]);
   const A       = useMemo(() => agg(filteredEvents),               [filteredEvents]);
