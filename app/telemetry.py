@@ -67,17 +67,23 @@ def save_blocked(
     return record
 
 
-def get_all(db: Session, organization_id: int | None, skip: int = 0, limit: int = 100) -> list[Telemetry]:
+def get_all(db: Session, organization_id: int | None, skip: int = 0, limit: int = 100,
+            team_scope: str | None = None) -> list[Telemetry]:
     q = db.query(Telemetry).order_by(Telemetry.timestamp.desc())
     q = q.filter(Telemetry.organization_id == organization_id)
+    if team_scope is not None:
+        q = q.filter(Telemetry.team == team_scope)
     return q.offset(skip).limit(limit).all()
 
 
-def get_summary(db: Session, organization_id: int | None) -> TelemetrySummary:
+def get_summary(db: Session, organization_id: int | None,
+                team_scope: str | None = None) -> TelemetrySummary:
     q = db.query(Telemetry).filter(
         Telemetry.blocked == False,
         Telemetry.organization_id == organization_id,
     )
+    if team_scope is not None:
+        q = q.filter(Telemetry.team == team_scope)
     rows = q.all()
     if not rows:
         return TelemetrySummary(
@@ -103,9 +109,13 @@ def get_audit(
     blocked_only: bool = False,
     skip: int = 0,
     limit: int = 100,
+    team_scope: str | None = None,
 ) -> list[Telemetry]:
     q = db.query(Telemetry).order_by(Telemetry.timestamp.desc())
     q = q.filter(Telemetry.organization_id == organization_id)
+    # team_scope (role-based) and team (query param) are independent — both apply
+    if team_scope is not None:
+        q = q.filter(Telemetry.team == team_scope)
     if team:
         q = q.filter(Telemetry.team == team)
     if agent:
@@ -135,7 +145,8 @@ def would_block_counts(db: Session, days: int = 30,
     return counts
 
 
-def get_security_alerts(db: Session, organization_id: int | None) -> list[dict]:
+def get_security_alerts(db: Session, organization_id: int | None,
+                        team_scope: str | None = None) -> list[dict]:
     """Run detection rules against real telemetry and return live alerts."""
     from datetime import datetime, timezone, timedelta
     alerts = []
@@ -144,7 +155,10 @@ def get_security_alerts(db: Session, organization_id: int | None) -> list[dict]:
     week_ago = now - timedelta(days=7)
 
     def _q():
-        return db.query(Telemetry).filter(Telemetry.organization_id == organization_id)
+        q = db.query(Telemetry).filter(Telemetry.organization_id == organization_id)
+        if team_scope is not None:
+            q = q.filter(Telemetry.team == team_scope)
+        return q
 
     # Sensitive data exposure
     sensitive = _q().filter(Telemetry.sensitive == True).all()

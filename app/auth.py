@@ -224,3 +224,46 @@ async def get_proxy_caller(
         }
 
     raise HTTPException(status_code=401, detail="Invalid or revoked API key")
+
+
+# ── Team-scope enforcement helper ────────────────────────────────────────────
+
+_TEAM_SCOPE_DENY = object()  # sentinel: team_scoped role with null/empty team → empty results
+
+
+def resolve_team_scope(user, db: "Session"):
+    """
+    Return value meanings:
+      None            → role is org-wide (team_scoped=False); apply no team filter
+      str             → role is team_scoped=True and user.team is non-empty; filter to this team
+      _TEAM_SCOPE_DENY → role is team_scoped=True but user.team is null/empty; caller must return []
+
+    Source of truth is the DB role row, NOT the token claim. API-key callers
+    (role="client") are always org-wide (they represent a team, not a person).
+    """
+    # API key callers: dict-like object with role="client" — always org-wide
+    role_name = user.role if hasattr(user, "role") else user.get("role", "client")
+    if role_name == "client":
+        return None
+
+    from app.models import Role as RoleModel
+    org_id = user.organization_id if hasattr(user, "organization_id") else user.get("organization_id")
+    role_row = db.query(RoleModel).filter(
+        RoleModel.organization_id == org_id,
+        RoleModel.name == role_name,
+    ).first()
+
+    # Unknown role or team_scoped is None/False → org-wide
+    if role_row is None or not role_row.team_scoped:
+        return None
+
+    # Role is team_scoped=True — must have a non-empty team on the user record
+    team = user.team if hasattr(user, "team") else user.get("team", "")
+    if not team:
+        return _TEAM_SCOPE_DENY  # fail closed
+
+    return team
+
+
+def is_deny_sentinel(v) -> bool:
+    return v is _TEAM_SCOPE_DENY

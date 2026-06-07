@@ -148,6 +148,7 @@ class RoleOut(BaseModel):
     color: str = "#7A8499"
     pages: list[str]
     can: list[str]
+    team_scoped: bool = False
     model_config = {"from_attributes": True}
 
 
@@ -157,6 +158,7 @@ class RoleCreate(BaseModel):
     color: str = Field(default="#7A8499", pattern=r"^#[0-9a-fA-F]{6}$")
     pages: list[str] = Field(default_factory=list)
     can: list[str] = Field(default_factory=list)
+    team_scoped: bool = False
 
 
 class RoleUpdate(BaseModel):
@@ -164,6 +166,7 @@ class RoleUpdate(BaseModel):
     color: str | None = Field(default=None, pattern=r"^#[0-9a-fA-F]{6}$")
     pages: list[str] | None = None
     can: list[str] | None = None
+    team_scoped: bool | None = None
 
 
 # ── Auth / Users ─────────────────────────────────────────────────────────────

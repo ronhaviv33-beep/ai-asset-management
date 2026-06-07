@@ -7,4 +7,5 @@ verify:
 	python tests/test_teams.py
 	python tests/test_guardmode_recheck.py
 	python tests/test_proxy_team_register.py
+	python tests/test_team_scope.py
 	@echo "=== All harnesses passed ==="

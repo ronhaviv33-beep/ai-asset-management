@@ -16,12 +16,14 @@ def create_rule(db: Session, organization_id: int, team: str, agent: str | None,
     return rule
 
 
-def get_rules(db: Session, organization_id: int) -> list[BudgetRule]:
+def get_rules(db: Session, organization_id: int,
+              team_scope: str | None = None) -> list[BudgetRule]:
     try:
-        return (db.query(BudgetRule)
-                  .filter(BudgetRule.organization_id == organization_id)
-                  .order_by(BudgetRule.created_at.desc())
-                  .all())
+        q = (db.query(BudgetRule)
+               .filter(BudgetRule.organization_id == organization_id))
+        if team_scope is not None:
+            q = q.filter(BudgetRule.team == team_scope)
+        return q.order_by(BudgetRule.created_at.desc()).all()
     except Exception:
         # budget_rules may be missing organization_id in pre-migration DBs
         try:
@@ -30,11 +32,15 @@ def get_rules(db: Session, organization_id: int) -> list[BudgetRule]:
             return []
 
 
-def delete_rule(db: Session, rule_id: int, organization_id: int) -> bool:
-    rule = db.query(BudgetRule).filter(
+def delete_rule(db: Session, rule_id: int, organization_id: int,
+                team_scope: str | None = None) -> bool:
+    q = db.query(BudgetRule).filter(
         BudgetRule.id == rule_id,
         BudgetRule.organization_id == organization_id,
-    ).first()
+    )
+    if team_scope is not None:
+        q = q.filter(BudgetRule.team == team_scope)
+    rule = q.first()
     if not rule:
         return False
     db.delete(rule)
@@ -107,8 +113,8 @@ def check(db: Session, organization_id: int, team: str, agent: str) -> dict:
 
 # ─── Status (for dashboard) ───────────────────────────────────────────────────
 
-def get_status(db: Session, organization_id: int) -> list[dict]:
-    rules = get_rules(db, organization_id)
+def get_status(db: Session, organization_id: int, team_scope: str | None = None) -> list[dict]:
+    rules = get_rules(db, organization_id, team_scope=team_scope)
     result = []
     for rule in rules:
         team_for_spend = rule.team if rule.team != "*" else None

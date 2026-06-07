@@ -12,12 +12,14 @@ def create_rule(db: Session, organization_id: int, team: str, rule_type: str, va
     return rule
 
 
-def get_rules(db: Session, organization_id: int) -> list[PolicyRule]:
+def get_rules(db: Session, organization_id: int,
+              team_scope: str | None = None) -> list[PolicyRule]:
     try:
-        return (db.query(PolicyRule)
-                  .filter(PolicyRule.organization_id == organization_id)
-                  .order_by(PolicyRule.created_at.desc())
-                  .all())
+        q = (db.query(PolicyRule)
+               .filter(PolicyRule.organization_id == organization_id))
+        if team_scope is not None:
+            q = q.filter(PolicyRule.team == team_scope)
+        return q.order_by(PolicyRule.created_at.desc()).all()
     except Exception:
         try:
             return db.query(PolicyRule).order_by(PolicyRule.created_at.desc()).all()
@@ -25,11 +27,15 @@ def get_rules(db: Session, organization_id: int) -> list[PolicyRule]:
             return []
 
 
-def delete_rule(db: Session, rule_id: int, organization_id: int) -> bool:
-    rule = db.query(PolicyRule).filter(
+def delete_rule(db: Session, rule_id: int, organization_id: int,
+                team_scope: str | None = None) -> bool:
+    q = db.query(PolicyRule).filter(
         PolicyRule.id == rule_id,
         PolicyRule.organization_id == organization_id,
-    ).first()
+    )
+    if team_scope is not None:
+        q = q.filter(PolicyRule.team == team_scope)
+    rule = q.first()
     if not rule:
         return False
     db.delete(rule)

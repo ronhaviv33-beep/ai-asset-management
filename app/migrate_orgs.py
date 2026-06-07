@@ -89,8 +89,9 @@ def run():
             conn.execute(_text("PRAGMA foreign_keys=ON"))
             log.info("roles table rebuilt successfully.")
         else:
-            # Table exists with id — just ensure organization_id column is present
+            # Table exists with id — ensure organization_id and team_scoped columns exist
             _add_column_if_missing(conn, "roles", "organization_id", "INTEGER NOT NULL DEFAULT 1 REFERENCES organizations(id)")
+            _add_column_if_missing(conn, "roles", "team_scoped", "BOOLEAN NOT NULL DEFAULT 0")
 
         # Same fix for guard_modes — may be missing organization_id in old DBs.
         gm_cols = {row[1] for row in conn.execute(_text("PRAGMA table_info(guard_modes)"))}

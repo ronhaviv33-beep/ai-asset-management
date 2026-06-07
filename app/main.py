@@ -34,7 +34,7 @@ from app import policy as pol
 from app import sessions as sess
 from app.scanner import scan
 from app.client import complete, chat_complete
-from app.auth import hash_password, verify_password, create_token, get_current_user, require_admin, require_page_access, get_proxy_caller, generate_api_key
+from app.auth import hash_password, verify_password, create_token, get_current_user, require_admin, require_page_access, get_proxy_caller, generate_api_key, resolve_team_scope, is_deny_sentinel
 from app.client import proxy_chat_complete, proxy_chat_stream, get_client_for_org, invalidate_org_client
 from app.models import calculate_cost, Organization, ProviderCredential, encrypt_credential, decrypt_credential, Role as RoleModel, Team as TeamModel
 
@@ -56,6 +56,7 @@ _SEED_ROLES = [
         "color": "#FF5C7A",
         "pages": json.dumps(["home","chat","overview","cost","agents","models","workflows","alerts","budgets","security","users","apikeys","settings","integrations","onboarding"]),
         "can":   json.dumps(["view_all_sessions"]),
+        "team_scoped": False,   # org-wide: admin sees all teams
     },
     {
         "name": "analyst",
@@ -63,6 +64,7 @@ _SEED_ROLES = [
         "color": "#FFB547",
         "pages": json.dumps(["home","chat","overview","cost","agents","models","workflows","alerts","security","integrations","onboarding"]),
         "can":   json.dumps([]),
+        "team_scoped": True,    # team-scoped: analyst sees only own team's data
     },
     {
         "name": "viewer",
@@ -70,11 +72,13 @@ _SEED_ROLES = [
         "color": "#6FA8FF",
         "pages": json.dumps(["home","overview","cost","agents","models","workflows","alerts","security"]),
         "can":   json.dumps([]),
+        "team_scoped": True,    # team-scoped: viewer sees only own team's data
     },
 ]
 
 def _seed_roles_for_org(db, org_id: int) -> None:
-    """Seed/migrate the 3 default roles for a single org."""
+    """Seed/migrate the 3 default roles for a single org. Insert-only for new rows;
+    backfills team_scoped and pages on existing rows when those fields are stale."""
     for r in _SEED_ROLES:
         existing = db.query(RoleModel).filter(
             RoleModel.organization_id == org_id, RoleModel.name == r["name"]
@@ -91,6 +95,11 @@ def _seed_roles_for_org(db, org_id: int) -> None:
             seed_pages = json.loads(r["pages"])
             if set(seed_pages) != set(pages):
                 existing.pages = r["pages"]
+            # Backfill team_scoped if the column was just added (value will be None/False default).
+            # We only force the seed value when the column is None (never set) — we do NOT
+            # overwrite a value the admin has explicitly changed.
+            if existing.team_scoped is None:
+                existing.team_scoped = r["team_scoped"]
     db.commit()
 
 
@@ -501,6 +510,7 @@ async def list_roles(db: Session = Depends(get_db), actor=Depends(get_current_us
             color=r.color,
             pages=json.loads(r.pages or "[]"),
             can=json.loads(r.can or "[]"),
+            team_scoped=bool(r.team_scoped),
         )
         for r in roles
     ]
@@ -528,6 +538,7 @@ async def create_role(req: RoleCreate, db: Session = Depends(get_db), actor=Depe
         color=req.color,
         pages=json.dumps(req.pages),
         can=json.dumps(req.can),
+        team_scoped=req.team_scoped,
     )
     db.add(role)
     try:
@@ -537,7 +548,8 @@ async def create_role(req: RoleCreate, db: Session = Depends(get_db), actor=Depe
         raise HTTPException(status_code=409, detail=f"Role '{req.name}' already exists (DB constraint: {exc.orig})")
     db.refresh(role)
     return RoleOut(name=role.name, label=role.label, color=role.color,
-                   pages=json.loads(role.pages or "[]"), can=json.loads(role.can or "[]"))
+                   pages=json.loads(role.pages or "[]"), can=json.loads(role.can or "[]"),
+                   team_scoped=bool(role.team_scoped))
 
 
 _ADMIN_REQUIRED_PAGES = frozenset({"settings", "users"})  # admin must always keep these
@@ -565,10 +577,13 @@ async def update_role(role_name: str, req: RoleUpdate, db: Session = Depends(get
         role.pages = json.dumps(req.pages)
     if req.can is not None:
         role.can = json.dumps(req.can)
+    if req.team_scoped is not None:
+        role.team_scoped = req.team_scoped
     db.commit()
     db.refresh(role)
     return RoleOut(name=role.name, label=role.label, color=role.color,
-                   pages=json.loads(role.pages or "[]"), can=json.loads(role.can or "[]"))
+                   pages=json.loads(role.pages or "[]"), can=json.loads(role.can or "[]"),
+                   team_scoped=bool(role.team_scoped))
 
 
 @app.delete("/roles/{role_name}", status_code=204, tags=["Roles"])
@@ -1134,15 +1149,23 @@ def get_telemetry(
     current_user=Depends(get_current_user),
     _: None = Depends(require_tenancy_hardened),
 ):
+    ts = resolve_team_scope(current_user, db)
+    if is_deny_sentinel(ts):
+        return []
     return _redact_sensitive_records(
-        tel.get_all(db, organization_id=current_user.organization_id, skip=skip, limit=limit),
+        tel.get_all(db, organization_id=current_user.organization_id, skip=skip, limit=limit, team_scope=ts),
         current_user,
     )
 
 
 @app.get("/telemetry/summary", response_model=TelemetrySummary, tags=["GET — Read / Monitor"])
 def get_summary(db: Session = Depends(get_db), current_user=Depends(get_current_user), _: None = Depends(require_tenancy_hardened)):
-    return tel.get_summary(db, organization_id=current_user.organization_id)
+    ts = resolve_team_scope(current_user, db)
+    if is_deny_sentinel(ts):
+        from app.schemas import TelemetrySummary as _TS
+        return _TS(total_requests=0, total_tokens=0, total_cost_usd=0.0,
+                   avg_latency_ms=0.0, models_used=[], teams=[])
+    return tel.get_summary(db, organization_id=current_user.organization_id, team_scope=ts)
 
 
 # ─── Audit log ────────────────────────────────────────────────────────────────
@@ -1159,11 +1182,14 @@ def get_audit(
     current_user=Depends(get_current_user),
     _: None = Depends(require_tenancy_hardened),
 ):
+    ts = resolve_team_scope(current_user, db)
+    if is_deny_sentinel(ts):
+        return []
     records = tel.get_audit(
         db, organization_id=current_user.organization_id,
         team=team, agent=agent,
         sensitive_only=sensitive_only, blocked_only=blocked_only,
-        skip=skip, limit=limit,
+        skip=skip, limit=limit, team_scope=ts,
     )
     return _redact_sensitive_records(records, current_user)
 
@@ -1182,31 +1208,50 @@ def security_scan(req: ScanRequest, _=Depends(get_current_user)):
 
 @app.get("/security/alerts", tags=["GET — Read / Monitor"])
 def security_alerts(db: Session = Depends(get_db), current_user=Depends(get_current_user), _: None = Depends(require_tenancy_hardened)):
-    return tel.get_security_alerts(db, organization_id=current_user.organization_id)
+    ts = resolve_team_scope(current_user, db)
+    if is_deny_sentinel(ts):
+        return []
+    return tel.get_security_alerts(db, organization_id=current_user.organization_id, team_scope=ts)
 
 
 # ─── Budgets ──────────────────────────────────────────────────────────────────
 
 @app.post("/budgets", response_model=BudgetRuleOut, status_code=201, tags=["POST — Ask / Create"])
 def create_budget(rule: BudgetRuleCreate, db: Session = Depends(get_db), actor=Depends(require_page_access("budgets"))):
-    return bud.create_rule(db, organization_id=actor.organization_id, team=rule.team,
+    ts = resolve_team_scope(actor, db)
+    if is_deny_sentinel(ts):
+        raise HTTPException(status_code=403, detail="No team assigned — cannot create budget rules")
+    # Team-scoped users can only create rules for their own team
+    effective_team = ts if ts is not None else rule.team
+    if ts is not None and rule.team != ts:
+        raise HTTPException(status_code=403, detail=f"Team-scoped role may only create rules for team '{ts}'")
+    return bud.create_rule(db, organization_id=actor.organization_id, team=effective_team,
                            agent=rule.agent, limit_usd=rule.limit_usd, period=rule.period, action=rule.action)
 
 
 @app.get("/budgets", response_model=list[BudgetRuleOut], tags=["GET — Read / Monitor"])
 def list_budgets(db: Session = Depends(get_db), actor=Depends(get_current_user)):
-    return bud.get_rules(db, organization_id=actor.organization_id)
+    ts = resolve_team_scope(actor, db)
+    if is_deny_sentinel(ts):
+        return []
+    return bud.get_rules(db, organization_id=actor.organization_id, team_scope=ts)
 
 
 @app.delete("/budgets/{rule_id}", status_code=204, tags=["DELETE — Remove"])
 def delete_budget(rule_id: int, db: Session = Depends(get_db), actor=Depends(require_page_access("budgets"))):
-    if not bud.delete_rule(db, rule_id, organization_id=actor.organization_id):
+    ts = resolve_team_scope(actor, db)
+    if is_deny_sentinel(ts):
+        raise HTTPException(status_code=404, detail="Budget rule not found")
+    if not bud.delete_rule(db, rule_id, organization_id=actor.organization_id, team_scope=ts):
         raise HTTPException(status_code=404, detail="Budget rule not found")
 
 
 @app.get("/budgets/status", response_model=list[BudgetStatusItem], tags=["GET — Read / Monitor"])
 def budget_status(db: Session = Depends(get_db), actor=Depends(get_current_user)):
-    return bud.get_status(db, organization_id=actor.organization_id)
+    ts = resolve_team_scope(actor, db)
+    if is_deny_sentinel(ts):
+        return []
+    return bud.get_status(db, organization_id=actor.organization_id, team_scope=ts)
 
 
 # ─── Chat Sessions ────────────────────────────────────────────────────────────
@@ -1344,17 +1389,28 @@ async def session_chat(session_uuid: str, req: SessionChatRequest, db: Session =
 
 @app.post("/policies", response_model=PolicyRuleOut, status_code=201, tags=["POST — Ask / Create"])
 def create_policy(rule: PolicyRuleCreate, db: Session = Depends(get_db), actor=Depends(require_page_access("settings"))):
+    ts = resolve_team_scope(actor, db)
+    if is_deny_sentinel(ts):
+        raise HTTPException(status_code=403, detail="No team assigned — cannot create policy rules")
+    if ts is not None and rule.team != ts:
+        raise HTTPException(status_code=403, detail=f"Team-scoped role may only create rules for team '{ts}'")
     return pol.create_rule(db, organization_id=actor.organization_id, team=rule.team, rule_type=rule.rule_type, value=rule.value)
 
 
 @app.get("/policies", response_model=list[PolicyRuleOut], tags=["GET — Read / Monitor"])
 def list_policies(db: Session = Depends(get_db), actor=Depends(get_current_user)):
-    return pol.get_rules(db, organization_id=actor.organization_id)
+    ts = resolve_team_scope(actor, db)
+    if is_deny_sentinel(ts):
+        return []
+    return pol.get_rules(db, organization_id=actor.organization_id, team_scope=ts)
 
 
 @app.delete("/policies/{rule_id}", status_code=204, tags=["DELETE — Remove"])
 def delete_policy(rule_id: int, db: Session = Depends(get_db), actor=Depends(require_page_access("settings"))):
-    if not pol.delete_rule(db, rule_id, organization_id=actor.organization_id):
+    ts = resolve_team_scope(actor, db)
+    if is_deny_sentinel(ts):
+        raise HTTPException(status_code=404, detail="Policy rule not found")
+    if not pol.delete_rule(db, rule_id, organization_id=actor.organization_id, team_scope=ts):
         raise HTTPException(status_code=404, detail="Policy rule not found")
 
 

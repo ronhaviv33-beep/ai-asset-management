@@ -118,6 +118,7 @@ class Role(Base):
     color: Mapped[str] = mapped_column(String(32))           # hex color for UI
     pages: Mapped[str] = mapped_column(Text, default="[]")   # JSON list of page ids
     can: Mapped[str] = mapped_column(Text, default="[]")     # JSON list of capabilities
+    team_scoped: Mapped[bool] = mapped_column(Boolean, default=False)  # True → role sees only own team's data
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
     )
