@@ -38,8 +38,12 @@ COST_PER_1M = {
     "llama-3.1-8b-local":     {"prompt": 0.05,   "completion": 0.05},
 }
 
-# Conservative fallback: gpt-4o pricing rather than floor (gpt-4o-mini).
-# Unknown models fail safe (overestimate) rather than unsafe (underestimate).
+# Fallback for unknown models: gpt-4o rates ($2.50/$10.00 per 1M).
+# This overestimates most models (gpt-4o-mini, open-source proxies) and
+# underestimates frontier models (o3 is $10/$40, Claude Opus is $15/$75).
+# The pricing_estimated flag is always set True when this fires, so the
+# customer knows it's an estimate. Add new models to COST_PER_1M promptly
+# to avoid sustained underestimates on frontier unknowns.
 _DEFAULT_PRICING = {"prompt": 2.50, "completion": 10.00}
 
 # Providers often return dated model strings (gpt-4o-mini-2024-07-18,
