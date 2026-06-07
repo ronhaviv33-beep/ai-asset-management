@@ -10,7 +10,7 @@
   const headers = {
     "Authorization": `Bearer ${API_KEY}`,
     "Content-Type": "application/json",
-    "X-Guard-Team":  "Development",
+    "X-Guard-Team":  "Developer",
     "X-Guard-Agent": "test-loop-agent",
   };
 

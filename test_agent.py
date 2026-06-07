@@ -12,7 +12,7 @@ import time
 import requests
 
 API_KEY = "gk-PkdKHCmt9F6SiLrI9rruHkTCBK-dz8n7SGelbl2zqMQ"
-TEAM    = "Development"
+TEAM    = "Developer"
 AGENT   = "test-loop-agent"
 
 HEADERS = {
