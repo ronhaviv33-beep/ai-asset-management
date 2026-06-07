@@ -1,10 +1,18 @@
+import logging
 import os
+import re
 import uuid as _uuid
 from datetime import datetime, timezone
 from cryptography.fernet import Fernet
 from sqlalchemy import Integer, String, Float, Text, DateTime, Boolean, ForeignKey, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 from app.database import Base
+
+_pricing_log = logging.getLogger("aifinops.pricing")
+
+# When this table was last audited against provider pricing pages.
+# Update this constant whenever you update COST_PER_1M.
+PRICING_LAST_UPDATED = "2025-06-08"
 
 # Cost per 1M tokens (USD) — update as pricing changes
 COST_PER_1M = {
@@ -30,7 +38,40 @@ COST_PER_1M = {
     "llama-3.1-8b-local":     {"prompt": 0.05,   "completion": 0.05},
 }
 
-_DEFAULT_PRICING = {"prompt": 0.15, "completion": 0.60}  # gpt-4o-mini as safe default
+# Conservative fallback: gpt-4o pricing rather than floor (gpt-4o-mini).
+# Unknown models fail safe (overestimate) rather than unsafe (underestimate).
+_DEFAULT_PRICING = {"prompt": 2.50, "completion": 10.00}
+
+# Providers often return dated model strings (gpt-4o-mini-2024-07-18,
+# claude-haiku-4-5-20251001). Normalize to the undated base name so the
+# COST_PER_1M lookup hits instead of silently falling back.
+_DATE_SUFFIX = re.compile(r"-\d{4}-?\d{2}-?\d{2}$")
+
+def _normalize_model(model: str) -> str:
+    return _DATE_SUFFIX.sub("", model)
+
+
+def calculate_cost(model: str, prompt_tokens: int, completion_tokens: int) -> tuple[float, bool]:
+    """Return (cost_usd, pricing_estimated).
+
+    pricing_estimated=True means the model was not found in COST_PER_1M
+    (even after date-suffix normalization) and the conservative fallback
+    was used. Callers must persist this flag so the dashboard can surface
+    estimated costs distinctly from exact ones.
+    """
+    normalized = _normalize_model(model)
+    pricing = COST_PER_1M.get(model) or COST_PER_1M.get(normalized)
+    estimated = pricing is None
+    if estimated:
+        pricing = _DEFAULT_PRICING
+        _pricing_log.warning(
+            "Unknown model %r (normalized: %r) — using conservative fallback pricing "
+            "$%.2f/$%.2f per 1M tokens. Add this model to COST_PER_1M.",
+            model, normalized, pricing["prompt"], pricing["completion"],
+        )
+    prompt_cost = (prompt_tokens / 1_000_000) * pricing["prompt"]
+    completion_cost = (completion_tokens / 1_000_000) * pricing["completion"]
+    return round(prompt_cost + completion_cost, 8), estimated
 
 
 # ─── Envelope encryption for provider credentials ────────────────────────────
@@ -52,13 +93,6 @@ def encrypt_credential(plaintext: str) -> str:
 
 def decrypt_credential(ciphertext: str) -> str:
     return _fernet().decrypt(ciphertext.encode()).decode()
-
-
-def calculate_cost(model: str, prompt_tokens: int, completion_tokens: int) -> float:
-    pricing = COST_PER_1M.get(model, _DEFAULT_PRICING)
-    prompt_cost = (prompt_tokens / 1_000_000) * pricing["prompt"]
-    completion_cost = (completion_tokens / 1_000_000) * pricing["completion"]
-    return round(prompt_cost + completion_cost, 8)
 
 
 class Organization(Base):
@@ -172,6 +206,7 @@ class Telemetry(Base):
     total_tokens: Mapped[int] = mapped_column(Integer, default=0)
     latency_ms: Mapped[float] = mapped_column(Float, default=0.0)
     cost_usd: Mapped[float] = mapped_column(Float, default=0.0)
+    pricing_estimated: Mapped[bool] = mapped_column(Boolean, default=False)
     sensitive: Mapped[bool] = mapped_column(Boolean, default=False)
     sensitive_findings: Mapped[str | None] = mapped_column(Text, nullable=True)  # JSON list
     blocked: Mapped[bool] = mapped_column(Boolean, default=False)

@@ -38,6 +38,7 @@ class TelemetryRecord(BaseModel):
     total_tokens: int
     latency_ms: float
     cost_usd: float
+    pricing_estimated: bool = False
     sensitive: bool = False
     sensitive_findings: str | None = None
     blocked: bool = False
@@ -253,6 +254,7 @@ class HealthResponse(BaseModel):
     platform_mode: str
     circuit_breaker: dict
     tenancy_hardened: bool
+    pricing_last_updated: str = ""
 
 
 class LoginRequest(BaseModel):

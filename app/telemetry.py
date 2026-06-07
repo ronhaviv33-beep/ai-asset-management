@@ -17,6 +17,7 @@ def save(
     sensitive_findings: list[dict] | None = None,
     organization_id: int | None = None,
 ) -> Telemetry:
+    cost_usd, pricing_estimated = calculate_cost(result.model, result.prompt_tokens, result.completion_tokens)
     record = Telemetry(
         organization_id=organization_id,
         team=team,
@@ -28,7 +29,8 @@ def save(
         completion_tokens=result.completion_tokens,
         total_tokens=result.total_tokens,
         latency_ms=result.latency_ms,
-        cost_usd=calculate_cost(result.model, result.prompt_tokens, result.completion_tokens),
+        cost_usd=cost_usd,
+        pricing_estimated=pricing_estimated,
         sensitive=sensitive,
         sensitive_findings=json.dumps(sensitive_findings) if sensitive_findings else None,
         blocked=False,

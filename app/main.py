@@ -36,7 +36,7 @@ from app.scanner import scan
 from app.client import complete, chat_complete
 from app.auth import hash_password, verify_password, create_token, get_current_user, require_admin, require_page_access, get_proxy_caller, generate_api_key, resolve_team_scope, is_deny_sentinel
 from app.client import proxy_chat_complete, proxy_chat_stream, get_client_for_org, invalidate_org_client
-from app.models import calculate_cost, Organization, ProviderCredential, encrypt_credential, decrypt_credential, Role as RoleModel, Team as TeamModel
+from app.models import calculate_cost, PRICING_LAST_UPDATED, Organization, ProviderCredential, encrypt_credential, decrypt_credential, Role as RoleModel, Team as TeamModel
 
 Base.metadata.create_all(bind=engine)
 
@@ -118,6 +118,28 @@ try:
 except Exception as _e:
     import logging as _logging
     _logging.getLogger("aifinops").warning("Role seed warning (non-fatal): %s", _e)
+
+
+def _migrate_pricing_estimated() -> None:
+    """Idempotent: add pricing_estimated column to telemetry if absent.
+    Existing rows backfilled as False (they were priced before this feature;
+    treat as exact rather than overwriting historical data).
+    """
+    from sqlalchemy import inspect as _inspect, text as _text
+    with engine.connect() as conn:
+        cols = {c["name"] for c in _inspect(engine).get_columns("telemetry")}
+        if "pricing_estimated" not in cols:
+            conn.execute(_text(
+                "ALTER TABLE telemetry ADD COLUMN pricing_estimated BOOLEAN NOT NULL DEFAULT 0"
+            ))
+            conn.commit()
+
+
+try:
+    _migrate_pricing_estimated()
+except Exception as _e:
+    import logging as _logging
+    _logging.getLogger("aifinops").warning("pricing_estimated migration warning (non-fatal): %s", _e)
 
 _START_TIME = time.time()
 
@@ -958,6 +980,7 @@ def health(db: Session = Depends(get_db)):
             "tripped_at": _circuit["tripped_at"],
         },
         tenancy_hardened=_TENANCY_HARDENED,
+        pricing_last_updated=PRICING_LAST_UPDATED,
     )
 
 
@@ -1748,13 +1771,15 @@ async def openai_compat_chat(
         organization_id=org_id,
     )
 
+    _cost_usd, _pricing_estimated = calculate_cost(resp_model, pt, ct)
     resp_dict["x_guard"] = {
-        "team":              team,
-        "agent":             agent,
-        "cost_usd":          calculate_cost(resp_model, pt, ct),
-        "latency_ms":        latency_ms,
-        "policy_warnings":   budget_warnings,
-        "security_findings": findings_list,
+        "team":               team,
+        "agent":              agent,
+        "cost_usd":           _cost_usd,
+        "pricing_estimated":  _pricing_estimated,
+        "latency_ms":         latency_ms,
+        "policy_warnings":    budget_warnings,
+        "security_findings":  findings_list,
     }
     return resp_dict
 
@@ -1932,6 +1957,7 @@ async def anthropic_compat_messages(
         organization_id=org_id,
     )
 
+    _anth_cost, _anth_pricing_estimated = calculate_cost(resp_model, pt, ct)
     return {
         "id":            msg_id,
         "type":          "message",
@@ -1945,11 +1971,12 @@ async def anthropic_compat_messages(
             "output_tokens": ct,
         },
         "x_guard": {
-            "team":              team,
-            "agent":             agent,
-            "cost_usd":          calculate_cost(resp_model, pt, ct),
-            "latency_ms":        latency_ms,
-            "policy_warnings":   budget_warnings,
-            "security_findings": findings_list,
+            "team":               team,
+            "agent":              agent,
+            "cost_usd":           _anth_cost,
+            "pricing_estimated":  _anth_pricing_estimated,
+            "latency_ms":         latency_ms,
+            "policy_warnings":    budget_warnings,
+            "security_findings":  findings_list,
         },
     }

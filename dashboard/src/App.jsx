@@ -126,7 +126,8 @@ function apiRecordToEvent(r, idx) {
     tokens_in:    r.prompt_tokens,
     tokens_out:   r.completion_tokens,
     tokens_total: r.total_tokens,
-    cost:         r.cost_usd,
+    cost:              r.cost_usd,
+    pricing_estimated: r.pricing_estimated ?? false,
     latency:      r.latency_ms,
     status:       "success",
     error:        null,
@@ -1269,7 +1270,11 @@ function AuditLogTable({ audit, hasMore = false, loadingMore = false, onLoadMore
                     {r.sensitive ? <Pill color={T.warn}>flagged</Pill> : <span style={{ color:T.textMute, fontFamily:FONT_MONO, fontSize:11 }}>—</span>}
                   </td>
                   <td style={{ padding:"10px 8px", fontFamily:FONT_MONO, fontSize:12, color:T.textDim }}>{r.total_tokens.toLocaleString()}</td>
-                  <td style={{ padding:"10px 8px", fontFamily:FONT_MONO, fontSize:12, color:T.text }}>${r.cost_usd.toFixed(6)}</td>
+                  <td style={{ padding:"10px 8px", fontFamily:FONT_MONO, fontSize:12, color: r.pricing_estimated ? T.warn : T.text }}>
+                    {r.pricing_estimated && <span title="Conservative estimate — model not in pricing table" style={{ marginRight:2 }}>~</span>}
+                    ${r.cost_usd.toFixed(6)}
+                    {r.pricing_estimated && <span style={{ fontSize:9, marginLeft:4, color:T.warn, letterSpacing:"0.06em" }}>est.</span>}
+                  </td>
                   <td style={{ padding:"10px 8px", fontFamily:FONT_MONO, fontSize:10, color: isOpen ? T.accent : T.textMute, userSelect:"none" }}>
                     {isOpen ? "▲" : "▼"}
                   </td>
@@ -4367,10 +4372,14 @@ export default function App() {
   const { apiRecords, serverTeams, serverAlerts, lastRefresh, isLive, refresh } = useLiveData(30_000);
 
   // Platform guard mode badge (best-effort — silent if unauthenticated)
-  const [platformMode, setPlatformMode] = useState(null);
+  const [platformMode,       setPlatformMode]       = useState(null);
+  const [pricingLastUpdated, setPricingLastUpdated] = useState(null);
   useEffect(() => {
     if (!user) return;
-    fetchHealth().then(h => setPlatformMode(h?.platform_mode)).catch(() => {});
+    fetchHealth().then(h => {
+      setPlatformMode(h?.platform_mode);
+      setPricingLastUpdated(h?.pricing_last_updated || null);
+    }).catch(() => {});
   }, [user]);
 
   // Build event list and metadata from live data or demo fallback.
@@ -4540,6 +4549,12 @@ export default function App() {
             <span>last {filters.range}d</span>
             <span style={{ color:T.textMute }}>|</span>
             <span style={{ color:isLive?T.accent:T.warn }}>● {isLive?"live":"demo"}</span>
+            {pricingLastUpdated && (
+              <>
+                <span style={{ color:T.textMute }}>|</span>
+                <span title="Date pricing table was last audited against provider rates" style={{ color:T.textMute }}>pricing as of {pricingLastUpdated}</span>
+              </>
+            )}
           </div>
         </header>
 
