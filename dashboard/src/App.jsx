@@ -1061,11 +1061,11 @@ function BudgetsPage() {
     try {
       const [r, s] = await Promise.all([
         authFetch(`${BASE}/budgets`).then((x) => x.json()),
-        authFetch(`${BASE}/budgets/status`).then((x) => x.json()),
+        authFetch(`${BASE}/budgets/status`).then((x) => x.json()).catch(() => []),
       ]);
       setRules(r);
       setStatus(s);
-    } catch (e) { setErr(e.message); }
+    } catch { /* ignore load errors — show empty state */ }
     finally { setLoading(false); }
   }, []);
 

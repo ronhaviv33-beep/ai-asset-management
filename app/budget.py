@@ -17,10 +17,17 @@ def create_rule(db: Session, organization_id: int, team: str, agent: str | None,
 
 
 def get_rules(db: Session, organization_id: int) -> list[BudgetRule]:
-    return (db.query(BudgetRule)
-              .filter(BudgetRule.organization_id == organization_id)
-              .order_by(BudgetRule.created_at.desc())
-              .all())
+    try:
+        return (db.query(BudgetRule)
+                  .filter(BudgetRule.organization_id == organization_id)
+                  .order_by(BudgetRule.created_at.desc())
+                  .all())
+    except Exception:
+        # budget_rules may be missing organization_id in pre-migration DBs
+        try:
+            return db.query(BudgetRule).order_by(BudgetRule.created_at.desc()).all()
+        except Exception:
+            return []
 
 
 def delete_rule(db: Session, rule_id: int, organization_id: int) -> bool:

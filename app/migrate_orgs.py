@@ -108,6 +108,22 @@ def run():
             conn.execute(_text("CREATE INDEX IF NOT EXISTS ix_teams_organization_id ON teams(organization_id)"))
             log.info("teams.organization_id added.")
 
+        # Same fix for budget_rules table.
+        br_cols = {row[1] for row in conn.execute(_text("PRAGMA table_info(budget_rules)"))}
+        if "organization_id" not in br_cols and br_cols:
+            log.info("budget_rules table missing 'organization_id' — adding column")
+            conn.execute(_text("ALTER TABLE budget_rules ADD COLUMN organization_id INTEGER NOT NULL DEFAULT 1 REFERENCES organizations(id)"))
+            conn.execute(_text("CREATE INDEX IF NOT EXISTS ix_budget_rules_organization_id ON budget_rules(organization_id)"))
+            log.info("budget_rules.organization_id added.")
+
+        # Same fix for policy_rules table.
+        pr_cols = {row[1] for row in conn.execute(_text("PRAGMA table_info(policy_rules)"))}
+        if "organization_id" not in pr_cols and pr_cols:
+            log.info("policy_rules table missing 'organization_id' — adding column")
+            conn.execute(_text("ALTER TABLE policy_rules ADD COLUMN organization_id INTEGER NOT NULL DEFAULT 1 REFERENCES organizations(id)"))
+            conn.execute(_text("CREATE INDEX IF NOT EXISTS ix_policy_rules_organization_id ON policy_rules(organization_id)"))
+            log.info("policy_rules.organization_id added.")
+
     log.info("Column migration complete.")
 
     db = SessionLocal()
