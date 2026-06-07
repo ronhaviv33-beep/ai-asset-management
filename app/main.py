@@ -96,11 +96,9 @@ def _seed_roles_for_org(db, org_id: int) -> None:
             seed_pages = json.loads(r["pages"])
             if r["name"] == "admin" or set(seed_pages) != set(pages):
                 existing.pages = r["pages"]
-            # Backfill team_scoped if the column was just added (value will be None/False default).
-            # We only force the seed value when the column is None (never set) — we do NOT
-            # overwrite a value the admin has explicitly changed.
-            if existing.team_scoped is None:
-                existing.team_scoped = r["team_scoped"]
+            # Backfill team_scoped: always apply the seed value so analyst/viewer
+            # are always team-scoped regardless of what was stored in the DB.
+            existing.team_scoped = r["team_scoped"]
     db.commit()
 
 

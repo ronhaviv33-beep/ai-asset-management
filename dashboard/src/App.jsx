@@ -1596,9 +1596,9 @@ const useRoles = () => useContext(RolesContext);
 const ROLES = {
   // pages  — controls navigation visibility and page-level UI gates
   // can    — explicit data/action capabilities not expressible as page visibility
-  admin:   { label:"Admin",   color: T.crit,   pages: ["home","chat","overview","cost","agents","models","workflows","alerts","budgets","security","users","apikeys","settings","integrations","onboarding"], can: ["view_all_sessions"] },
-  analyst: { label:"Analyst", color: T.warn,   pages: ["home","chat","overview","cost","agents","models","workflows","alerts","security","integrations","onboarding"],                          can: [] },
-  viewer:  { label:"Viewer",  color: T.info,   pages: ["home","overview","cost","agents","models","workflows","alerts","security"],                                                              can: [] },
+  admin:   { label:"Admin",   color: T.crit,   pages: ["home","chat","overview","cost","agents","models","workflows","alerts","budgets","security","users","apikeys","settings","integrations","onboarding"], can: ["view_all_sessions"], team_scoped: false },
+  analyst: { label:"Analyst", color: T.warn,   pages: ["home","chat","overview","cost","agents","models","workflows","alerts","security","integrations","onboarding"],                          can: [], team_scoped: true },
+  viewer:  { label:"Viewer",  color: T.info,   pages: ["home","overview","cost","agents","models","workflows","alerts","security"],                                                              can: [], team_scoped: true },
 };
 
 // deny-by-default: unknown/null role → false, never crashes, never leaks.
@@ -4290,7 +4290,8 @@ export default function App() {
     if (!user || !rolesMap) return;
     const isTeamScoped = !!(rolesMap[user.role]?.team_scoped);
     if (isTeamScoped && user.team) {
-      setFilters(f => f.team === user.team ? f : { ...f, team: user.team });
+      const teamId = `live_team_${user.team.replace(/\s+/g, "_").toLowerCase()}`;
+      setFilters(f => f.team === teamId ? f : { ...f, team: teamId });
     }
   }, [user, rolesMap]);
 
