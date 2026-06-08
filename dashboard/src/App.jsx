@@ -350,6 +350,8 @@ function computeRiskScore(events, alerts) {
   const f5 = Math.min(sens,25); score+=f5; factors.push({ label:"Sensitive data exposure", value:f5, max:25, raw:sens });
   const loopAlerts = alerts.filter((a)=>a.type==="repeated_agent_loop").length;
   const f6 = Math.min(loopAlerts*10,15); score+=f6; factors.push({ label:"Looping agents", value:f6, max:15, raw:loopAlerts });
+  const estCount = events.filter((e)=>e.pricing_estimated).length;
+  const f7 = Math.min(Math.round(estCount/2),10); score+=f7; factors.push({ label:"Unknown models", value:f7, max:10, raw:estCount });
   return { score:Math.min(score,100), factors };
 }
 
@@ -525,7 +527,7 @@ function RiskScoreCard({ risk }) {
   const color = risk.score>60?T.crit:risk.score>35?T.warn:T.accent;
   const label = risk.score>60?"ELEVATED":risk.score>35?"MODERATE":"HEALTHY";
   return (
-    <Card title="AI Runtime Risk Score" subtitle="Composite of 6 factors, 0–100">
+    <Card title="AI Runtime Risk Score" subtitle="Composite of 7 factors, 0–100">
       <div style={{ display:"flex", gap:20, alignItems:"center" }}>
         <div style={{ position:"relative", width:110, height:110, flexShrink:0 }}>
           <svg width="110" height="110" viewBox="0 0 110 110">
