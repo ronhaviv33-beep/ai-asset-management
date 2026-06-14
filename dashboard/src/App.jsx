@@ -1510,24 +1510,24 @@ function AuditLogTable({ audit, hasMore = false, loadingMore = false, onLoadMore
 
                           {/* Identity grid */}
                           <div style={{ display:"grid", gridTemplateColumns:"repeat(6,1fr)", gap:12, background:T.panel, border:`1px solid ${T.border}`, borderRadius:8, padding:"14px 16px" }}>
-                            <Field label="Request ID"  value={`#${r.id}`} />
-                            <Field label="Team"        value={r.team} />
-                            <Field label="Agent"       value={r.agent} />
-                            <Field label="Model"       value={r.model} />
-                            <Field label="Status"      value={r.blocked ? "BLOCKED" : "OK"} color={r.blocked ? T.crit : T.accent} />
-                            <Field label="Latency"     value={`${Math.round(r.latency_ms || 0)} ms`} />
+                            <Field label="Request ID"  value={`#${r.id}`}                              color={T.textDim} />
+                            <Field label="Team"        value={r.team}                                  color={T.text} />
+                            <Field label="Agent"       value={r.agent}                                 color={T.text} />
+                            <Field label="Model"       value={r.model}                                 color={T.text} />
+                            <Field label="Status"      value={r.blocked ? "BLOCKED" : "OK"}            color={r.blocked ? T.crit : T.accent} />
+                            <Field label="Latency"     value={`${Math.round(r.latency_ms || 0)} ms`}   color={T.text} />
                           </div>
 
                           {/* Timing + tokens + cost grid */}
                           <div style={{ display:"grid", gridTemplateColumns:"repeat(6,1fr)", gap:12, background:T.panel, border:`1px solid ${T.border}`, borderRadius:8, padding:"14px 16px" }}>
-                            <Field label="Start Time"         value={startTime.toLocaleTimeString()} />
-                            <Field label="End Time"           value={endTime.toLocaleTimeString()} />
-                            <Field label="Total Tokens"       value={(r.total_tokens || 0).toLocaleString()} />
-                            <Field label="Prompt Tokens"      value={(r.prompt_tokens || 0).toLocaleString()} />
-                            <Field label="Completion Tokens"  value={(r.completion_tokens || 0).toLocaleString()} />
+                            <Field label="Start Time"         value={startTime.toLocaleTimeString()}                        color={T.text} />
+                            <Field label="End Time"           value={endTime.toLocaleTimeString()}                          color={T.text} />
+                            <Field label="Total Tokens"       value={(r.total_tokens || 0).toLocaleString()}                color={T.text} />
+                            <Field label="Prompt Tokens"      value={(r.prompt_tokens || 0).toLocaleString()}               color={T.text} />
+                            <Field label="Completion Tokens"  value={(r.completion_tokens || 0).toLocaleString()}           color={T.text} />
                             <Field label="Spend"
-                              value={`${r.pricing_estimated ? "~" : ""}$${(r.cost_usd || 0).toFixed(6)}`}
-                              color={r.pricing_estimated ? "#f97316" : T.text} />
+                              value={`${r.pricing_estimated === true ? "~" : ""}$${(r.cost_usd || 0).toFixed(6)}`}
+                              color={r.pricing_estimated === true ? "#f97316" : T.text} />
                           </div>
 
                           {/* Prompt */}
