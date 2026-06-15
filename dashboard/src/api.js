@@ -305,3 +305,29 @@ export async function fetchAssetTelemetry(agentName, params = {}) {
   if (!r || !r.ok) throw new Error(`Failed to fetch telemetry for: ${agentName}`)
   return r.json()
 }
+
+export async function fetchUnassignedAssets() {
+  const r = await authFetch(`${BASE}/assets/registry/unassigned`)
+  if (!r || !r.ok) throw new Error('Failed to fetch unassigned assets')
+  return r.json()
+}
+
+export async function claimAsset(agentName, body) {
+  const r = await authFetch(`${BASE}/assets/${encodeURIComponent(agentName)}/claim`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+  if (!r || !r.ok) throw new Error('Failed to claim asset')
+  return r.json()
+}
+
+export async function updateAssetRegistry(agentName, body) {
+  const r = await authFetch(`${BASE}/assets/${encodeURIComponent(agentName)}/registry`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+  if (!r || !r.ok) throw new Error('Failed to update asset')
+  return r.json()
+}
