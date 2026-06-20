@@ -333,8 +333,14 @@ class AssetRegistry(Base):
     environment: Mapped[str | None] = mapped_column(String(64), nullable=True)   # prod | staging | dev
     criticality: Mapped[str | None] = mapped_column(String(32), nullable=True)   # critical | high | medium | low
     business_purpose: Mapped[str | None] = mapped_column(Text, nullable=True)
-    status: Mapped[str] = mapped_column(String(32), default="unassigned")        # unassigned | managed | retired
+    status: Mapped[str] = mapped_column(String(32), default="unassigned")        # unassigned | needs_validation | managed | retired
     source: Mapped[str] = mapped_column(String(32), default="discovered")        # discovered | claimed | ci_pipeline | api
+    # Discovery classification (Phase 1)
+    discovery_status: Mapped[str] = mapped_column(String(32), default="verified")         # verified | potential
+    discovery_source: Mapped[str] = mapped_column(String(64), default="gateway_telemetry") # gateway_telemetry | github | jira | servicenow | slack | mcp | cloud_functions
+    discovery_reason: Mapped[str | None] = mapped_column(Text, nullable=True)             # human-readable explanation
+    evidence: Mapped[str | None] = mapped_column(Text, nullable=True)                     # JSON — discovery signals
+    confidence_score: Mapped[float] = mapped_column(Float, default=95.0)                  # 0–100
     claimed_by: Mapped[str | None] = mapped_column(String(256), nullable=True)   # email of claimer
     claimed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     first_seen_at: Mapped[datetime] = mapped_column(

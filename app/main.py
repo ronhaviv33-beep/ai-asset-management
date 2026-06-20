@@ -236,15 +236,50 @@ except Exception as _e:
     _logging.getLogger("ai_asset_mgmt").warning("asset key backfill warning (non-fatal): %s", _e)
 
 
+def _migrate_asset_registry_discovery_fields() -> None:
+    """Idempotent: add Phase 1 discovery classification columns to asset_registry."""
+    from sqlalchemy import inspect as _inspect, text as _text
+    with engine.connect() as conn:
+        try:
+            cols = {c["name"] for c in _inspect(engine).get_columns("asset_registry")}
+        except Exception:
+            return  # table doesn't exist yet — create_all will handle it
+        for col_name, col_def in [
+            ("discovery_status", "VARCHAR(32) DEFAULT 'verified'"),
+            ("discovery_source", "VARCHAR(64) DEFAULT 'gateway_telemetry'"),
+            ("discovery_reason", "TEXT"),
+            ("evidence",         "TEXT"),
+            ("confidence_score", "FLOAT DEFAULT 95.0"),
+        ]:
+            if col_name not in cols:
+                conn.execute(_text(f"ALTER TABLE asset_registry ADD COLUMN {col_name} {col_def}"))
+        # Backfill NULLs on existing rows (SQLite ALTER TABLE doesn't always set defaults on old rows)
+        conn.execute(_text("UPDATE asset_registry SET discovery_status='verified' WHERE discovery_status IS NULL"))
+        conn.execute(_text("UPDATE asset_registry SET discovery_source='gateway_telemetry' WHERE discovery_source IS NULL"))
+        conn.execute(_text("UPDATE asset_registry SET confidence_score=95.0 WHERE confidence_score IS NULL"))
+        conn.commit()
+
+
+try:
+    _migrate_asset_registry_discovery_fields()
+except Exception as _e:
+    import logging as _logging
+    _logging.getLogger("ai_asset_mgmt").warning("asset registry discovery fields migration warning (non-fatal): %s", _e)
+
+
 # ── In-memory cache: known (org_id, asset_key) pairs already in asset_registry ──
 # Avoids a DB round-trip on every proxy request after first discovery.
 _known_assets: set[tuple[int, str]] = set()
 
 
-def _discover_asset(db: Session, org_id: int, asset_key: str, agent_id_raw: str) -> None:
-    """Idempotent: insert an unassigned asset_registry row on first sight of an agent."""
+def _discover_asset(
+    db: Session, org_id: int, asset_key: str, agent_id_raw: str,
+    evidence_data: dict | None = None,
+) -> None:
+    """Idempotent: insert a verified unassigned asset_registry row on first sight of an agent."""
     if (org_id, asset_key) in _known_assets:
         return
+    import json as _json
     from app.models import AssetRegistry as _AssetRegistry
     try:
         if not db.query(_AssetRegistry).filter(
@@ -258,6 +293,11 @@ def _discover_asset(db: Session, org_id: int, asset_key: str, agent_id_raw: str)
                 agent_name=agent_id_raw,
                 status="unassigned",
                 source="discovered",
+                discovery_status="verified",
+                discovery_source="gateway_telemetry",
+                discovery_reason="Agent detected from gateway traffic",
+                evidence=_json.dumps(evidence_data or {}),
+                confidence_score=95.0,
             ))
             db.commit()
         _known_assets.add((org_id, asset_key))
@@ -1828,7 +1868,10 @@ async def openai_compat_chat(
 
     # Asset discovery — idempotent, non-fatal
     asset_key = hashlib.sha256(f"{org_id}:{agent_id_raw}".encode()).hexdigest()
-    _discover_asset(db, org_id, asset_key, agent_id_raw)
+    _discover_asset(db, org_id, asset_key, agent_id_raw, evidence_data={
+        k: v for k, v in {"agent_version": agent_version, "team_hint": team_raw,
+                          "environment_hint": environment_raw}.items() if v is not None
+    })
 
     # Enforcement pipeline
     last_user = ""
@@ -2018,7 +2061,10 @@ async def anthropic_compat_messages(
 
     # Asset discovery — idempotent, non-fatal
     asset_key = hashlib.sha256(f"{org_id}:{agent_id_raw}".encode()).hexdigest()
-    _discover_asset(db, org_id, asset_key, agent_id_raw)
+    _discover_asset(db, org_id, asset_key, agent_id_raw, evidence_data={
+        k: v for k, v in {"agent_version": agent_version, "team_hint": team_raw,
+                          "environment_hint": environment_raw}.items() if v is not None
+    })
 
     # Enforcement
     last_user = ""

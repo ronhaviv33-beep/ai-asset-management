@@ -354,3 +354,33 @@ export async function fetchAgentDetail(agentId, days = 90) {
   if (!r || !r.ok) throw new Error(`Failed to fetch agent: ${agentId}`)
   return r.json()
 }
+
+export async function claimInventoryAgent(agentId, body) {
+  const r = await authFetch(`${BASE}/agents/${encodeURIComponent(agentId)}/claim`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+  if (!r || !r.ok) throw new Error('Failed to claim agent')
+  return r.json()
+}
+
+export async function validateInventoryAgent(agentId, body) {
+  const r = await authFetch(`${BASE}/agents/${encodeURIComponent(agentId)}/validate`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+  if (!r || !r.ok) throw new Error('Failed to validate agent')
+  return r.json()
+}
+
+export async function rejectInventoryAgent(agentId, rejectionReason) {
+  const r = await authFetch(`${BASE}/agents/${encodeURIComponent(agentId)}/reject`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ rejection_reason: rejectionReason }),
+  })
+  if (!r || !r.ok) throw new Error('Failed to reject agent')
+  return r.json()
+}

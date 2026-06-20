@@ -162,6 +162,12 @@ def _merge_registry(asset: dict, reg: AssetRegistry) -> None:
     asset["claimed_by"]       = reg.claimed_by
     asset["claimed_at"]       = reg.claimed_at.isoformat() if reg.claimed_at else None
     asset["registry_source"]  = reg.source
+    # Discovery classification fields (Phase 1 — use getattr for graceful fallback before migration)
+    asset["discovery_status"] = getattr(reg, "discovery_status", None) or "verified"
+    asset["discovery_source"] = getattr(reg, "discovery_source", None) or "gateway_telemetry"
+    asset["discovery_reason"] = getattr(reg, "discovery_reason", None)
+    asset["evidence"]         = getattr(reg, "evidence", None)
+    asset["confidence_score"] = getattr(reg, "confidence_score", None) or 95.0
     # Canonical team and environment from registry — fall back to telemetry hint only
     # when the registry field has not been set yet (asset not fully claimed).
     if reg.team:
