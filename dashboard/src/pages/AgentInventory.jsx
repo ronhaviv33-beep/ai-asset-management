@@ -433,14 +433,15 @@ function ModalField({ label, children, required }) {
 
 const inputStyle = { width: "100%", background: T.panelHi, border: `1px solid ${T.border}`, color: T.text, padding: "8px 10px", borderRadius: 5, fontSize: 13, fontFamily: FONT_UI, outline: "none", boxSizing: "border-box" };
 
-function ClaimModal({ agent, onSave, onClose, saving, environments = ["production","staging","development"] }) {
+function ClaimModal({ agent, onSave, onClose, saving, environments = ["production","staging","development"], error }) {
   const [form, setForm] = useState({ owner: "", team: agent?.team !== "Unknown" ? (agent?.team || "") : "", environment: agent?.environment !== "Unknown" ? (agent?.environment || "") : "", criticality: "", business_purpose: "" });
   const set = (k) => (e) => setForm(f => ({ ...f, [k]: e.target.value }));
 
   return (
     <ModalOverlay onClose={onClose}>
       <div style={{ fontSize: 17, fontWeight: 500, marginBottom: 4 }}>Claim Agent</div>
-      <div style={{ fontSize: 12, color: T.textMute, fontFamily: FONT_MONO, marginBottom: 20 }}>{agent?.name}</div>
+      <div style={{ fontSize: 12, color: T.textMute, fontFamily: FONT_MONO, marginBottom: 20 }}>Assign ownership to <strong>{agent?.name}</strong></div>
+      {error && <div style={{ background: "#FF5C7A18", border: "1px solid #FF5C7A44", borderRadius: 5, padding: "8px 12px", marginBottom: 14, fontSize: 12, color: "#FF5C7A", fontFamily: FONT_MONO }}>{error}</div>}
 
       <div style={{ background: T.panelHi, border: `1px solid ${T.border}`, borderRadius: 6, padding: "10px 14px", marginBottom: 20, fontSize: 11, color: T.textMute, fontFamily: FONT_MONO }}>
         <div><span style={{ color: T.accent }}>●</span> Source: {agent?.discovery_source?.replace(/_/g, " ") || "gateway"}</div>
@@ -602,14 +603,17 @@ export default function AgentInventory() {
   }, [search]);
 
   // Actions
+  const [claimError, setClaimError] = useState(null);
   const handleClaim = async (agentId, form) => {
     setSaving(true);
+    setClaimError(null);
     try {
       await claimInventoryAgent(agentId, form);
       setClaimTarget(null);
+      setClaimError(null);
       await loadData();
     } catch (e) {
-      alert(`Claim failed: ${e.message}`);
+      setClaimError(e.message);
     } finally {
       setSaving(false);
     }
@@ -735,7 +739,7 @@ export default function AgentInventory() {
       </div>
 
       {/* ── Modals ────────────────────────────────────────────────────────── */}
-      {claimTarget    && <ClaimModal    agent={claimTarget}    onSave={handleClaim}    onClose={() => setClaimTarget(null)}    saving={saving} environments={environments} />}
+      {claimTarget    && <ClaimModal    agent={claimTarget}    onSave={handleClaim}    onClose={() => { setClaimTarget(null); setClaimError(null); }}    saving={saving} environments={environments} error={claimError} />}
       {validateTarget && <ValidateModal agent={validateTarget} onSave={handleValidate} onClose={() => setValidateTarget(null)} saving={saving} environments={environments} />}
       {rejectTarget   && <RejectModal   agent={rejectTarget}   onSave={handleReject}   onClose={() => setRejectTarget(null)}   saving={saving} />}
     </div>

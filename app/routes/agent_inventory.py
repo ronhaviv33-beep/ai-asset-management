@@ -141,14 +141,29 @@ async def claim_agent(
         raise HTTPException(status_code=403, detail="Access denied")
 
     reg = _lookup_registry(db, org_id, agent_id)
-    if not reg:
-        raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found in registry")
 
-    if getattr(reg, "discovery_status", "verified") == "potential":
+    if reg and getattr(reg, "discovery_status", "verified") == "potential":
         raise HTTPException(
             status_code=400,
             detail="This is a potential agent. Use POST /agents/{id}/validate to confirm and claim it.",
         )
+
+    # Auto-create a registry row if one doesn't exist yet.
+    # Agents appear in inventory from telemetry alone; the registry row is created on first claim.
+    if not reg:
+        asset_key = agent_id if len(agent_id) == 64 else hashlib.sha256(f"{org_id}:{agent_id}".encode()).hexdigest()
+        reg = AssetRegistry(
+            organization_id  = org_id,
+            asset_key        = asset_key,
+            agent_id_raw     = agent_id,
+            agent_name       = agent_id,
+            discovery_status = "verified",
+            discovery_source = "gateway_telemetry",
+            confidence_score = 95.0,
+            first_seen_at    = datetime.now(timezone.utc),
+        )
+        db.add(reg)
+        db.flush()
 
     reg.owner            = body.get("owner") or reg.owner
     reg.team             = body.get("team") or reg.team

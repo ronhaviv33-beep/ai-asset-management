@@ -361,7 +361,10 @@ export async function claimInventoryAgent(agentId, body) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   })
-  if (!r || !r.ok) throw new Error('Failed to claim agent')
+  if (!r || !r.ok) {
+    const err = await r.json().catch(() => ({}))
+    throw new Error(err.detail || 'Failed to claim agent')
+  }
   return r.json()
 }
 
