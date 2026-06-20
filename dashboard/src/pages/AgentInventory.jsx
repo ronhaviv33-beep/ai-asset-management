@@ -2,6 +2,7 @@ import React, { useState, useEffect, useMemo, useCallback, useRef } from "react"
 import {
   fetchAgents, fetchAgentsSummary,
   claimInventoryAgent, validateInventoryAgent, rejectInventoryAgent,
+  fetchOrgConfig,
 } from "../api.js";
 
 // ─── Design tokens — mirror App.jsx T ────────────────────────────────────────
@@ -426,7 +427,7 @@ function ModalField({ label, children, required }) {
 
 const inputStyle = { width: "100%", background: T.panelHi, border: `1px solid ${T.border}`, color: T.text, padding: "8px 10px", borderRadius: 5, fontSize: 13, fontFamily: FONT_UI, outline: "none", boxSizing: "border-box" };
 
-function ClaimModal({ agent, onSave, onClose, saving }) {
+function ClaimModal({ agent, onSave, onClose, saving, environments = ["production","staging","development"] }) {
   const [form, setForm] = useState({ owner: "", team: agent?.team !== "Unknown" ? (agent?.team || "") : "", environment: agent?.environment !== "Unknown" ? (agent?.environment || "") : "", criticality: "", business_purpose: "" });
   const set = (k) => (e) => setForm(f => ({ ...f, [k]: e.target.value }));
 
@@ -446,9 +447,7 @@ function ClaimModal({ agent, onSave, onClose, saving }) {
       <ModalField label="Environment">
         <select style={{ ...inputStyle, appearance: "none" }} value={form.environment} onChange={set("environment")}>
           <option value="">Select…</option>
-          <option value="production">Production</option>
-          <option value="staging">Staging</option>
-          <option value="development">Development</option>
+          {environments.map(e => <option key={e} value={e}>{e.charAt(0).toUpperCase() + e.slice(1)}</option>)}
         </select>
       </ModalField>
       <ModalField label="Criticality">
@@ -474,7 +473,7 @@ function ClaimModal({ agent, onSave, onClose, saving }) {
   );
 }
 
-function ValidateModal({ agent, onSave, onClose, saving }) {
+function ValidateModal({ agent, onSave, onClose, saving, environments = ["production","staging","development"] }) {
   const [form, setForm] = useState({ confirmed_agent_name: agent?.name || "", owner: "", team: "", environment: "", criticality: "", business_purpose: "" });
   const set = (k) => (e) => setForm(f => ({ ...f, [k]: e.target.value }));
 
@@ -496,9 +495,7 @@ function ValidateModal({ agent, onSave, onClose, saving }) {
       <ModalField label="Environment">
         <select style={{ ...inputStyle, appearance: "none" }} value={form.environment} onChange={set("environment")}>
           <option value="">Select…</option>
-          <option value="production">Production</option>
-          <option value="staging">Staging</option>
-          <option value="development">Development</option>
+          {environments.map(e => <option key={e} value={e}>{e.charAt(0).toUpperCase() + e.slice(1)}</option>)}
         </select>
       </ModalField>
       <ModalField label="Criticality">
@@ -551,17 +548,22 @@ function RejectModal({ agent, onSave, onClose, saving }) {
 
 // ─── Main component ───────────────────────────────────────────────────────────
 export default function AgentInventory() {
-  const [agents,   setAgents]   = useState([]);
-  const [summary,  setSummary]  = useState(null);
-  const [loading,  setLoading]  = useState(true);
-  const [error,    setError]    = useState(null);
-  const [tab,      setTab]      = useState("verified");
-  const [search,   setSearch]   = useState("");
-  const [saving,   setSaving]   = useState(false);
+  const [agents,       setAgents]       = useState([]);
+  const [summary,      setSummary]      = useState(null);
+  const [loading,      setLoading]      = useState(true);
+  const [error,        setError]        = useState(null);
+  const [tab,          setTab]          = useState("verified");
+  const [search,       setSearch]       = useState("");
+  const [saving,       setSaving]       = useState(false);
+  const [environments, setEnvironments] = useState(["production","staging","development"]);
 
   const [claimTarget,    setClaimTarget]    = useState(null);
   const [validateTarget, setValidateTarget] = useState(null);
   const [rejectTarget,   setRejectTarget]   = useState(null);
+
+  useEffect(() => {
+    fetchOrgConfig().then(cfg => { if (cfg?.environments?.length) setEnvironments(cfg.environments); }).catch(() => {});
+  }, []);
 
   const loadData = useCallback(async () => {
     try {
@@ -727,8 +729,8 @@ export default function AgentInventory() {
       </div>
 
       {/* ── Modals ────────────────────────────────────────────────────────── */}
-      {claimTarget    && <ClaimModal    agent={claimTarget}    onSave={handleClaim}    onClose={() => setClaimTarget(null)}    saving={saving} />}
-      {validateTarget && <ValidateModal agent={validateTarget} onSave={handleValidate} onClose={() => setValidateTarget(null)} saving={saving} />}
+      {claimTarget    && <ClaimModal    agent={claimTarget}    onSave={handleClaim}    onClose={() => setClaimTarget(null)}    saving={saving} environments={environments} />}
+      {validateTarget && <ValidateModal agent={validateTarget} onSave={handleValidate} onClose={() => setValidateTarget(null)} saving={saving} environments={environments} />}
       {rejectTarget   && <RejectModal   agent={rejectTarget}   onSave={handleReject}   onClose={() => setRejectTarget(null)}   saving={saving} />}
     </div>
   );

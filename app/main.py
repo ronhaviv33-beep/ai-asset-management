@@ -1746,6 +1746,60 @@ def update_key(req: KeyUpdateRequest, _=Depends(require_page_access("settings"))
     return {"key": req.key, "updated": True}
 
 
+# ─── Org Config (admin-managed key-value settings) ───────────────────────────
+
+_ORG_CONFIG_DEFAULTS = {
+    "environments": ["production", "staging", "development"],
+}
+
+def _get_org_config(db: Session, org_id: int, key: str):
+    from app.models import OrgConfig
+    row = db.query(OrgConfig).filter(OrgConfig.organization_id == org_id, OrgConfig.key == key).first()
+    if row is None:
+        return _ORG_CONFIG_DEFAULTS.get(key)
+    try:
+        return json.loads(row.value)
+    except Exception:
+        return row.value
+
+def _set_org_config(db: Session, org_id: int, key: str, value):
+    from app.models import OrgConfig
+    row = db.query(OrgConfig).filter(OrgConfig.organization_id == org_id, OrgConfig.key == key).first()
+    encoded = json.dumps(value)
+    if row:
+        row.value = encoded
+        row.updated_at = datetime.now(timezone.utc)
+    else:
+        db.add(OrgConfig(organization_id=org_id, key=key, value=encoded))
+    db.commit()
+
+@app.get("/settings/config", tags=["Auth — Users"])
+def get_org_config(user=Depends(get_current_user), db: Session = Depends(get_db)):
+    """Return all org-level config values."""
+    from app.models import OrgConfig, Organization
+    org = db.query(Organization).filter(Organization.id == user.organization_id).first()
+    if not org:
+        raise HTTPException(status_code=404, detail="Organisation not found")
+    result = dict(_ORG_CONFIG_DEFAULTS)  # start with defaults
+    rows = db.query(OrgConfig).filter(OrgConfig.organization_id == org.id).all()
+    for row in rows:
+        try:
+            result[row.key] = json.loads(row.value)
+        except Exception:
+            result[row.key] = row.value
+    return result
+
+@app.put("/settings/config/{key}", tags=["Auth — Users"])
+def set_org_config(key: str, body: dict = Body(...), user=Depends(require_admin), db: Session = Depends(get_db)):
+    """Set a single org config value (admin only). Body: {\"value\": ...}"""
+    from app.models import Organization
+    org = db.query(Organization).filter(Organization.id == user.organization_id).first()
+    if not org:
+        raise HTTPException(status_code=404, detail="Organisation not found")
+    _set_org_config(db, org.id, key, body.get("value"))
+    return {"key": key, "value": body.get("value")}
+
+
 # ─── OpenAI-Compatible Proxy (/v1/chat/completions) ──────────────────────────
 #
 # Agents point their openai SDK at this server:

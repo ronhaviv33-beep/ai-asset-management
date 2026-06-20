@@ -397,6 +397,21 @@ class ChatSessionMessage(Base):
     )
 
 
+class OrgConfig(Base):
+    """Key-value configuration per organisation. Values are JSON-encoded strings."""
+    __tablename__ = "org_config"
+    __table_args__ = (UniqueConstraint("organization_id", "key", name="uq_org_config_key"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    organization_id: Mapped[int] = mapped_column(Integer, ForeignKey("organizations.id"), nullable=False, index=True)
+    key: Mapped[str] = mapped_column(String(64), nullable=False)
+    value: Mapped[str | None] = mapped_column(Text, nullable=True)  # JSON-encoded
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+    )
+
+
 class ModelPricing(Base):
     """
     Versioned pricing registry for all LLM models.

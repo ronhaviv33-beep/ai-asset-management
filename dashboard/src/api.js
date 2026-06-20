@@ -467,6 +467,21 @@ export async function triggerPricingSync() {
   return r.json()
 }
 
+export async function fetchOrgConfig() {
+  const r = await authFetch(`${BASE}/settings/config`)
+  if (!r || !r.ok) throw new Error('Failed to fetch org config')
+  return r.json()
+}
+
+export async function updateOrgConfig(key, value) {
+  const r = await authFetch(`${BASE}/settings/config/${key}`, {
+    method: 'PUT',
+    body: JSON.stringify({ value }),
+  })
+  if (!r || !r.ok) throw new Error('Failed to update org config')
+  return r.json()
+}
+
 export async function fetchPricingSyncStatus() {
   const r = await authFetch(`${BASE}/pricing-registry/sync-status`)
   if (!r || !r.ok) throw new Error('Failed to fetch sync status')

@@ -16,7 +16,7 @@ class PageErrorBoundary extends Component {
     return this.props.children;
   }
 }
-import { login as apiLogin, fetchMe, fetchUsers, createUser, updateUser, deleteUser, getToken, setToken, authFetch, fetchKeyStatuses, updateKey, BASE, fetchApiKeys, createApiKey, revokeApiKey, deleteApiKey, fetchGuardModes, setGuardMode, fetchHealth, fetchProviderCredentials, upsertProviderCredential, deleteProviderCredential, fetchRoles, createRole, updateRole, deleteRole, fetchTeams, fetchAssets, fetchAssetsSummary, fetchAssetTelemetry, fetchUnassignedAssets, claimAsset, updateAssetRegistry } from "./api.js";
+import { login as apiLogin, fetchMe, fetchUsers, createUser, updateUser, deleteUser, getToken, setToken, authFetch, fetchKeyStatuses, updateKey, BASE, fetchApiKeys, createApiKey, revokeApiKey, deleteApiKey, fetchGuardModes, setGuardMode, fetchHealth, fetchProviderCredentials, upsertProviderCredential, deleteProviderCredential, fetchRoles, createRole, updateRole, deleteRole, fetchTeams, fetchAssets, fetchAssetsSummary, fetchAssetTelemetry, fetchUnassignedAssets, claimAsset, updateAssetRegistry, fetchOrgConfig, updateOrgConfig } from "./api.js";
 import AgentInventory from "./pages/AgentInventory.jsx";
 import CostIntelligence from "./pages/CostIntelligence.jsx";
 import PricingRegistry from "./pages/PricingRegistry.jsx";
@@ -3958,16 +3958,23 @@ function RolesManagementSection() {
 function SettingsPage() {
   const [keys,      setKeys]      = useState([]);
   const [loading,   setLoading]   = useState(true);
-  const [editing,   setEditing]   = useState(null);  // key name being edited
+  const [editing,   setEditing]   = useState(null);
   const [editVal,   setEditVal]   = useState("");
   const [saving,    setSaving]    = useState(false);
   const [saved,     setSaved]     = useState(null);
   const [err,       setErr]       = useState(null);
 
+  // Environments config
+  const [environments, setEnvironments] = useState(["production", "staging", "development"]);
+  const [envInput,     setEnvInput]     = useState("");
+  const [envSaving,    setEnvSaving]    = useState(false);
+  const [envSaved,     setEnvSaved]     = useState(false);
+
   const load = useCallback(async () => {
     try {
-      const data = await fetchKeyStatuses();
+      const [data, cfg] = await Promise.all([fetchKeyStatuses(), fetchOrgConfig().catch(() => null)]);
       setKeys(data);
+      if (cfg?.environments?.length) setEnvironments(cfg.environments);
     } catch (e) { setErr(e.message); }
     finally { setLoading(false); }
   }, []);
@@ -3976,6 +3983,20 @@ function SettingsPage() {
 
   const startEdit = (k) => { setEditing(k.key); setEditVal(""); setSaved(null); setErr(null); };
   const cancelEdit = () => { setEditing(null); setEditVal(""); };
+
+  const addEnv = () => {
+    const val = envInput.trim().toLowerCase().replace(/\s+/g, "-");
+    if (!val || environments.includes(val)) return;
+    setEnvironments(prev => [...prev, val]);
+    setEnvInput("");
+  };
+  const removeEnv = (v) => setEnvironments(prev => prev.filter(e => e !== v));
+  const saveEnvs = async () => {
+    setEnvSaving(true);
+    try { await updateOrgConfig("environments", environments); setEnvSaved(true); setTimeout(() => setEnvSaved(false), 2500); }
+    catch (e) { setErr(e.message); }
+    finally { setEnvSaving(false); }
+  };
 
   const handleSave = async (keyName) => {
     if (!editVal.trim()) return;
@@ -4098,6 +4119,37 @@ function SettingsPage() {
             })}
           </tbody>
         </table>
+      </Card>
+
+      {/* Environments */}
+      <Card title="Environments" subtitle="Shown in the Environment dropdown when claiming or validating agents">
+        <div style={{ display:"flex", flexWrap:"wrap", gap:8, marginBottom:14 }}>
+          {environments.map(env => (
+            <div key={env} style={{ display:"flex", alignItems:"center", gap:6, background:T.panelHi, border:`1px solid ${T.border}`, borderRadius:4, padding:"5px 10px" }}>
+              <span style={{ fontFamily:FONT_MONO, fontSize:12, color:T.text }}>{env}</span>
+              <button onClick={() => removeEnv(env)}
+                style={{ background:"transparent", border:"none", color:T.crit, cursor:"pointer", fontSize:14, lineHeight:1, padding:0 }}>×</button>
+            </div>
+          ))}
+        </div>
+        <div style={{ display:"flex", gap:8, alignItems:"center" }}>
+          <input
+            value={envInput}
+            onChange={e => setEnvInput(e.target.value)}
+            onKeyDown={e => e.key === "Enter" && addEnv()}
+            placeholder="New environment name…"
+            style={{ background:T.panelHi, border:`1px solid ${T.border}`, color:T.text, padding:"7px 10px", borderRadius:4, fontSize:12, fontFamily:FONT_MONO, width:200 }}
+          />
+          <button onClick={addEnv}
+            style={{ background:`${T.info}15`, border:`1px solid ${T.info}44`, color:T.info, padding:"7px 14px", borderRadius:4, fontSize:12, fontFamily:FONT_MONO, cursor:"pointer" }}>
+            + Add
+          </button>
+          <button onClick={saveEnvs} disabled={envSaving}
+            style={{ background:T.accent, color:T.bg, border:"none", padding:"7px 16px", borderRadius:4, fontSize:12, fontFamily:FONT_MONO, fontWeight:600, cursor:"pointer", opacity:envSaving?0.6:1 }}>
+            {envSaving ? "Saving…" : "Save"}
+          </button>
+          {envSaved && <span style={{ fontFamily:FONT_MONO, fontSize:11, color:T.accent }}>✓ Saved</span>}
+        </div>
       </Card>
 
     </div>
