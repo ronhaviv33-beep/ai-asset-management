@@ -140,11 +140,60 @@ function EvidenceChips({ evidence = {} }) {
   );
 }
 
-const Th = ({ label, style: s = {} }) => (
-  <th style={{ padding: "10px 14px", textAlign: "left", fontSize: 10, fontFamily: FONT_MONO, color: T.textMute, letterSpacing: "0.1em", textTransform: "uppercase", borderBottom: `1px solid ${T.border}`, background: T.panel, whiteSpace: "nowrap", ...s }}>
-    {label}
-  </th>
-);
+// ─── Sort utility ─────────────────────────────────────────────────────────────
+const RISK_RANK     = { high: 3, medium: 2, low: 1 };
+const STATUS_RANK   = { active: 3, dormant: 2, inactive: 1 };
+
+function sortAgents(list, key, dir) {
+  if (!key) return list;
+  const mul = dir === "asc" ? 1 : -1;
+  return [...list].sort((a, b) => {
+    let va = a[key], vb = b[key];
+    if (key === "risk")            { va = RISK_RANK[va]   ?? 0; vb = RISK_RANK[vb]   ?? 0; }
+    else if (key === "status")     { va = STATUS_RANK[va] ?? 0; vb = STATUS_RANK[vb] ?? 0; }
+    else if (key === "monthly_cost_usd" || key === "confidence_score") { va = +(va || 0); vb = +(vb || 0); }
+    else if (key === "last_seen" || key === "first_seen") {
+      va = va ? new Date(va).getTime() : 0;
+      vb = vb ? new Date(vb).getTime() : 0;
+    }
+    if (typeof va === "number" && typeof vb === "number") return (va - vb) * mul;
+    return String(va || "").toLowerCase().localeCompare(String(vb || "").toLowerCase()) * mul;
+  });
+}
+
+function useSort(defaultKey, defaultDir = "desc") {
+  const [sort, setSort] = useState({ key: defaultKey, dir: defaultDir });
+  const toggle = (key) => setSort(s => s.key === key ? { key, dir: s.dir === "asc" ? "desc" : "asc" } : { key, dir: "desc" });
+  return [sort, toggle];
+}
+
+const Th = ({ label, sortKey, sort, onSort, style: s = {} }) => {
+  const active = sort?.key === sortKey;
+  const canSort = !!sortKey;
+  return (
+    <th
+      onClick={canSort ? () => onSort(sortKey) : undefined}
+      style={{
+        padding: "10px 14px", textAlign: "left", fontSize: 10, fontFamily: FONT_MONO,
+        color: active ? T.accent : T.textMute,
+        letterSpacing: "0.1em", textTransform: "uppercase",
+        borderBottom: `1px solid ${T.border}`, background: T.panel,
+        whiteSpace: "nowrap", cursor: canSort ? "pointer" : "default",
+        userSelect: "none", transition: "color 0.12s",
+        ...s,
+      }}
+    >
+      <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+        {label}
+        {canSort && (
+          <span style={{ fontSize: 9, color: active ? T.accent : T.textMute, opacity: active ? 1 : 0.4, lineHeight: 1 }}>
+            {active ? (sort.dir === "asc" ? "▲" : "▼") : "⇅"}
+          </span>
+        )}
+      </span>
+    </th>
+  );
+};
 
 const Td = ({ children, style: s = {} }) => (
   <td style={{ padding: "11px 14px", borderBottom: `1px solid ${T.border}`, ...s }}>{children}</td>
@@ -200,26 +249,29 @@ function TabBar({ active, tabs, onChange }) {
 
 // ─── Table: Verified Agents ──────────────────────────────────────────────────
 function VerifiedTable({ agents, onClaim, onEdit }) {
+  const [sort, toggle] = useSort("monthly_cost_usd", "desc");
+  const sorted = sortAgents(agents, sort.key, sort.dir);
   if (agents.length === 0) {
     return <EmptyState message="No verified agents in this view." />;
   }
+  const sp = { sort, onSort: toggle };
   return (
     <div style={{ overflowX: "auto" }}>
       <table style={{ width: "100%", borderCollapse: "collapse" }}>
         <thead><tr>
-          <Th label="Agent" style={{ paddingLeft: 20 }} />
-          <Th label="Source" />
-          <Th label="Team" />
-          <Th label="Environment" />
-          <Th label="Owner" />
-          <Th label="Status" />
-          <Th label="Risk" />
-          <Th label="Monthly Cost" style={{ textAlign: "right" }} />
-          <Th label="Last Seen" />
+          <Th label="Agent"        sortKey="name"             {...sp} style={{ paddingLeft: 20 }} />
+          <Th label="Source"       sortKey="discovery_source" {...sp} />
+          <Th label="Team"         sortKey="team"             {...sp} />
+          <Th label="Environment"  sortKey="environment"      {...sp} />
+          <Th label="Owner"        sortKey="owner"            {...sp} />
+          <Th label="Status"       sortKey="status"           {...sp} />
+          <Th label="Risk"         sortKey="risk"             {...sp} />
+          <Th label="Monthly Cost" sortKey="monthly_cost_usd" {...sp} style={{ textAlign: "right" }} />
+          <Th label="Last Seen"    sortKey="last_seen"        {...sp} />
           <Th label="" />
         </tr></thead>
         <tbody>
-          {agents.map((a, i) => (
+          {sorted.map((a, i) => (
             <tr key={a.id} style={{ background: i % 2 === 0 ? T.panel : "#0C0E14" }}
               onMouseEnter={e => e.currentTarget.style.background = T.panelHi}
               onMouseLeave={e => e.currentTarget.style.background = i % 2 === 0 ? T.panel : "#0C0E14"}>
@@ -265,6 +317,8 @@ function VerifiedTable({ agents, onClaim, onEdit }) {
 
 // ─── Table: Potential Agents ──────────────────────────────────────────────────
 function PotentialTable({ agents, onValidate, onReject, onEdit }) {
+  const [sort, toggle] = useSort("confidence_score", "desc");
+  const sorted = sortAgents(agents, sort.key, sort.dir);
   if (agents.length === 0) {
     return (
       <div style={{ padding: "48px 24px", textAlign: "center" }}>
@@ -278,19 +332,20 @@ function PotentialTable({ agents, onValidate, onReject, onEdit }) {
       </div>
     );
   }
+  const sp = { sort, onSort: toggle };
   return (
     <div style={{ overflowX: "auto" }}>
       <table style={{ width: "100%", borderCollapse: "collapse" }}>
         <thead><tr>
-          <Th label="Detected Agent" style={{ paddingLeft: 20 }} />
-          <Th label="Source" />
-          <Th label="Confidence" style={{ minWidth: 140 }} />
+          <Th label="Detected Agent"  sortKey="name"             {...sp} style={{ paddingLeft: 20 }} />
+          <Th label="Source"          sortKey="discovery_source" {...sp} />
+          <Th label="Confidence"      sortKey="confidence_score" {...sp} style={{ minWidth: 140 }} />
           <Th label="Evidence" />
-          <Th label="First Detected" />
+          <Th label="First Detected"  sortKey="first_seen"       {...sp} />
           <Th label="" style={{ minWidth: 160 }} />
         </tr></thead>
         <tbody>
-          {agents.map((a, i) => (
+          {sorted.map((a, i) => (
             <tr key={a.id} style={{ background: i % 2 === 0 ? T.panel : "#0C0E14" }}
               onMouseEnter={e => e.currentTarget.style.background = T.panelHi}
               onMouseLeave={e => e.currentTarget.style.background = i % 2 === 0 ? T.panel : "#0C0E14"}>
@@ -321,22 +376,25 @@ function PotentialTable({ agents, onValidate, onReject, onEdit }) {
 
 // ─── Table: Managed Agents ────────────────────────────────────────────────────
 function ManagedTable({ agents, onEdit }) {
+  const [sort, toggle] = useSort("monthly_cost_usd", "desc");
+  const sorted = sortAgents(agents, sort.key, sort.dir);
   if (agents.length === 0) return <EmptyState message="No managed agents yet. Claim verified agents to see them here." />;
+  const sp = { sort, onSort: toggle };
   return (
     <div style={{ overflowX: "auto" }}>
       <table style={{ width: "100%", borderCollapse: "collapse" }}>
         <thead><tr>
-          <Th label="Agent" style={{ paddingLeft: 20 }} />
-          <Th label="Owner" />
-          <Th label="Team" />
-          <Th label="Environment" />
-          <Th label="Criticality" />
-          <Th label="Monthly Cost" style={{ textAlign: "right" }} />
-          <Th label="Last Seen" />
+          <Th label="Agent"        sortKey="name"             {...sp} style={{ paddingLeft: 20 }} />
+          <Th label="Owner"        sortKey="owner"            {...sp} />
+          <Th label="Team"         sortKey="team"             {...sp} />
+          <Th label="Environment"  sortKey="environment"      {...sp} />
+          <Th label="Criticality"  sortKey="criticality"      {...sp} />
+          <Th label="Monthly Cost" sortKey="monthly_cost_usd" {...sp} style={{ textAlign: "right" }} />
+          <Th label="Last Seen"    sortKey="last_seen"        {...sp} />
           {onEdit && <Th label="" />}
         </tr></thead>
         <tbody>
-          {agents.map((a, i) => (
+          {sorted.map((a, i) => (
             <tr key={a.id} style={{ background: i % 2 === 0 ? T.panel : "#0C0E14" }}
               onMouseEnter={e => e.currentTarget.style.background = T.panelHi}
               onMouseLeave={e => e.currentTarget.style.background = i % 2 === 0 ? T.panel : "#0C0E14"}>
@@ -373,20 +431,23 @@ function ManagedTable({ agents, onEdit }) {
 
 // ─── Table: Retired Agents ────────────────────────────────────────────────────
 function RetiredTable({ agents, onEdit }) {
+  const [sort, toggle] = useSort("last_seen", "desc");
+  const sorted = sortAgents(agents, sort.key, sort.dir);
   if (agents.length === 0) return <EmptyState message="No retired agents." />;
+  const sp = { sort, onSort: toggle };
   return (
     <div style={{ overflowX: "auto" }}>
       <table style={{ width: "100%", borderCollapse: "collapse" }}>
         <thead><tr>
-          <Th label="Agent" style={{ paddingLeft: 20 }} />
-          <Th label="Discovery Source" />
-          <Th label="Owner" />
+          <Th label="Agent"            sortKey="name"             {...sp} style={{ paddingLeft: 20 }} />
+          <Th label="Discovery Source" sortKey="discovery_source" {...sp} />
+          <Th label="Owner"            sortKey="owner"            {...sp} />
           <Th label="Purpose / Reason" />
-          <Th label="Last Active" />
+          <Th label="Last Active"      sortKey="last_seen"        {...sp} />
           {onEdit && <Th label="" />}
         </tr></thead>
         <tbody>
-          {agents.map((a, i) => (
+          {sorted.map((a, i) => (
             <tr key={a.id} style={{ background: i % 2 === 0 ? T.panel : "#0C0E14", opacity: 0.7 }}
               onMouseEnter={e => { e.currentTarget.style.background = T.panelHi; e.currentTarget.style.opacity = "1"; }}
               onMouseLeave={e => { e.currentTarget.style.background = i % 2 === 0 ? T.panel : "#0C0E14"; e.currentTarget.style.opacity = "0.7"; }}>
