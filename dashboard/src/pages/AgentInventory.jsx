@@ -696,7 +696,7 @@ function EditModal({ agent, onSave, onClose, saving, environments = ["production
 }
 
 // ─── Main component ───────────────────────────────────────────────────────────
-export default function AgentInventory({ isAdmin = false }) {
+export default function AgentInventory({ isAdmin = false, onNavigate }) {
   const [agents,       setAgents]       = useState([]);
   const [summary,      setSummary]      = useState(null);
   const [loading,      setLoading]      = useState(true);
@@ -871,7 +871,13 @@ export default function AgentInventory({ isAdmin = false }) {
         <div style={{ padding: "16px 20px 0", borderBottom: `1px solid ${T.border}` }}>
           <div style={{ display: "flex", gap: 16, alignItems: "flex-start", flexWrap: "wrap", marginBottom: 0 }}>
             <div style={{ flex: 1 }}>
-              <TabBar active={tab} tabs={tabs} onChange={setTab} />
+              <TabBar active={tab} tabs={tabs} onChange={(id) => {
+                if (id === "potential" && onNavigate) {
+                  onNavigate("discovery", { discoveryTab: "potential" });
+                } else {
+                  setTab(id);
+                }
+              }} />
             </div>
             <div style={{ paddingBottom: 12 }}>
               <SearchBar value={search} onChange={setSearch} placeholder="Search agents…" />

@@ -5259,6 +5259,7 @@ const NAV_GROUPS = [
 // ─── Root ─────────────────────────────────────────────────────────────────────
 export default function App() {
   const [page, setPage]       = useState("dashboard");
+  const [discoveryInitialTab, setDiscoveryInitialTab] = useState("verified");
   const [filters, setFilters] = useState({ team:"all", model:"all", agent:"all", sev:"all", range:30 });
 
   // ── Real JWT auth ──
@@ -5410,8 +5411,8 @@ export default function App() {
     switch (page) {
       // ── New primary pages ───────────────────────────────────────────────
       case "dashboard":      return <ExecutiveDashboard onNavigate={setPage} />;
-      case "agent_inventory":return <AgentInventory isAdmin={user?.role === "admin"} />;
-      case "discovery":      return <DiscoveryCenter />;
+      case "agent_inventory":return <AgentInventory isAdmin={user?.role === "admin"} onNavigate={(pg, opts={}) => { if (opts.discoveryTab) setDiscoveryInitialTab(opts.discoveryTab); setPage(pg); }} />;
+      case "discovery":      return <DiscoveryCenter initialTab={discoveryInitialTab} />;
       case "governance":     return <GovernanceCenter />;
       case "security_intel": return <SecurityIntelligence />;
       case "ecosystem":      return <EcosystemDiscovery />;

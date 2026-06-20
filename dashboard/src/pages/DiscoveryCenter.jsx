@@ -351,10 +351,10 @@ const STH = ({ children, sortKey, sort, onSort, style }) => {
   );
 };
 
-export default function DiscoveryCenter() {
+export default function DiscoveryCenter({ initialTab = "verified" }) {
   const [agents, setAgents]             = useState([]);
   const [loading, setLoading]           = useState(true);
-  const [tab, setTab]                   = useState("verified");
+  const [tab, setTab]                   = useState(initialTab);
   const [search, setSearch]             = useState("");
   const [claimAgent, setClaimAgent]           = useState(null);
   const [evidenceAgent, setEvidenceAgent]     = useState(null);
