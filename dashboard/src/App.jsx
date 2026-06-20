@@ -1930,9 +1930,6 @@ function LoginPage({ onLogin }) {
           style={{ background:T.accent, color:T.bg, border:"none", padding:"12px 0", borderRadius:7, fontSize:13, fontFamily:FONT_MONO, fontWeight:600, cursor:"pointer", opacity:loading?0.6:1 }}>
           {loading ? "Signing in…" : "Sign in"}
         </button>
-        <div style={{ fontSize:11, color:T.textMute, fontFamily:FONT_MONO, textAlign:"center" }}>
-          Default: admin@ai-asset-mgmt.local / Admin123!
-        </div>
       </form>
     </div>
   );
