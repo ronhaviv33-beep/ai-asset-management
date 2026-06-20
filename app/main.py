@@ -524,6 +524,9 @@ app.openapi = custom_openapi
 from app.routes import assets as assets_routes  # noqa: E402
 app.include_router(assets_routes.router)
 
+from app.routes import agent_inventory as agent_inventory_routes  # noqa: E402
+app.include_router(agent_inventory_routes.router)
+
 _ALLOWED_ORIGINS = (
     [_FRONTEND_ORIGIN] if _FRONTEND_ORIGIN
     else ["http://localhost:5173", "http://127.0.0.1:5173"]

@@ -331,3 +331,26 @@ export async function updateAssetRegistry(agentName, body) {
   if (!r || !r.ok) throw new Error('Failed to update asset')
   return r.json()
 }
+
+// ── Agent Inventory API ───────────────────────────────────────────────────────
+
+export async function fetchAgents(params = {}) {
+  const q = new URLSearchParams(
+    Object.fromEntries(Object.entries(params).filter(([, v]) => v !== undefined && v !== null && v !== ''))
+  ).toString()
+  const r = await authFetch(`${BASE}/agents${q ? `?${q}` : ''}`)
+  if (!r || !r.ok) throw new Error('Failed to fetch agents')
+  return r.json()
+}
+
+export async function fetchAgentsSummary(days = 90) {
+  const r = await authFetch(`${BASE}/agents/summary?days=${days}`)
+  if (!r || !r.ok) throw new Error('Failed to fetch agents summary')
+  return r.json()
+}
+
+export async function fetchAgentDetail(agentId, days = 90) {
+  const r = await authFetch(`${BASE}/agents/${encodeURIComponent(agentId)}?days=${days}`)
+  if (!r || !r.ok) throw new Error(`Failed to fetch agent: ${agentId}`)
+  return r.json()
+}
