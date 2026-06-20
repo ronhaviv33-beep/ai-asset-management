@@ -186,6 +186,95 @@ function ClaimModal({ agent, onClose, onSave, environments = ["production", "sta
   );
 }
 
+function ValidateConfirmModal({ agent, onConfirm, onClose, busy }) {
+  return (
+    <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000, padding: 24 }}>
+      <div onClick={e => e.stopPropagation()} style={{ background: T.panel, border: `1px solid ${T.border}`, borderRadius: 10, padding: 28, width: "100%", maxWidth: 420, fontFamily: FONT }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16 }}>
+          <span style={{ fontSize: 20, color: T.accent }}>✓</span>
+          <div style={{ fontSize: 16, fontWeight: 600, color: T.text }}>Confirm Validation</div>
+        </div>
+
+        <div style={{ background: T.panelHi, border: `1px solid ${T.border}`, borderRadius: 6, padding: "12px 14px", marginBottom: 18 }}>
+          <div style={{ fontSize: 13, fontFamily: MONO, color: T.text, fontWeight: 500, marginBottom: 8 }}>{agent?.agent_name}</div>
+          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            <SourceBadge source={agent?.discovery_source} />
+            <ConfidenceBadge score={agent?.confidence_score} />
+          </div>
+        </div>
+
+        <div style={{ fontSize: 12, color: T.textDim, lineHeight: 1.8, marginBottom: 20 }}>
+          Validating this agent will:
+          <div style={{ marginTop: 8, display: "flex", flexDirection: "column", gap: 4 }}>
+            {["Promote it from Potential → Verified", "Set lifecycle status to Managed", "Record you as the validator in the audit trail"].map(t => (
+              <div key={t} style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
+                <span style={{ color: T.accent, flexShrink: 0, marginTop: 1 }}>●</span>
+                <span style={{ fontSize: 12, color: T.textDim, fontFamily: MONO }}>{t}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
+          <button onClick={onClose} style={{ background: "transparent", border: `1px solid ${T.border}`, color: T.textDim, padding: "8px 16px", borderRadius: 5, fontSize: 13, cursor: "pointer", fontFamily: FONT }}>
+            Cancel
+          </button>
+          <button onClick={onConfirm} disabled={busy} style={{ background: T.accent, border: "none", color: T.bg, padding: "8px 20px", borderRadius: 5, fontSize: 13, fontWeight: 600, cursor: busy ? "not-allowed" : "pointer", opacity: busy ? 0.6 : 1, fontFamily: FONT }}>
+            {busy ? "Validating…" : "Confirm Validate ✓"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function RejectConfirmModal({ agent, onConfirm, onClose, busy }) {
+  const [reason, setReason] = useState("");
+  return (
+    <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000, padding: 24 }}>
+      <div onClick={e => e.stopPropagation()} style={{ background: T.panel, border: `1px solid ${T.border}`, borderRadius: 10, padding: 28, width: "100%", maxWidth: 420, fontFamily: FONT }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16 }}>
+          <span style={{ fontSize: 20, color: T.crit }}>✕</span>
+          <div style={{ fontSize: 16, fontWeight: 600, color: T.text }}>Reject Agent</div>
+        </div>
+
+        <div style={{ background: "#1A0A0F", border: `1px solid ${T.crit}33`, borderRadius: 6, padding: "12px 14px", marginBottom: 18 }}>
+          <div style={{ fontSize: 13, fontFamily: MONO, color: T.text, fontWeight: 500, marginBottom: 8 }}>{agent?.agent_name}</div>
+          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            <SourceBadge source={agent?.discovery_source} />
+            <ConfidenceBadge score={agent?.confidence_score} />
+          </div>
+        </div>
+
+        <div style={{ fontSize: 12, color: T.textDim, marginBottom: 16, lineHeight: 1.7 }}>
+          Rejecting marks this agent as <strong style={{ color: T.crit }}>retired</strong>. It will no longer appear in active inventory. The registry record is preserved for audit history.
+        </div>
+
+        <div style={{ marginBottom: 20 }}>
+          <div style={{ fontSize: 11, fontFamily: MONO, color: T.textMute, letterSpacing: "0.08em", textTransform: "uppercase", marginBottom: 6 }}>
+            Reason <span style={{ color: T.textMute, textTransform: "none", letterSpacing: 0 }}>(optional)</span>
+          </div>
+          <textarea
+            value={reason}
+            onChange={e => setReason(e.target.value)}
+            placeholder="e.g. Repository is a template project, not a deployed agent"
+            style={{ width: "100%", background: T.panelHi, border: `1px solid ${T.border}`, color: T.text, padding: "8px 10px", borderRadius: 5, fontSize: 12, fontFamily: MONO, resize: "vertical", minHeight: 70, outline: "none", boxSizing: "border-box" }}
+          />
+        </div>
+
+        <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
+          <button onClick={onClose} style={{ background: "transparent", border: `1px solid ${T.border}`, color: T.textDim, padding: "8px 16px", borderRadius: 5, fontSize: 13, cursor: "pointer", fontFamily: FONT }}>
+            Cancel
+          </button>
+          <button onClick={() => onConfirm(reason)} disabled={busy} style={{ background: T.crit, border: "none", color: "#fff", padding: "8px 20px", borderRadius: 5, fontSize: 13, fontWeight: 600, cursor: busy ? "not-allowed" : "pointer", opacity: busy ? 0.6 : 1, fontFamily: FONT }}>
+            {busy ? "Rejecting…" : "Reject Agent ✕"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function EvidenceDrawer({ agent, onClose }) {
   if (!agent) return null;
   const evidence = typeof agent.evidence === "string" ? JSON.parse(agent.evidence || "{}") : (agent.evidence || {});
@@ -237,10 +326,12 @@ export default function DiscoveryCenter() {
   const [loading, setLoading]           = useState(true);
   const [tab, setTab]                   = useState("verified");
   const [search, setSearch]             = useState("");
-  const [claimAgent, setClaimAgent]     = useState(null);
-  const [evidenceAgent, setEvidenceAgent] = useState(null);
-  const [busy, setBusy]                 = useState({});
-  const [toastMsg, setToastMsg]         = useState("");
+  const [claimAgent, setClaimAgent]           = useState(null);
+  const [evidenceAgent, setEvidenceAgent]     = useState(null);
+  const [validateConfirm, setValidateConfirm] = useState(null);
+  const [rejectConfirm, setRejectConfirm]     = useState(null);
+  const [busy, setBusy]                       = useState({});
+  const [toastMsg, setToastMsg]               = useState("");
   const [environments, setEnvironments] = useState(["production", "staging", "development"]);
 
   const toast = (msg) => { setToastMsg(msg); setTimeout(() => setToastMsg(""), 3000); };
@@ -274,17 +365,29 @@ export default function DiscoveryCenter() {
     await load();
   };
 
-  const handleValidate = async (agentId) => {
+  const handleValidate = async () => {
+    if (!validateConfirm) return;
+    const agentId = validateConfirm.agent_id || validateConfirm.id;
     setBusy(b => ({ ...b, [agentId]: "validate" }));
-    try { await validateInventoryAgent(agentId, { validated: true }); toast("Agent validated"); await load(); }
-    catch (e) { toast("Error: " + e.message); }
+    try {
+      await validateInventoryAgent(agentId, { validated: true });
+      setValidateConfirm(null);
+      toast("Agent validated successfully");
+      await load();
+    } catch (e) { toast("Error: " + e.message); }
     finally { setBusy(b => { const n = { ...b }; delete n[agentId]; return n; }); }
   };
 
-  const handleReject = async (agentId) => {
+  const handleReject = async (reason) => {
+    if (!rejectConfirm) return;
+    const agentId = rejectConfirm.agent_id || rejectConfirm.id;
     setBusy(b => ({ ...b, [agentId]: "reject" }));
-    try { await rejectInventoryAgent(agentId, "Rejected from Discovery Center"); toast("Agent rejected"); await load(); }
-    catch (e) { toast("Error: " + e.message); }
+    try {
+      await rejectInventoryAgent(agentId, reason || "Rejected from Discovery Center");
+      setRejectConfirm(null);
+      toast("Agent rejected");
+      await load();
+    } catch (e) { toast("Error: " + e.message); }
     finally { setBusy(b => { const n = { ...b }; delete n[agentId]; return n; }); }
   };
 
@@ -297,6 +400,22 @@ export default function DiscoveryCenter() {
       )}
       {claimAgent && <ClaimModal agent={claimAgent} onClose={() => setClaimAgent(null)} onSave={handleClaim} environments={environments} />}
       {evidenceAgent && <EvidenceDrawer agent={evidenceAgent} onClose={() => setEvidenceAgent(null)} />}
+      {validateConfirm && (
+        <ValidateConfirmModal
+          agent={validateConfirm}
+          onConfirm={handleValidate}
+          onClose={() => setValidateConfirm(null)}
+          busy={!!busy[validateConfirm.agent_id || validateConfirm.id]}
+        />
+      )}
+      {rejectConfirm && (
+        <RejectConfirmModal
+          agent={rejectConfirm}
+          onConfirm={handleReject}
+          onClose={() => setRejectConfirm(null)}
+          busy={!!busy[rejectConfirm.agent_id || rejectConfirm.id]}
+        />
+      )}
 
       {/* Header */}
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 20 }}>
@@ -394,8 +513,8 @@ export default function DiscoveryCenter() {
                     <TD><span style={{ fontFamily: MONO, color: T.textDim, fontSize: 12 }}>{relativeTime(agent.first_seen_at || agent.created_at)}</span></TD>
                     <TD style={{ textAlign: "right" }}>
                       <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
-                        <ActionBtn label={isBusy === "validate" ? "…" : "Validate"} color={T.accent} onClick={() => handleValidate(id)} />
-                        <ActionBtn label={isBusy === "reject"   ? "…" : "Reject"}   color={T.crit}  onClick={() => handleReject(id)} />
+                        <ActionBtn label={isBusy === "validate" ? "…" : "Validate"} color={T.accent} onClick={() => setValidateConfirm(agent)} />
+                        <ActionBtn label={isBusy === "reject"   ? "…" : "Reject"}   color={T.crit}  onClick={() => setRejectConfirm(agent)} />
                         <ActionBtn label="Evidence" color={T.info} onClick={() => setEvidenceAgent(agent)} />
                       </div>
                     </TD>
