@@ -290,7 +290,7 @@ export default function ExecutiveDashboard({ onNavigate }) {
               return (
                 <div key={i} style={{ display: "flex", alignItems: "center", gap: 12, padding: "8px 0", borderBottom: i < topCosts.length - 1 ? `1px solid ${T.border}` : "none" }}>
                   <div style={{ width: 22, fontSize: 11, fontFamily: MONO, color: T.textMute, textAlign: "right", flexShrink: 0 }}>{i + 1}.</div>
-                  <div style={{ flex: 1, fontSize: 13, color: T.text, fontFamily: MONO, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{name}</div>
+                  <div title={name} style={{ flex: 1, fontSize: 13, color: T.text, fontFamily: MONO, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{name}</div>
                   <div style={{ fontSize: 11, color: T.textDim, width: 80, textAlign: "center" }}>{item.team || "—"}</div>
                   <div style={{ width: 100, display: "flex", alignItems: "center", gap: 6 }}>
                     <div style={{ flex: 1, background: T.panelHi, borderRadius: 2, height: 4 }}>

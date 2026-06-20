@@ -252,7 +252,7 @@ export default function SecurityIntelligence() {
                         {agInfo && <div style={{ fontSize: 11, color: T.textMute, marginTop: 2 }}>Team: {agInfo.team}</div>}
                       </TD>
                       <TD style={{ maxWidth: 280 }}>
-                        <span style={{ fontSize: 12, color: T.textDim, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", display: "block" }}>{alert.msg}</span>
+                        <span title={alert.msg} style={{ fontSize: 12, color: T.textDim, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", display: "block" }}>{alert.msg}</span>
                       </TD>
                       <TD><span style={{ fontFamily: MONO, fontSize: 12, color: T.textDim }}>{relativeTime(alert.ts)}</span></TD>
                     </tr>

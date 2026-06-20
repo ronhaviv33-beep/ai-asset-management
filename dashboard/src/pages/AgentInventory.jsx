@@ -286,9 +286,9 @@ function PotentialTable({ agents, onValidate, onReject }) {
               onMouseEnter={e => e.currentTarget.style.background = T.panelHi}
               onMouseLeave={e => e.currentTarget.style.background = i % 2 === 0 ? T.panel : "#0C0E14"}>
               <Td style={{ paddingLeft: 20 }}>
-                <div style={{ fontSize: 13, fontFamily: FONT_MONO, color: T.text }}>{a.name}</div>
+                <div title={a.name} style={{ fontSize: 13, fontFamily: FONT_MONO, color: T.text }}>{a.name}</div>
                 {a.discovery_reason && (
-                  <div style={{ fontSize: 11, color: T.textMute, marginTop: 3 }}>{a.discovery_reason}</div>
+                  <div title={a.discovery_reason} style={{ fontSize: 11, color: T.textMute, marginTop: 3 }}>{a.discovery_reason}</div>
                 )}
               </Td>
               <Td><DiscoveryBadge source={a.discovery_source} /></Td>
@@ -332,7 +332,7 @@ function ManagedTable({ agents }) {
               <Td style={{ paddingLeft: 20 }}>
                 <div style={{ fontSize: 13, fontFamily: FONT_MONO, color: T.text, fontWeight: 500 }}>{a.name}</div>
                 {a.business_purpose && (
-                  <div style={{ fontSize: 11, color: T.textMute, marginTop: 3, maxWidth: 300, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{a.business_purpose}</div>
+                  <div title={a.business_purpose} style={{ fontSize: 11, color: T.textMute, marginTop: 3, maxWidth: 300, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{a.business_purpose}</div>
                 )}
               </Td>
               <Td><span style={{ fontSize: 12, color: T.textDim }}>{a.owner}</span></Td>
@@ -384,7 +384,7 @@ function RetiredTable({ agents }) {
               <Td><DiscoveryBadge source={a.discovery_source} /></Td>
               <Td><span style={{ fontSize: 12, color: T.textMute }}>{a.owner === "Unassigned" ? "—" : a.owner}</span></Td>
               <Td>
-                <span style={{ fontSize: 11, color: T.textMute, maxWidth: 280, display: "block", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                <span title={a.business_purpose || undefined} style={{ fontSize: 11, color: T.textMute, maxWidth: 280, display: "block", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                   {a.business_purpose || "—"}
                 </span>
               </Td>

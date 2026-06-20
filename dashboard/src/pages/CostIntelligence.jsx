@@ -163,7 +163,7 @@ function BreakdownList({ items, breakdownBy }) {
           <div style={{ width: 18, fontSize: 10, color: T.textMute, fontFamily: FONT_MONO, textAlign: 'right', flexShrink: 0 }}>{i + 1}</div>
           <div style={{ flex: 1, minWidth: 0 }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 3 }}>
-              <div style={{ fontSize: 12, fontFamily: FONT_MONO, color: T.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{item.name}</div>
+              <div title={item.name} style={{ fontSize: 12, fontFamily: FONT_MONO, color: T.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{item.name}</div>
               <div style={{ fontSize: 12, fontFamily: FONT_MONO, color: T.accent, flexShrink: 0, marginLeft: 8 }}>{fmtFull$(item.cost_usd)}</div>
             </div>
             <div style={{ height: 4, background: T.border, borderRadius: 2, overflow: 'hidden' }}>
