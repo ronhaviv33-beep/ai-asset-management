@@ -137,41 +137,46 @@ export default function EcosystemDiscovery() {
       }));
   }, [agents]);
 
-  // Providers: from cost breakdown or derived from agent model usage
+  // Providers: costs from breakdown, agent counts from agents' models_used
   const providerData = useMemo(() => {
     const breakdown = costData?.breakdown?.items || costData?.breakdown || [];
-    const provCosts = {};
-    const provAgents = {};
+    const byProvider = costData?.breakdown?.by === "provider";
+    const provCosts  = {};
 
     breakdown.forEach(item => {
-      const modelField = item.model || item.label || "";
-      const prov = item.provider || providerFromModel(modelField);
-      provCosts[prov]  = (provCosts[prov]  || 0) + (item.cost_usd || 0);
-      provAgents[prov] = (provAgents[prov] || new Set());
-      if (item.agent_id || item.label) provAgents[prov].add(item.agent_id || item.label);
+      const prov = byProvider
+        ? item.name
+        : (item.provider || providerFromModel(item.model || item.label || ""));
+      if (!prov) return;
+      provCosts[prov] = (provCosts[prov] || 0) + (item.cost_usd || 0);
     });
 
-    // Fallback: derive from agents' model usage if cost breakdown is empty / doesn't have provider
-    if (Object.keys(provCosts).length === 0) {
-      agents.forEach(a => {
-        if (a.model) {
-          const prov = providerFromModel(a.model);
+    // Always derive agent counts from agents' models_used array
+    const provAgents = {};
+    agents.forEach(a => {
+      const models = a.models_used || (a.model ? [a.model] : []);
+      const seen = new Set();
+      models.forEach(m => {
+        const prov = providerFromModel(m);
+        if (prov && !seen.has(prov)) {
+          seen.add(prov);
           provAgents[prov] = (provAgents[prov] || new Set());
-          provAgents[prov].add(a.agent_id || a.agent_name);
+          provAgents[prov].add(a.id || a.agent_name || a.name);
         }
       });
-    }
+    });
 
     const allProviders = new Set([...Object.keys(provCosts), ...Object.keys(provAgents)]);
     return [...allProviders]
+      .filter(Boolean)
       .map(p => ({
         key: p,
         agentCount: provAgents[p]?.size || 0,
         costUsd: provCosts[p] || 0,
         meta: PROVIDER_META[p] || { label: p, color: T.textDim, icon: "○" },
       }))
-      .filter(p => p.agentCount > 0)
-      .sort((a, b) => b.agentCount - a.agentCount);
+      .filter(p => p.agentCount > 0 || p.costUsd > 0)
+      .sort((a, b) => b.costUsd - a.costUsd);
   }, [agents, costData]);
 
   const maxPlatformCount = Math.max(1, ...platformData.map(p => p.count));
