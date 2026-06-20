@@ -125,22 +125,23 @@ def get_cost_overview(
         trend_pct = 0.0
     trend_dir = "up" if trend_pct > 1 else "down" if trend_pct < -1 else "flat"
 
-    # Layer 2 — provider billing records that overlap this period
-    billing_records = db.query(ProviderBilling).filter(
+    # Layer 2 — all provider billing records for the org (not date-filtered so the KPI
+    # always reflects what the user has imported, regardless of the current view window).
+    # Per provider, keep the most recent record for the KPI summary.
+    all_billing = db.query(ProviderBilling).filter(
         ProviderBilling.organization_id == org_id,
-        ProviderBilling.billing_period_start >= start - timedelta(days=5),
-        ProviderBilling.billing_period_end   <= end   + timedelta(days=5),
-    ).all()
+    ).order_by(ProviderBilling.created_at.desc()).all()
 
     provider_billing: dict[str, dict] = {}
-    for b in billing_records:
-        provider_billing[b.provider] = {
-            "total_usd":    b.actual_billed_cost_usd,
-            "period_start": b.billing_period_start.isoformat() if b.billing_period_start else None,
-            "period_end":   b.billing_period_end.isoformat()   if b.billing_period_end   else None,
-            "billing_id":   b.id,
-            "source":       b.source,
-        }
+    for b in all_billing:
+        if b.provider not in provider_billing:   # keep most recent per provider
+            provider_billing[b.provider] = {
+                "total_usd":    b.actual_billed_cost_usd,
+                "period_start": b.billing_period_start.isoformat() if b.billing_period_start else None,
+                "period_end":   b.billing_period_end.isoformat()   if b.billing_period_end   else None,
+                "billing_id":   b.id,
+                "source":       b.source,
+            }
     total_billed = sum(v["total_usd"] for v in provider_billing.values())
 
     # Layer 3 — most recent reconciliation record
