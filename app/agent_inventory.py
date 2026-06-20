@@ -148,6 +148,30 @@ def get_inventory(
         except Exception:
             pass  # discovery_status column may not exist on very old deployments
 
+    # Validated-from-potential agents — originally potential, promoted via /validate.
+    # These have no gateway telemetry so _assets.get_all_assets_derived() never picks
+    # them up. We fetch them from the registry and surface them as verified agents.
+    if discovery_status in (None, "verified"):
+        try:
+            existing_keys = {a.get("id") or a.get("asset_key") for a in result}
+            q = db.query(AssetRegistry).filter(
+                AssetRegistry.organization_id == organization_id,
+                AssetRegistry.discovery_status == "verified",
+                AssetRegistry.source == "claimed",
+            )
+            if not include_retired:
+                q = q.filter(AssetRegistry.status != "retired")
+            if team_scope:
+                q = q.filter(AssetRegistry.team == team_scope)
+            for reg in q.all():
+                if reg.asset_key not in existing_keys:
+                    rec = _registry_to_potential_record(reg)
+                    rec["discovery_status"] = "verified"
+                    rec["confidence_score"] = 100.0
+                    result.append(rec)
+        except Exception:
+            pass
+
     return result
 
 

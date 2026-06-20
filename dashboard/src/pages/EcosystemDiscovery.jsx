@@ -213,7 +213,7 @@ export default function EcosystemDiscovery() {
     (async () => {
       try {
         const [a, c] = await Promise.allSettled([
-          fetchAgents({ limit: 500 }),
+          fetchAgents({ limit: 500, include_retired: true }),
           fetchCostIntelligence({ breakdown_by: "provider", days: 30 }),
         ]);
         if (a.status === "fulfilled" && a.value) {
@@ -224,7 +224,9 @@ export default function EcosystemDiscovery() {
     })();
   }, []);
 
-  // Platforms: group by discovery_source
+  // Platforms: always show every known platform (hardcoded from PLATFORM_META).
+  // Count comes from live agent data but the card is never removed — even if all
+  // agents from a platform are validated/retired, the connection still exists.
   const platformData = useMemo(() => {
     const groups = {};
     agents.forEach(a => {
@@ -233,12 +235,12 @@ export default function EcosystemDiscovery() {
       groups[src].count++;
       groups[src].agentNames.push(a.agent_name || a.agent_id_raw || a.agent_id);
     });
-    return Object.entries(groups)
-      .sort((a, b) => b[1].count - a[1].count)
-      .map(([key, { count, agentNames }]) => ({
-        key, count, agentNames,
-        meta: PLATFORM_META[key] || { label: key, color: T.textDim, icon: "○", desc: "" },
-      }));
+    return Object.keys(PLATFORM_META).map(key => ({
+      key,
+      count:      groups[key]?.count      || 0,
+      agentNames: groups[key]?.agentNames || [],
+      meta:       PLATFORM_META[key],
+    })).sort((a, b) => b.count - a.count);
   }, [agents]);
 
   // Providers: costs from breakdown, agent counts from agents' models_used
@@ -288,6 +290,7 @@ export default function EcosystemDiscovery() {
       .sort((a, b) => b.costUsd - a.costUsd);
   }, [agents, costData]);
 
+  const activePlatforms  = platformData.filter(p => p.count > 0).length;
   const maxPlatformCount = Math.max(1, ...platformData.map(p => p.count));
   const maxProviderCount = Math.max(1, ...providerData.map(p => p.agentCount));
   const totalAgents      = agents.length;
@@ -305,7 +308,7 @@ export default function EcosystemDiscovery() {
       <div style={{ display: "flex", gap: 12 }}>
         {[
           { label: "Total Agents",        value: totalAgents,           color: T.text },
-          { label: "Discovery Sources",   value: platformData.length,   color: T.accent },
+          { label: "Discovery Sources",   value: activePlatforms,       color: T.accent },
           { label: "Connected Providers", value: providerData.length,   color: T.info },
         ].map(({ label, value, color }) => (
           <div key={label} style={{ background: T.panel, border: `1px solid ${T.border}`, borderRadius: 8, padding: "18px 22px", flex: 1 }}>
@@ -321,17 +324,11 @@ export default function EcosystemDiscovery() {
         <div style={{ fontSize: 12, color: T.textMute, fontFamily: MONO, marginBottom: 16 }}>
           Sources where AI agents have been detected across your organization
         </div>
-        {platformData.length > 0 ? (
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 14 }}>
-            {platformData.map(p => (
-              <PlatformCard key={p.key} meta={p.meta} count={p.count} agentNames={p.agentNames} maxCount={maxPlatformCount} />
-            ))}
-          </div>
-        ) : (
-          <div style={{ padding: "28px", background: T.panel, border: `1px solid ${T.border}`, borderRadius: 8, color: T.textMute, fontFamily: MONO, fontSize: 13, textAlign: "center" }}>
-            No platform connections discovered yet. Start by routing AI traffic through the gateway.
-          </div>
-        )}
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 14 }}>
+          {platformData.map(p => (
+            <PlatformCard key={p.key} meta={p.meta} count={p.count} agentNames={p.agentNames} maxCount={maxPlatformCount} />
+          ))}
+        </div>
       </div>
 
       {/* ── Connected Providers ────────────────────────────────────────────── */}

@@ -408,8 +408,9 @@ export default function DiscoveryCenter({ initialTab = "verified" }) {
     try {
       await validateInventoryAgent(agentId, { validated: true });
       setValidateConfirm(null);
-      toast("Agent validated successfully");
+      toast("Agent validated — moved to Verified Agents");
       await load();
+      setTab("verified");
     } catch (e) { toast("Error: " + e.message); }
     finally { setBusy(b => { const n = { ...b }; delete n[agentId]; return n; }); }
   };
