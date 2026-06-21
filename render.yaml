@@ -43,10 +43,14 @@ services:
     buildCommand: cd dashboard && npm install && npm run build
     staticPublishPath: dashboard/dist
     envVars:
-      # Set VITE_API_BASE manually in the Render dashboard to the FULL backend URL,
-      # e.g. https://ai-asset-backend.onrender.com. We don't use fromService here
-      # because property:host can resolve to the bare service name (no .onrender.com),
-      # which then fails to resolve in the browser.
+      # VITE_API_URL is auto-derived from the backend service hostname at build time.
+      # vite.config.js converts it to https://<host> and bakes it into the bundle.
+      # You can override with VITE_API_BASE (full URL) set manually in the dashboard.
+      - key: VITE_API_URL
+        fromService:
+          name: ai-asset-backend
+          type: web
+          property: host
       - key: VITE_API_BASE
         sync: false
     routes:

@@ -5,10 +5,12 @@ import tailwindcss from '@tailwindcss/vite'
 export default defineConfig({
   plugins: [react(), tailwindcss()],
   define: {
-    // VITE_API_URL is set by Render to the backend's host (no protocol).
-    // In dev (no env var) BASE stays '/api' and the proxy below handles it.
+    // VITE_API_BASE: full URL (e.g. https://ai-asset-backend.onrender.com) set manually in Render.
+    // VITE_API_URL: bare hostname auto-derived via fromService in render.yaml.
+    // In dev (neither set) BASE stays '/api' and the proxy below handles it.
     'import.meta.env.VITE_API_BASE': JSON.stringify(
-      process.env.VITE_API_URL ? `https://${process.env.VITE_API_URL}` : ''
+      process.env.VITE_API_BASE ||
+      (process.env.VITE_API_URL ? `https://${process.env.VITE_API_URL}` : '')
     ),
   },
   server: {
