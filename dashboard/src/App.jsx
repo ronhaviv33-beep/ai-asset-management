@@ -1963,7 +1963,7 @@ function LoginPage({ onLogin }) {
   );
 }
 
-function SortableUsersTable({ users, currentUser, editing, editSaving, setEditing, saveEdit, cancelEdit, handleToggle, handleDelete, inlineInput, inlineSelect, onChangePassword }) {
+function SortableUsersTable({ users, currentUser, editing, editSaving, setEditing, saveEdit, cancelEdit, handleToggle, handleDelete, onDisable, inlineInput, inlineSelect, onChangePassword }) {
   const roles = useRoles();
   const { sortKey, sortDir, toggle, sort } = useSortable("created_at");
   const colKey = { "Name":"name","Email":"email","Role":"role","Team":"team","Status":"is_active","Created":"created_at" };
@@ -2029,7 +2029,7 @@ function SortableUsersTable({ users, currentUser, editing, editSaving, setEditin
                         style={{ background:`${T.accent}12`, border:`1px solid ${T.accent}44`, color:T.accent, padding:"4px 10px", borderRadius:3, fontSize:11, fontFamily:FONT_MONO, cursor:"pointer" }}>
                         Password
                       </button>
-                      <button onClick={() => handleToggle(u)}
+                      <button onClick={() => u.is_active ? onDisable(u) : handleToggle(u)}
                         style={{ background:"transparent", border:`1px solid ${T.border}`, color:u.is_active?T.warn:T.accent, padding:"4px 10px", borderRadius:3, fontSize:11, fontFamily:FONT_MONO, cursor:"pointer" }}>
                         {u.is_active ? "Disable" : "Enable"}
                       </button>
@@ -2225,6 +2225,8 @@ function UsersPage() {
   const [pwConfirm, setPwConfirm] = useState("");
   const [pwSaving,  setPwSaving]  = useState(false);
   const [pwErr,     setPwErr]     = useState(null);
+  // disable confirmation: user object | null
+  const [disableConfirm, setDisableConfirm] = useState(null);
 
   const load = useCallback(async () => {
     try {
@@ -2337,6 +2339,7 @@ function UsersPage() {
         <SortableUsersTable users={users} currentUser={currentUser} editing={editing} editSaving={editSaving}
           setEditing={setEditing} saveEdit={saveEdit} cancelEdit={cancelEdit}
           handleToggle={handleToggle} handleDelete={handleDelete}
+          onDisable={setDisableConfirm}
           inlineInput={inlineInput} inlineSelect={inlineSelect}
           onChangePassword={openPwModal} />
       </Card>
@@ -2365,6 +2368,37 @@ function UsersPage() {
               <button onClick={savePassword} disabled={pwSaving}
                 style={{ background:T.accent, color:T.bg, border:"none", padding:"7px 18px", borderRadius:4, fontSize:12, fontFamily:FONT_MONO, fontWeight:600, cursor:"pointer", opacity:pwSaving?0.6:1 }}>
                 {pwSaving ? "Saving…" : "Save Password"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Disable Confirmation Modal ── */}
+      {disableConfirm && (
+        <div style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.65)", display:"flex", alignItems:"center", justifyContent:"center", zIndex:1000 }}>
+          <div style={{ background:T.panel, border:`1px solid ${T.warn}55`, borderRadius:10, padding:28, minWidth:340, maxWidth:420, display:"flex", flexDirection:"column", gap:18 }}>
+            <div style={{ display:"flex", alignItems:"center", gap:10 }}>
+              <span style={{ fontSize:20, color:T.warn }}>⚠</span>
+              <div style={{ fontWeight:700, color:T.text, fontSize:15 }}>Disable user?</div>
+            </div>
+            <div style={{ fontSize:13, color:T.textDim, lineHeight:1.6 }}>
+              You are about to disable{" "}
+              <strong style={{ color:T.text }}>{disableConfirm.name || disableConfirm.email}</strong>.
+              {disableConfirm.id === currentUser?.id && (
+                <span style={{ display:"block", marginTop:8, color:T.warn, fontWeight:600 }}>
+                  Warning: this is your own account. You will be logged out immediately.
+                </span>
+              )}
+            </div>
+            <div style={{ display:"flex", gap:10, justifyContent:"flex-end" }}>
+              <button onClick={() => setDisableConfirm(null)}
+                style={{ background:"transparent", border:`1px solid ${T.border}`, color:T.textDim, padding:"7px 18px", borderRadius:5, fontSize:12, fontFamily:FONT_MONO, cursor:"pointer" }}>
+                Cancel
+              </button>
+              <button onClick={() => { handleToggle(disableConfirm); setDisableConfirm(null); }}
+                style={{ background:`${T.warn}18`, border:`1px solid ${T.warn}55`, color:T.warn, padding:"7px 18px", borderRadius:5, fontSize:12, fontFamily:FONT_MONO, cursor:"pointer", fontWeight:600 }}>
+                Disable
               </button>
             </div>
           </div>
