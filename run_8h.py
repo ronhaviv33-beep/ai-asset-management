@@ -162,24 +162,33 @@ def sdk_call(client, identity: dict, prompt: str) -> tuple[bool, int, str]:
     """
     Send one call through the ai_agent_inventory SDK.
     Per-request extra_headers override the base identity set in the client.
+    Retries once on 502/503 (Render infrastructure hiccups) after 5 s.
     Returns (ok, status, detail).
     """
-    try:
-        resp = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[{"role": "user", "content": prompt}],
-            max_tokens=50,
-            extra_headers={
-                "X-Agent-Name":        identity["name"],
-                "X-Agent-Team":        identity["team"],
-                "X-Agent-Environment": identity["env"],
-            },
-        )
-        text = (resp.choices[0].message.content or "").strip()[:40]
-        return True, 200, text
-    except Exception as exc:
-        status = getattr(exc, "status_code", 0)
-        return False, status or 0, str(exc)[:60]
+    headers = {
+        "X-Agent-Name":        identity["name"],
+        "X-Agent-Team":        identity["team"],
+        "X-Agent-Environment": identity["env"],
+    }
+    for attempt in range(2):
+        try:
+            resp = client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=50,
+                extra_headers=headers,
+                timeout=60,
+            )
+            text = (resp.choices[0].message.content or "").strip()[:40]
+            return True, 200, text
+        except Exception as exc:
+            status = getattr(exc, "status_code", 0)
+            body   = str(exc)
+            if status in (502, 503) and attempt == 0:
+                time.sleep(5)
+                continue
+            return False, status or 0, body[:60]
+    return False, 0, "retries exhausted"
 
 
 def health_snapshot(token: str) -> dict:
@@ -366,14 +375,17 @@ def main() -> None:
 
                 if ok:
                     passed += 1
-                    tag = f"{GREEN}OK{RESET}    "
+                    tag = f"{GREEN}OK{RESET}      "
                 elif status == 429:
                     failed += 1
                     budget_warnings += 1
                     tag = f"{YELLOW}429 BUDGET{RESET}"
+                elif status in (502, 503):
+                    failed += 1
+                    tag = f"{YELLOW}{status} RETRY{RESET} "
                 else:
                     failed += 1
-                    tag = f"{RED}{status or 'ERR'}{RESET}  "
+                    tag = f"{RED}{status or 'ERR'}{RESET}    "
 
                 total_done = passed + failed
                 progress = total_done / total_calls * 100
