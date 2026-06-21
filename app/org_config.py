@@ -6,6 +6,10 @@ from sqlalchemy.orm import Session
 DEFAULTS: dict = {
     "environments": ["production", "staging", "development"],
     "demo_mode": True,
+    # "full" (default): store complete prompt + response text in telemetry.
+    # "findings_only": for PII-flagged records, replace prompt + response with a
+    # redaction notice and keep only the findings metadata. Reduces PII at-rest exposure.
+    "pii_redaction_mode": "full",
 }
 
 

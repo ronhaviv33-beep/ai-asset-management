@@ -7,6 +7,9 @@ from app.client import CompletionResult
 from app.schemas import TelemetrySummary
 
 
+_REDACTED = "[redacted by org policy — pii_redaction_mode=findings_only]"
+
+
 def save(
     db: Session,
     team: str,
@@ -22,15 +25,18 @@ def save(
     team_raw: str | None = None,
     environment_raw: str | None = None,
     is_demo: bool = False,
+    redact_pii_text: bool = False,
 ) -> Telemetry:
     cost_usd, pricing_estimated = calculate_cost(result.model, result.prompt_tokens, result.completion_tokens)
+    stored_prompt   = _REDACTED if (sensitive and redact_pii_text) else prompt
+    stored_response = _REDACTED if (sensitive and redact_pii_text) else result.content
     record = Telemetry(
         organization_id=organization_id,
         team=team,
         agent=agent,
         model=result.model,
-        prompt=prompt,
-        response=result.content,
+        prompt=stored_prompt,
+        response=stored_response,
         prompt_tokens=result.prompt_tokens,
         completion_tokens=result.completion_tokens,
         total_tokens=result.total_tokens,
@@ -69,11 +75,13 @@ def save_blocked(
     team_raw: str | None = None,
     environment_raw: str | None = None,
     is_demo: bool = False,
+    redact_pii_text: bool = False,
 ) -> Telemetry:
     """Record a request that was blocked before reaching the LLM."""
+    stored_prompt = _REDACTED if (sensitive and redact_pii_text) else prompt
     record = Telemetry(
         organization_id=organization_id,
-        team=team, agent=agent, model=model, prompt=prompt, response="",
+        team=team, agent=agent, model=model, prompt=stored_prompt, response="",
         prompt_tokens=0, completion_tokens=0, total_tokens=0,
         latency_ms=0.0, cost_usd=0.0,
         sensitive=sensitive,

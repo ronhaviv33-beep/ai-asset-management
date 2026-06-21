@@ -1377,6 +1377,8 @@ def health(db: Session = Depends(get_db)):
 
 @app.post("/ask", response_model=AskResponse, tags=["POST — Ask / Create"])
 async def ask(req: AskRequest, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
+    org_id = current_user.organization_id
+    _pii_redact = (_get_org_config(db, org_id, "pii_redaction_mode") or "full") == "findings_only"
 
     # 1. PII / sensitive data scan
     scan_result = scan(req.prompt)
@@ -1386,15 +1388,15 @@ async def ask(req: AskRequest, db: Session = Depends(get_db), current_user=Depen
                                "sample": f"{len(req.prompt):,} chars"})
 
     # 2. Policy enforcement — model allowlist / blocklist
-    policy_check = pol.check_model(db, organization_id=organization_id, team=req.team, model=req.model)
+    policy_check = pol.check_model(db, organization_id=org_id, team=req.team, model=req.model)
     if not policy_check["allowed"]:
         _shadow_or_block_inline(db, team=req.team, agent=req.agent, model=req.model,
                                 prompt=req.prompt, reason=policy_check["reason"], status=403,
                                 scan_result=scan_result, findings_list=findings_list,
-                                organization_id=current_user.organization_id)
+                                organization_id=org_id, redact_pii_text=_pii_redact)
 
     # 3. Budget enforcement
-    budget_check = bud.check(db, organization_id=current_user.organization_id, team=req.team, agent=req.agent)
+    budget_check = bud.check(db, organization_id=org_id, team=req.team, agent=req.agent)
     if not budget_check["allowed"]:
         blk = budget_check["blocked_by"]
         reason = (
@@ -1405,7 +1407,7 @@ async def ask(req: AskRequest, db: Session = Depends(get_db), current_user=Depen
         _shadow_or_block_inline(db, team=req.team, agent=req.agent, model=req.model,
                                 prompt=req.prompt, reason=reason, status=429,
                                 scan_result=scan_result, findings_list=findings_list,
-                                organization_id=current_user.organization_id)
+                                organization_id=org_id, redact_pii_text=_pii_redact)
 
     # 4. Call LLM
     try:
@@ -1423,7 +1425,7 @@ async def ask(req: AskRequest, db: Session = Depends(get_db), current_user=Depen
     record = tel.save(
         db=db, team=req.team, agent=req.agent, prompt=req.prompt, result=result,
         sensitive=scan_result.is_sensitive, sensitive_findings=findings_list,
-        organization_id=current_user.organization_id,
+        organization_id=org_id, redact_pii_text=_pii_redact,
     )
 
     # 6. Attach to existing session or auto-create one
@@ -1471,6 +1473,8 @@ async def ask(req: AskRequest, db: Session = Depends(get_db), current_user=Depen
 
 @app.post("/chat", response_model=ChatResponse, tags=["POST — Ask / Create"])
 async def chat(req: ChatRequest, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
+    org_id = current_user.organization_id
+    _pii_redact = (_get_org_config(db, org_id, "pii_redaction_mode") or "full") == "findings_only"
 
     # Scan the latest user message only
     last_user = next((m.content for m in reversed(req.messages) if m.role == "user"), "")
@@ -1482,14 +1486,15 @@ async def chat(req: ChatRequest, db: Session = Depends(get_db), current_user=Dep
                                "sample": f"{total_chars:,} chars across {len(req.messages)} messages"})
 
     # Policy check
-    policy_check = pol.check_model(db, organization_id=current_user.organization_id, team=req.team, model=req.model)
+    policy_check = pol.check_model(db, organization_id=org_id, team=req.team, model=req.model)
     if not policy_check["allowed"]:
         _shadow_or_block_inline(db, team=req.team, agent=req.agent, model=req.model,
                                 prompt=last_user, reason=policy_check["reason"], status=403,
-                                scan_result=scan_result, findings_list=findings_list)
+                                scan_result=scan_result, findings_list=findings_list,
+                                organization_id=org_id, redact_pii_text=_pii_redact)
 
     # Budget check
-    budget_check = bud.check(db, organization_id=current_user.organization_id, team=req.team, agent=req.agent)
+    budget_check = bud.check(db, organization_id=org_id, team=req.team, agent=req.agent)
     if not budget_check["allowed"]:
         blk = budget_check["blocked_by"]
         reason = (f"Budget limit exceeded for team '{blk['team']}': "
@@ -1497,7 +1502,7 @@ async def chat(req: ChatRequest, db: Session = Depends(get_db), current_user=Dep
         _shadow_or_block_inline(db, team=req.team, agent=req.agent, model=req.model,
                                 prompt=last_user, reason=reason, status=429,
                                 scan_result=scan_result, findings_list=findings_list,
-                                organization_id=current_user.organization_id)
+                                organization_id=org_id, redact_pii_text=_pii_redact)
 
     # Build messages list — prepend system prompt if given
     messages = []
@@ -1515,7 +1520,7 @@ async def chat(req: ChatRequest, db: Session = Depends(get_db), current_user=Dep
     record = tel.save(db=db, team=req.team, agent=req.agent, prompt=last_user,
                       result=result, sensitive=scan_result.is_sensitive,
                       sensitive_findings=findings_list,
-                      organization_id=current_user.organization_id)
+                      organization_id=org_id, redact_pii_text=_pii_redact)
 
     return ChatResponse(
         reply=result.content,
@@ -1741,8 +1746,11 @@ def get_session_messages(session_uuid: str, db: Session = Depends(get_db), curre
 
 @app.post("/sessions/{session_uuid}/chat", response_model=ChatResponse, tags=["POST — Ask / Create"])
 async def session_chat(session_uuid: str, req: SessionChatRequest, db: Session = Depends(get_db), current_user=Depends(get_current_user)):
+    org_id = current_user.organization_id
+    _pii_redact = (_get_org_config(db, org_id, "pii_redaction_mode") or "full") == "findings_only"
+
     # Verify session exists, is active, and belongs to the requesting user's org
-    s = sess.get_session(db, session_uuid, organization_id=current_user.organization_id)
+    s = sess.get_session(db, session_uuid, organization_id=org_id)
     if not s:
         raise HTTPException(status_code=404, detail="Session not found")
     _assert_session_owner(s, current_user)
@@ -1762,14 +1770,15 @@ async def session_chat(session_uuid: str, req: SessionChatRequest, db: Session =
                                "sample": f"{total_chars:,} chars across {len(req.messages)} messages"})
 
     # Policy check
-    policy_check = pol.check_model(db, organization_id=current_user.organization_id, team=req.team, model=req.model)
+    policy_check = pol.check_model(db, organization_id=org_id, team=req.team, model=req.model)
     if not policy_check["allowed"]:
         _shadow_or_block_inline(db, team=req.team, agent=req.agent, model=req.model,
                                 prompt=last_user, reason=policy_check["reason"], status=403,
-                                scan_result=scan_result, findings_list=findings_list)
+                                scan_result=scan_result, findings_list=findings_list,
+                                organization_id=org_id, redact_pii_text=_pii_redact)
 
     # Budget check
-    budget_check = bud.check(db, organization_id=current_user.organization_id, team=req.team, agent=req.agent)
+    budget_check = bud.check(db, organization_id=org_id, team=req.team, agent=req.agent)
     if not budget_check["allowed"]:
         blk = budget_check["blocked_by"]
         reason = (f"Budget limit exceeded for team '{blk['team']}': "
@@ -1777,7 +1786,7 @@ async def session_chat(session_uuid: str, req: SessionChatRequest, db: Session =
         _shadow_or_block_inline(db, team=req.team, agent=req.agent, model=req.model,
                                 prompt=last_user, reason=reason, status=429,
                                 scan_result=scan_result, findings_list=findings_list,
-                                organization_id=current_user.organization_id)
+                                organization_id=org_id, redact_pii_text=_pii_redact)
 
     # Build messages list
     messages = []
@@ -1795,7 +1804,7 @@ async def session_chat(session_uuid: str, req: SessionChatRequest, db: Session =
     record = tel.save(db=db, team=req.team, agent=req.agent, prompt=last_user,
                       result=result, sensitive=scan_result.is_sensitive,
                       sensitive_findings=findings_list,
-                      organization_id=current_user.organization_id)
+                      organization_id=org_id, redact_pii_text=_pii_redact)
 
     # Persist user message + assistant reply in session
     sess.add_message(db, session_uuid=session_uuid, role="user", content=last_user,
@@ -2023,7 +2032,8 @@ def _resolve_guard_mode(db: Session, team: str, organization_id: int | None = No
 
 
 def _shadow_or_block_inline(db, *, team, agent, model, prompt, reason, status,
-                            scan_result, findings_list, organization_id=None):
+                            scan_result, findings_list, organization_id=None,
+                            redact_pii_text: bool = False):
     """
     Mode-aware block used by /ask and /chat inline enforcement.
     enforce → save_blocked + raise; observe/alert → append would_block finding.
@@ -2032,14 +2042,16 @@ def _shadow_or_block_inline(db, *, team, agent, model, prompt, reason, status,
     if mode == "enforce":
         tel.save_blocked(db, team=team, agent=agent, model=model, prompt=prompt,
                          reason=reason, sensitive=scan_result.is_sensitive,
-                         sensitive_findings=findings_list, organization_id=organization_id)
+                         sensitive_findings=findings_list, organization_id=organization_id,
+                         redact_pii_text=redact_pii_text)
         raise HTTPException(status_code=status, detail=reason)
     findings_list.append({"type": "would_block", "severity": "warning",
                           "sample": f"WOULD BLOCK in enforce mode ({status}): {reason}"})
 
 
 async def _run_enforcement_pipeline(
-    db: Session, team: str, agent: str, model: str, messages: list, organization_id: int | None = None
+    db: Session, team: str, agent: str, model: str, messages: list,
+    organization_id: int | None = None, redact_pii_text: bool = False,
 ):
     """
     Mode-aware enforcement. ALWAYS evaluates PII scan → policy → budget so the
@@ -2072,7 +2084,7 @@ async def _run_enforcement_pipeline(
             tel.save_blocked(db, team=team, agent=agent, model=model,
                              prompt=last_user, reason=reason,
                              sensitive=scan_result.is_sensitive, sensitive_findings=findings_list,
-                             organization_id=organization_id)
+                             organization_id=organization_id, redact_pii_text=redact_pii_text)
             raise HTTPException(status_code=status, detail=reason)
         findings_list.append({
             "type": "would_block", "severity": "warning",
@@ -2177,6 +2189,7 @@ async def openai_compat_chat(
     team_raw = _identity.team
     environment_raw = _identity.environment
 
+    _pii_redact = (_get_org_config(db, org_id, "pii_redaction_mode") or "full") == "findings_only"
     org_client = get_client_for_org(org_id, model, db)
     _register_team(db, org_id, team)
 
@@ -2203,7 +2216,8 @@ async def openai_compat_chat(
     scan_result = None
     try:
         last_user, scan_result, findings_list, _, budget_check, _ = \
-            await _run_enforcement_pipeline(db, team, agent, model, messages, organization_id=org_id)
+            await _run_enforcement_pipeline(db, team, agent, model, messages,
+                                            organization_id=org_id, redact_pii_text=_pii_redact)
         budget_warnings = budget_check["warnings"]
         _circuit_record_success()
     except HTTPException:
@@ -2244,6 +2258,7 @@ async def openai_compat_chat(
                     agent_version=agent_version,
                     team_raw=team_raw,
                     environment_raw=environment_raw,
+                    redact_pii_text=_pii_redact,
                 )
                 if org_id and _get_org_config(db, org_id, "demo_mode"):
                     _set_org_config(db, org_id, "demo_mode", False)
@@ -2264,7 +2279,8 @@ async def openai_compat_chat(
                          sensitive=(scan_result.is_sensitive if scan_result else False),
                          sensitive_findings=findings_list, organization_id=org_id,
                          asset_key=asset_key, agent_id_raw=agent_id_raw,
-                         agent_version=agent_version, team_raw=team_raw, environment_raw=environment_raw)
+                         agent_version=agent_version, team_raw=team_raw, environment_raw=environment_raw,
+                         redact_pii_text=_pii_redact)
         raise HTTPException(status_code=503, detail="Service temporarily unavailable. Please try again.")
     except Exception as exc:
         import logging; logging.getLogger("ai_asset_mgmt").error("LLM error", exc_info=True)
@@ -2273,7 +2289,8 @@ async def openai_compat_chat(
                          sensitive=(scan_result.is_sensitive if scan_result else False),
                          sensitive_findings=findings_list, organization_id=org_id,
                          asset_key=asset_key, agent_id_raw=agent_id_raw,
-                         agent_version=agent_version, team_raw=team_raw, environment_raw=environment_raw)
+                         agent_version=agent_version, team_raw=team_raw, environment_raw=environment_raw,
+                         redact_pii_text=_pii_redact)
         raise HTTPException(status_code=502, detail="Upstream LLM error. Please try again.")
 
     latency_ms = resp_dict.pop("_latency_ms", 0.0)
@@ -2301,6 +2318,7 @@ async def openai_compat_chat(
         agent_version=agent_version,
         team_raw=team_raw,
         environment_raw=environment_raw,
+        redact_pii_text=_pii_redact,
     )
     if org_id and _get_org_config(db, org_id, "demo_mode"):
         _set_org_config(db, org_id, "demo_mode", False)
@@ -2402,6 +2420,7 @@ async def anthropic_compat_messages(
     team_raw = _identity.team
     environment_raw = _identity.environment
 
+    _pii_redact = (_get_org_config(db, org_id, "pii_redaction_mode") or "full") == "findings_only"
     org_client = get_client_for_org(org_id, model, db)
     _register_team(db, org_id, team)
 
@@ -2427,7 +2446,8 @@ async def anthropic_compat_messages(
     scan_result = None
     try:
         last_user, scan_result, findings_list, _, budget_check, _ = \
-            await _run_enforcement_pipeline(db, team, agent, model, oai_messages, organization_id=org_id)
+            await _run_enforcement_pipeline(db, team, agent, model, oai_messages,
+                                            organization_id=org_id, redact_pii_text=_pii_redact)
         budget_warnings = budget_check["warnings"]
         _circuit_record_success()
     except HTTPException:
@@ -2497,6 +2517,7 @@ async def anthropic_compat_messages(
                     agent_version=agent_version,
                     team_raw=team_raw,
                     environment_raw=environment_raw,
+                    redact_pii_text=_pii_redact,
                 )
                 if org_id and _get_org_config(db, org_id, "demo_mode"):
                     _set_org_config(db, org_id, "demo_mode", False)
@@ -2517,7 +2538,8 @@ async def anthropic_compat_messages(
                          sensitive=(scan_result.is_sensitive if scan_result else False),
                          sensitive_findings=findings_list, organization_id=org_id,
                          asset_key=asset_key, agent_id_raw=agent_id_raw,
-                         agent_version=agent_version, team_raw=team_raw, environment_raw=environment_raw)
+                         agent_version=agent_version, team_raw=team_raw, environment_raw=environment_raw,
+                         redact_pii_text=_pii_redact)
         raise HTTPException(status_code=503, detail="Service temporarily unavailable. Please try again.")
     except Exception as exc:
         import logging; logging.getLogger("ai_asset_mgmt").error("LLM error", exc_info=True)
@@ -2526,7 +2548,8 @@ async def anthropic_compat_messages(
                          sensitive=(scan_result.is_sensitive if scan_result else False),
                          sensitive_findings=findings_list, organization_id=org_id,
                          asset_key=asset_key, agent_id_raw=agent_id_raw,
-                         agent_version=agent_version, team_raw=team_raw, environment_raw=environment_raw)
+                         agent_version=agent_version, team_raw=team_raw, environment_raw=environment_raw,
+                         redact_pii_text=_pii_redact)
         raise HTTPException(status_code=502, detail="Upstream LLM error. Please try again.")
 
     latency_ms = resp_dict.pop("_latency_ms", 0.0)
@@ -2553,6 +2576,7 @@ async def anthropic_compat_messages(
         agent_version=agent_version,
         team_raw=team_raw,
         environment_raw=environment_raw,
+        redact_pii_text=_pii_redact,
     )
     if org_id and _get_org_config(db, org_id, "demo_mode"):
         _set_org_config(db, org_id, "demo_mode", False)
