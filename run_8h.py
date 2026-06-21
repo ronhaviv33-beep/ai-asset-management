@@ -2,10 +2,12 @@
 """
 8-hour soak / traffic-generation script for AI Asset Management platform.
 
-Sends one proxy call every CALL_INTERVAL seconds through the gateway using a
-gk- API key. Every HEALTH_INTERVAL seconds it also hits the management API
-for a health snapshot (telemetry count, active agents, budget warnings).
-Prints a live rolling summary and a final report on exit.
+Sends one proxy call every CALL_INTERVAL seconds through the gateway.
+Proxy calls go through the ai_agent_inventory SDK when available (preferred)
+and fall back to raw requests otherwise.  Every HEALTH_INTERVAL seconds it
+also hits the management API for a health snapshot (telemetry count, active
+agents, budget warnings).  Prints a live rolling summary and a final report
+on exit.
 
 Usage:
     python run_8h.py --gk gk-<your-key>
@@ -20,6 +22,13 @@ import time
 import random
 import requests
 from datetime import datetime, timedelta
+
+# ── SDK import (optional — falls back to raw requests if not installed) ────────
+try:
+    from ai_agent_inventory import OpenAI as _InventoryOpenAI
+    _SDK_AVAILABLE = True
+except ImportError:
+    _SDK_AVAILABLE = False
 
 # ── CONFIG — edit if your deployment differs ───────────────────────────────────
 BACKEND  = "https://ai-asset-backend.onrender.com"
@@ -132,6 +141,47 @@ def proxy_call(gk: str, identity: dict, prompt: str) -> tuple[bool, int, str]:
         return False, 0, str(exc)[:60]
 
 
+def make_sdk_client(gk: str):
+    """
+    Build one ai_agent_inventory.OpenAI client.  Per-call identity overrides
+    are applied via extra_headers in sdk_call() so a single client handles
+    all rotating agent names.  Returns None if SDK is not installed.
+    """
+    if not _SDK_AVAILABLE:
+        return None
+    return _InventoryOpenAI(
+        api_key=gk,
+        gateway_url=BACKEND,
+        agent_name="soak-base",
+        team="Engineering",
+        environment="prod",
+    )
+
+
+def sdk_call(client, identity: dict, prompt: str) -> tuple[bool, int, str]:
+    """
+    Send one call through the ai_agent_inventory SDK.
+    Per-request extra_headers override the base identity set in the client.
+    Returns (ok, status, detail).
+    """
+    try:
+        resp = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=50,
+            extra_headers={
+                "X-Agent-Name":        identity["name"],
+                "X-Agent-Team":        identity["team"],
+                "X-Agent-Environment": identity["env"],
+            },
+        )
+        text = (resp.choices[0].message.content or "").strip()[:40]
+        return True, 200, text
+    except Exception as exc:
+        status = getattr(exc, "status_code", 0)
+        return False, status or 0, str(exc)[:60]
+
+
 def health_snapshot(token: str) -> dict:
     """Fetch lightweight management stats. Returns dict of counts."""
     snap = {"telemetry": 0, "agents": 0, "budgets": 0, "health": False}
@@ -178,10 +228,12 @@ def health_snapshot(token: str) -> dict:
 
 def print_banner(args: argparse.Namespace, end_time: datetime) -> None:
     width = 70
+    sdk_label = f"{GREEN}ai_agent_inventory SDK{RESET}" if _SDK_AVAILABLE else f"{YELLOW}raw requests (SDK not installed){RESET}"
     print(f"\n{'═' * width}")
     print(f"  {BOLD}AI Asset Management — 8-Hour Soak Test{RESET}")
     print(f"  Backend:   {BACKEND}")
     print(f"  GK key:    {args.gk[:12]}…")
+    print(f"  Call mode: {sdk_label}")
     print(f"  Duration:  {args.hours}h  ({args.batch} call/batch × every {args.interval}s)")
     total_calls = int(args.hours * 3600 / args.interval) * args.batch
     print(f"  Est. calls:{total_calls:>6,}")
@@ -255,6 +307,9 @@ def main() -> None:
         print(f"  {RED}Cannot log in — aborting.{RESET}")
         sys.exit(1)
 
+    # Build SDK client (preferred) or fall back to raw requests
+    sdk_client = make_sdk_client(args.gk)
+
     snap = health_snapshot(token)
     print_banner(args, end_time)
 
@@ -262,6 +317,11 @@ def main() -> None:
         print(f"  {RED}Warning: /health not returning 200. Proceeding anyway.{RESET}")
     else:
         print(f"  {GREEN}/health OK{RESET}  │  starting telemetry: {snap['telemetry']:,} rows  │  agents: {snap['agents']}")
+
+    if sdk_client:
+        print(f"  {CYAN}SDK client ready — calls go through ai_agent_inventory.OpenAI{RESET}")
+    else:
+        print(f"  {YELLOW}SDK not installed — using raw requests. Run: pip install -e .{RESET}")
 
     # Counters
     passed          = 0
@@ -297,22 +357,27 @@ def main() -> None:
                 identity_idx += 1
                 prompt_idx   += 1
 
-                ok, status, detail = proxy_call(args.gk, identity, prompt)
+                if sdk_client is not None:
+                    ok, status, detail = sdk_call(sdk_client, identity, prompt)
+                    mode_tag = f"{CYAN}SDK{RESET} "
+                else:
+                    ok, status, detail = proxy_call(args.gk, identity, prompt)
+                    mode_tag = "HTTP"
 
                 if ok:
                     passed += 1
-                    tag = f"{GREEN}OK{RESET}"
+                    tag = f"{GREEN}OK{RESET}    "
                 elif status == 429:
                     failed += 1
                     budget_warnings += 1
                     tag = f"{YELLOW}429 BUDGET{RESET}"
                 else:
                     failed += 1
-                    tag = f"{RED}{status or 'ERR'}{RESET}"
+                    tag = f"{RED}{status or 'ERR'}{RESET}  "
 
                 total_done = passed + failed
                 progress = total_done / total_calls * 100
-                print(f"  [{ts()}] [{tag}] {identity['name']:<24} "
+                print(f"  [{ts()}] [{mode_tag}][{tag}] {identity['name']:<24} "
                       f"{progress:5.1f}%  \"{detail[:35]}\"")
 
             # Periodic health snapshot
