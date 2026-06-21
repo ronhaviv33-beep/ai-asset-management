@@ -278,7 +278,8 @@ def _seed_admin():
     from app.models import User
     db = next(get_db())
     try:
-        if not db.query(User).filter(User.email == "admin@ai-asset-mgmt.local").first():
+        existing = db.query(User).filter(User.email == "admin@ai-asset-mgmt.local").first()
+        if not existing:
             # If ADMIN_SEED_PASSWORD is set use it; otherwise generate a random one and
             # print it once so the operator can capture it from the boot logs.
             seed_pw = os.getenv("ADMIN_SEED_PASSWORD") or _secrets.token_urlsafe(20)
@@ -305,6 +306,12 @@ def _seed_admin():
                     "╚══════════════════════════════════════════════════════════════╝\n",
                     flush=True,
                 )
+        elif not existing.is_platform_admin:
+            # Upgrade path: existing admin missing the platform flag (e.g. created before
+            # the column was added or seeded without it).
+            existing.is_platform_admin = True
+            db.commit()
+            print("INFO: platform admin flag was missing — corrected on startup.", flush=True)
     finally:
         db.close()
 

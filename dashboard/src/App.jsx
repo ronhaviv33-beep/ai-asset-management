@@ -6042,10 +6042,21 @@ export default function App() {
     }
   }, [user, rolesMap]);
 
-  // Fetch all orgs when logged in as platform admin
+  // Fetch all orgs when logged in as platform admin; retry up to 3× if empty
   useEffect(() => {
     if (!user?.is_platform_admin) return;
-    fetchOrganizations().then(setAllOrgs).catch(() => {});
+    let cancelled = false;
+    const load = (attempt = 0) => {
+      fetchOrganizations().then(orgs => {
+        if (cancelled) return;
+        if (orgs.length > 0) { setAllOrgs(orgs); return; }
+        if (attempt < 3) setTimeout(() => load(attempt + 1), 1500);
+      }).catch(() => {
+        if (!cancelled && attempt < 3) setTimeout(() => load(attempt + 1), 1500);
+      });
+    };
+    load();
+    return () => { cancelled = true; };
   }, [user]);
 
   // On mount, validate stored token; also listen for mid-session expiry
@@ -6282,8 +6293,17 @@ export default function App() {
           {/* Platform admin org switcher */}
           {user?.is_platform_admin && (
             <div style={{ background:T.panelHi, border:`1px solid ${T.purple ?? "#a78bfa"}`, borderRadius:6, padding:"8px 10px" }}>
-              <div style={{ fontSize:8, fontFamily:FONT_MONO, color:T.purple ?? "#a78bfa", textTransform:"uppercase", letterSpacing:"0.12em", marginBottom:5, fontWeight:600 }}>
-                ◆ Platform View
+              <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:5 }}>
+                <div style={{ fontSize:8, fontFamily:FONT_MONO, color:T.purple ?? "#a78bfa", textTransform:"uppercase", letterSpacing:"0.12em", fontWeight:600 }}>
+                  ◆ Platform View
+                </div>
+                {allOrgs.filter(o => !o.is_internal).length === 0 && (
+                  <button
+                    onClick={() => fetchOrganizations().then(orgs => { if (orgs.length) setAllOrgs(orgs); })}
+                    title="Reload organizations"
+                    style={{ background:"transparent", border:"none", color:T.purple ?? "#a78bfa", fontSize:11, cursor:"pointer", padding:"0 2px", lineHeight:1 }}
+                  >↻</button>
+                )}
               </div>
               <select
                 value={viewOrgId || ""}
@@ -6296,9 +6316,12 @@ export default function App() {
                 style={{ width:"100%", background:T.panel, border:`1px solid ${T.border}`, color:T.text, padding:"4px 6px", borderRadius:3, fontSize:11, fontFamily:FONT_MONO, cursor:"pointer" }}
               >
                 <option value="">All / Platform</option>
-                {allOrgs.filter(o => !o.is_internal).map(o => (
-                  <option key={o.id} value={String(o.id)}>{o.name}</option>
-                ))}
+                {allOrgs.filter(o => !o.is_internal).length === 0
+                  ? <option disabled value="">loading orgs…</option>
+                  : allOrgs.filter(o => !o.is_internal).map(o => (
+                      <option key={o.id} value={String(o.id)}>{o.name}</option>
+                    ))
+                }
               </select>
             </div>
           )}
