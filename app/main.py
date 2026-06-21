@@ -669,6 +669,8 @@ app.add_middleware(
     allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=[
         "Authorization", "Content-Type",
+        # Platform admin org switching
+        "X-View-Org",
         # New canonical agent-identity headers
         "X-Agent-Name", "X-Agent-Team", "X-Agent-Owner",
         "X-Agent-Environment", "X-Agent-Version", "X-Agent-Source",
