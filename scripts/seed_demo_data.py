@@ -1,8 +1,16 @@
 #!/usr/bin/env python3
 """
 Seed demo data for the AI Agent Inventory dashboard.
-Creates 25 telemetry agents + 10 platform-discovered potential agents across
-multiple teams, covering all dashboard pages.
+
+Creates a realistic dataset that demonstrates the full identity-resolution
+pipeline:
+  • 25 gateway agents discovered via explicit X-Agent-* headers (95% confidence)
+  •  7 gateway agents auto-detected without headers:
+       - 3 via AI framework fingerprint  (65%)
+       - 2 via API key scope             (75%)
+       - 1 via request-origin hostname   (45%)
+       - 1 via fallback hash             (15%, needs admin review)
+  • 13 platform-discovered potential agents (no gateway traffic yet)
 
 Usage:
     python scripts/seed_demo_data.py
@@ -31,13 +39,14 @@ def _asset_key(org_id: int, agent_id_raw: str) -> str:
 
 def cost_usd(model, prompt_tokens, completion_tokens):
     rates = {
-        "gpt-4.1":           (0.002,   0.008),
-        "gpt-4.1-mini":      (0.0004,  0.0016),
-        "gpt-4o":            (0.0025,  0.010),
-        "claude-sonnet-4-5": (0.003,   0.015),
-        "claude-haiku-4-5":  (0.0008,  0.004),
-        "claude-opus-4-5":   (0.015,   0.075),
-        "gpt-4o-mini":       (0.00015, 0.0006),
+        "gpt-4.1":                    (0.002,   0.008),
+        "gpt-4.1-mini":               (0.0004,  0.0016),
+        "gpt-4o":                     (0.0025,  0.010),
+        "claude-sonnet-4-5":          (0.003,   0.015),
+        "claude-haiku-4-5":           (0.0008,  0.004),
+        "claude-haiku-4-5-20251001":  (0.0008,  0.004),
+        "claude-opus-4-5":            (0.015,   0.075),
+        "gpt-4o-mini":                (0.00015, 0.0006),
     }
     in_r, out_r = rates.get(model, (0.002, 0.008))
     return (prompt_tokens / 1000) * in_r + (completion_tokens / 1000) * out_r
@@ -45,7 +54,10 @@ def cost_usd(model, prompt_tokens, completion_tokens):
 def _ensure_columns():
     from sqlalchemy import inspect as _inspect, text as _text
     with engine.connect() as conn:
-        cols = {c["name"] for c in _inspect(engine).get_columns("telemetry")}
+        insp = _inspect(engine)
+
+        # Telemetry table
+        t_cols = {c["name"] for c in insp.get_columns("telemetry")}
         for col_name, col_def in [
             ("asset_key",       "VARCHAR(64)"),
             ("agent_id_raw",    "VARCHAR(256)"),
@@ -53,12 +65,31 @@ def _ensure_columns():
             ("team_raw",        "VARCHAR(128)"),
             ("environment_raw", "VARCHAR(64)"),
         ]:
-            if col_name not in cols:
+            if col_name not in t_cols:
                 conn.execute(_text(f"ALTER TABLE telemetry ADD COLUMN {col_name} {col_def}"))
+
+        # Asset registry table — add columns introduced after initial migration
+        r_cols = {c["name"] for c in insp.get_columns("asset_registry")}
+        for col_name, col_def in [
+            ("discovery_status",  "VARCHAR(32) DEFAULT 'verified'"),
+            ("discovery_source",  "VARCHAR(64)"),
+            ("discovery_reason",  "TEXT"),
+            ("evidence",          "TEXT"),
+            ("confidence_score",  "FLOAT DEFAULT 95.0"),
+            ("claimed_by",        "VARCHAR(256)"),
+            ("claimed_at",        "DATETIME"),
+            ("first_seen_at",     "DATETIME"),
+        ]:
+            if col_name not in r_cols:
+                conn.execute(_text(f"ALTER TABLE asset_registry ADD COLUMN {col_name} {col_def}"))
+
         conn.commit()
 
 
-# ── Gateway agents (show up in telemetry + registry) ─────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
+# GATEWAY AGENTS — explicit X-Agent-* headers (resolution_method: explicit_headers)
+# confidence 95%, needs_admin_review: False
+# ─────────────────────────────────────────────────────────────────────────────
 
 GATEWAY_AGENTS = [
     # (agent_id_raw, team, profile, version, env)
@@ -89,132 +120,275 @@ GATEWAY_AGENTS = [
     ("supply-chain-ai",      "route-optimization", "medium",      "1.8.0", "prod"),
 ]
 
-# Registry metadata for gateway agents
+# ─────────────────────────────────────────────────────────────────────────────
+# AUTO-DETECTED GATEWAY AGENTS — no explicit headers, resolved automatically
+# ─────────────────────────────────────────────────────────────────────────────
+
+AUTO_DETECTED_AGENTS = [
+    # (agent_id_raw, team, profile, version, env, resolution_method, confidence, lifecycle)
+
+    # Framework fingerprint in User-Agent → confidence 65%, needs admin review
+    ("langchain-agent",         "data-engineering",   "medium", None,    "prod",    "framework_metadata", 65.0, "needs_validation"),
+    ("crewai-pipeline",         "platform-ai",        "low",    None,    "staging", "framework_metadata", 65.0, "needs_validation"),
+    ("autogen-orchestrator",    "product-ml",         "medium", None,    "prod",    "framework_metadata", 65.0, "needs_validation"),
+
+    # API key scope (key was given a meaningful name) → confidence 75%
+    ("data-pipeline-service",   "data-engineering",   "high",   "2.1.0", "prod",    "api_key_scope",      75.0, "unassigned"),
+    ("analytics-worker",        "trading-research",   "medium", "1.0.0", "prod",    "api_key_scope",      75.0, "managed"),
+
+    # Request-origin hostname → confidence 45%, needs admin review
+    ("acme-reporting",          "platform-ai",        "low",    None,    "prod",    "request_origin",     45.0, "needs_validation"),
+
+    # Fallback hash — no usable signal → confidence 15%, needs admin review
+    ("unknown-agent-3a9fb12c",  "unknown",            "low",    None,    None,      "fallback_hash",      15.0, "needs_validation"),
+]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Registry metadata for all gateway agents
+# ─────────────────────────────────────────────────────────────────────────────
+
 GATEWAY_REGISTRY = {
+    # ── Explicit-header agents (resolution_method: explicit_headers, 95%) ────
     "support-triage-v2": {
         "lifecycle": "managed", "owner": "alice@acme.ai", "team": "customer-support",
         "env": "prod", "criticality": "high", "claimed_days_ago": 45,
         "business_purpose": "Routes incoming customer tickets to the correct support tier using intent classification.",
         "source": "gateway_telemetry", "confidence": 95.0,
+        "resolution_method": "explicit_headers",
     },
     "doc-summarizer": {
         "lifecycle": "managed", "owner": "bob@acme.ai", "team": "platform-ai",
         "env": "prod", "criticality": "medium", "claimed_days_ago": 30,
         "business_purpose": "Generates concise summaries of internal documentation and meeting notes.",
         "source": "gateway_telemetry", "confidence": 95.0,
+        "resolution_method": "explicit_headers",
     },
     "code-reviewer": {
         "lifecycle": "managed", "owner": "bob@acme.ai", "team": "platform-ai",
         "env": "prod", "criticality": "medium", "claimed_days_ago": 20,
         "business_purpose": "Performs automated code review for pull requests in the CI pipeline.",
         "source": "gateway_telemetry", "confidence": 95.0,
+        "resolution_method": "explicit_headers",
     },
     "risk-classifier": {
         "lifecycle": "managed", "owner": "carol@acme.ai", "team": "risk-analytics",
         "env": "prod", "criticality": "critical", "claimed_days_ago": 60,
         "business_purpose": "Classifies transaction risk in real-time for the fraud detection pipeline.",
         "source": "gateway_telemetry", "confidence": 95.0,
+        "resolution_method": "explicit_headers",
     },
     "trade-narrator": {
         "lifecycle": "managed", "owner": "dave@acme.ai", "team": "trading-research",
         "env": "prod", "criticality": "high", "claimed_days_ago": 35,
         "business_purpose": "Generates natural-language explanations of algorithmic trading decisions for compliance audit trails.",
         "source": "gateway_telemetry", "confidence": 95.0,
+        "resolution_method": "explicit_headers",
     },
     "route-planner": {
         "lifecycle": "managed", "owner": "eve@acme.ai", "team": "route-optimization",
         "env": "prod", "criticality": "high", "claimed_days_ago": 25,
         "business_purpose": "Optimises last-mile delivery routes using real-time traffic and capacity data.",
         "source": "gateway_telemetry", "confidence": 95.0,
+        "resolution_method": "explicit_headers",
     },
     "invoice-extractor": {
         "lifecycle": "managed", "owner": "carol@acme.ai", "team": "risk-analytics",
         "env": "prod", "criticality": "critical", "claimed_days_ago": 50,
         "business_purpose": "Extracts structured data from vendor invoices. Handles PII under active DPA.",
         "source": "gateway_telemetry", "confidence": 95.0,
+        "resolution_method": "explicit_headers",
     },
     "kb-rag-search": {
         "lifecycle": "managed", "owner": "alice@acme.ai", "team": "customer-support",
         "env": "prod", "criticality": "medium", "claimed_days_ago": 22,
         "business_purpose": "Retrieval-augmented search over the knowledge base for support agents.",
         "source": "gateway_telemetry", "confidence": 95.0,
+        "resolution_method": "explicit_headers",
     },
     "research-deepdive": {
         "lifecycle": "managed", "owner": "dave@acme.ai", "team": "trading-research",
         "env": "staging", "criticality": "high", "claimed_days_ago": 15,
         "business_purpose": "Deep-research synthesis for market opportunity analysis; uses long-context frontier model.",
         "source": "gateway_telemetry", "confidence": 95.0,
+        "resolution_method": "explicit_headers",
     },
-    "qa-test-generator":    {"lifecycle": "unassigned", "source": "gateway_telemetry", "confidence": 95.0},
+    "qa-test-generator":    {"lifecycle": "unassigned", "source": "gateway_telemetry", "confidence": 95.0, "resolution_method": "explicit_headers"},
     "contract-analyzer": {
         "lifecycle": "managed", "owner": "carol@acme.ai", "team": "risk-analytics",
         "env": "prod", "criticality": "critical", "claimed_days_ago": 40,
         "business_purpose": "Scans legal contracts for compliance violations and risk clauses.",
         "source": "gateway_telemetry", "confidence": 95.0,
+        "resolution_method": "explicit_headers",
     },
     "email-classifier": {
         "lifecycle": "managed", "owner": "alice@acme.ai", "team": "customer-support",
         "env": "prod", "criticality": "low", "claimed_days_ago": 18,
         "business_purpose": "Classifies inbound customer emails by intent for automated queue routing.",
         "source": "gateway_telemetry", "confidence": 95.0,
+        "resolution_method": "explicit_headers",
     },
     "market-sentiment": {
         "lifecycle": "managed", "owner": "dave@acme.ai", "team": "trading-research",
         "env": "prod", "criticality": "high", "claimed_days_ago": 28,
         "business_purpose": "Aggregates and scores market sentiment from financial news and social signals.",
         "source": "gateway_telemetry", "confidence": 95.0,
+        "resolution_method": "explicit_headers",
     },
-    "pipeline-monitor":     {"lifecycle": "unassigned", "source": "gateway_telemetry", "confidence": 95.0},
-    "feature-extractor":    {"lifecycle": "unassigned", "source": "gateway_telemetry", "confidence": 95.0},
+    "pipeline-monitor":     {"lifecycle": "unassigned", "source": "gateway_telemetry", "confidence": 95.0, "resolution_method": "explicit_headers"},
+    "feature-extractor":    {"lifecycle": "unassigned", "source": "gateway_telemetry", "confidence": 95.0, "resolution_method": "explicit_headers"},
     "user-intent-detector": {
         "lifecycle": "managed", "owner": "frank@acme.ai", "team": "product-ml",
         "env": "prod", "criticality": "medium", "claimed_days_ago": 12,
         "business_purpose": "Detects user intent signals from product interactions for personalisation.",
         "source": "gateway_telemetry", "confidence": 95.0,
+        "resolution_method": "explicit_headers",
     },
-    "churn-predictor":      {"lifecycle": "unassigned", "source": "gateway_telemetry", "confidence": 95.0},
+    "churn-predictor":      {"lifecycle": "unassigned", "source": "gateway_telemetry", "confidence": 95.0, "resolution_method": "explicit_headers"},
     "compliance-scanner": {
         "lifecycle": "managed", "owner": "carol@acme.ai", "team": "risk-analytics",
         "env": "prod", "criticality": "critical", "claimed_days_ago": 55,
         "business_purpose": "Scans outbound communications for regulatory compliance violations (FINRA, SEC).",
         "source": "gateway_telemetry", "confidence": 95.0,
+        "resolution_method": "explicit_headers",
     },
-    "alert-correlator":     {"lifecycle": "unassigned", "source": "gateway_telemetry", "confidence": 95.0},
-    "batch-embedder":       {"lifecycle": "unassigned", "source": "gateway_telemetry", "confidence": 95.0},
+    "alert-correlator":     {"lifecycle": "unassigned", "source": "gateway_telemetry", "confidence": 95.0, "resolution_method": "explicit_headers"},
+    "batch-embedder":       {"lifecycle": "unassigned", "source": "gateway_telemetry", "confidence": 95.0, "resolution_method": "explicit_headers"},
     "legacy-classifier": {
         "lifecycle": "retired", "owner": "carol@acme.ai", "team": "risk-analytics",
         "env": "dev", "criticality": "low", "claimed_days_ago": 90,
         "business_purpose": "Legacy risk classifier replaced by risk-classifier v1.4.",
         "source": "gateway_telemetry", "confidence": 95.0,
+        "resolution_method": "explicit_headers",
     },
     "old-chatbot-v1": {
         "lifecycle": "retired", "owner": "alice@acme.ai", "team": "customer-support",
         "env": "dev", "criticality": "low", "claimed_days_ago": 80,
         "business_purpose": "First-generation support chatbot superseded by support-triage-v2.",
         "source": "gateway_telemetry", "confidence": 95.0,
+        "resolution_method": "explicit_headers",
     },
     "prototype-agent-x": {
         "lifecycle": "retired", "owner": "frank@acme.ai", "team": "product-ml",
         "env": "dev", "criticality": "low", "claimed_days_ago": 70,
         "business_purpose": "Experimental prototype from Q1 hackathon; never promoted to production.",
         "source": "gateway_telemetry", "confidence": 95.0,
+        "resolution_method": "explicit_headers",
     },
     "hedge-optimizer": {
         "lifecycle": "managed", "owner": "dave@acme.ai", "team": "trading-research",
         "env": "prod", "criticality": "critical", "claimed_days_ago": 42,
         "business_purpose": "Generates hedge ratios and rebalancing recommendations for the quant desk.",
         "source": "gateway_telemetry", "confidence": 95.0,
+        "resolution_method": "explicit_headers",
     },
     "supply-chain-ai": {
         "lifecycle": "managed", "owner": "eve@acme.ai", "team": "route-optimization",
         "env": "prod", "criticality": "high", "claimed_days_ago": 33,
         "business_purpose": "Predicts supply chain disruptions and recommends mitigation actions.",
         "source": "gateway_telemetry", "confidence": 95.0,
+        "resolution_method": "explicit_headers",
+    },
+
+    # ── Auto-detected: framework fingerprint (65%, needs_admin_review: True) ──
+    "langchain-agent": {
+        "lifecycle": "needs_validation", "team": "data-engineering",
+        "source": "gateway_telemetry", "confidence": 65.0,
+        "resolution_method": "framework_metadata",
+        "evidence": {
+            "resolution_method": "framework_metadata",
+            "needs_admin_review": True,
+            "evidence": [
+                "AI framework detected in User-Agent: 'langchain-agent'",
+                "User-Agent: 'langchain/0.2.16 (Python 3.11; aiohttp/3.9)'",
+            ],
+        },
+    },
+    "crewai-pipeline": {
+        "lifecycle": "needs_validation", "team": "platform-ai",
+        "source": "gateway_telemetry", "confidence": 65.0,
+        "resolution_method": "framework_metadata",
+        "evidence": {
+            "resolution_method": "framework_metadata",
+            "needs_admin_review": True,
+            "evidence": [
+                "AI framework detected in User-Agent: 'crewai-agent'",
+                "User-Agent: 'crewai/0.80.0 python-httpx/0.27'",
+            ],
+        },
+    },
+    "autogen-orchestrator": {
+        "lifecycle": "needs_validation", "team": "product-ml",
+        "source": "gateway_telemetry", "confidence": 65.0,
+        "resolution_method": "framework_metadata",
+        "evidence": {
+            "resolution_method": "framework_metadata",
+            "needs_admin_review": True,
+            "evidence": [
+                "AI framework detected in User-Agent: 'autogen-agent'",
+                "User-Agent: 'pyautogen/0.4.2 openai/1.55'",
+            ],
+        },
+    },
+
+    # ── Auto-detected: API key scope (75%, needs_admin_review: False) ────────
+    "data-pipeline-service": {
+        "lifecycle": "unassigned", "team": "data-engineering",
+        "source": "gateway_telemetry", "confidence": 75.0,
+        "resolution_method": "api_key_scope",
+        "evidence": {
+            "resolution_method": "api_key_scope",
+            "needs_admin_review": False,
+            "evidence": ["API key scope: caller_name='data-pipeline-service'"],
+            "agent_version": "2.1.0",
+        },
+    },
+    "analytics-worker": {
+        "lifecycle": "managed", "owner": "dave@acme.ai", "team": "trading-research",
+        "env": "prod", "criticality": "medium", "claimed_days_ago": 8,
+        "business_purpose": "Batch analytics worker that runs nightly market summaries via API key scope.",
+        "source": "gateway_telemetry", "confidence": 75.0,
+        "resolution_method": "api_key_scope",
+        "evidence": {
+            "resolution_method": "api_key_scope",
+            "needs_admin_review": False,
+            "evidence": ["API key scope: caller_name='analytics-worker'"],
+            "agent_version": "1.0.0",
+        },
+    },
+
+    # ── Auto-detected: request-origin hostname (45%, needs_admin_review: True) ─
+    "acme-reporting": {
+        "lifecycle": "needs_validation", "team": "platform-ai",
+        "source": "gateway_telemetry", "confidence": 45.0,
+        "resolution_method": "request_origin",
+        "evidence": {
+            "resolution_method": "request_origin",
+            "needs_admin_review": True,
+            "evidence": ["Request host: 'acme-reporting.internal:8443'"],
+        },
+    },
+
+    # ── Auto-detected: fallback hash (15%, needs_admin_review: True) ─────────
+    "unknown-agent-3a9fb12c": {
+        "lifecycle": "needs_validation", "team": "unknown",
+        "source": "gateway_telemetry", "confidence": 15.0,
+        "resolution_method": "fallback_hash",
+        "evidence": {
+            "resolution_method": "fallback_hash",
+            "needs_admin_review": True,
+            "evidence": [
+                "No reliable identity signal — generated stable fallback hash",
+                "User-Agent: 'python-requests/2.31.0'",
+                "Source IP: 10.4.12.55",
+            ],
+        },
     },
 }
 
 
-# ── Platform-discovered potential agents (no telemetry, awaiting validation) ──
+# ─────────────────────────────────────────────────────────────────────────────
+# PLATFORM-DISCOVERED POTENTIAL AGENTS — no gateway traffic, awaiting validation
+# ─────────────────────────────────────────────────────────────────────────────
 
 POTENTIAL_AGENTS = [
     {
@@ -222,7 +396,6 @@ POTENTIAL_AGENTS = [
         "team": "platform-ai",
         "source": "github",
         "confidence": 72.0,
-        "discovery_status": "potential",
         "evidence": {
             "repository": "acme/platform-tools",
             "workflow_file": ".github/workflows/llm-review.yml",
@@ -236,7 +409,6 @@ POTENTIAL_AGENTS = [
         "team": "customer-support",
         "source": "slack",
         "confidence": 58.0,
-        "discovery_status": "potential",
         "evidence": {
             "workspace": "acme.slack.com",
             "app_name": "ChannelSummariser",
@@ -250,7 +422,6 @@ POTENTIAL_AGENTS = [
         "team": "risk-analytics",
         "source": "n8n",
         "confidence": 65.0,
-        "discovery_status": "potential",
         "evidence": {
             "workflow_id": "wf_4421",
             "workflow_name": "Contract Review Automation",
@@ -264,7 +435,6 @@ POTENTIAL_AGENTS = [
         "team": "product-ml",
         "source": "jira",
         "confidence": 45.0,
-        "discovery_status": "potential",
         "evidence": {
             "project": "PROD",
             "automation_rule": "Auto-classify incoming tickets",
@@ -277,7 +447,6 @@ POTENTIAL_AGENTS = [
         "team": "trading-research",
         "source": "cloud_functions",
         "confidence": 61.0,
-        "discovery_status": "potential",
         "evidence": {
             "function_app": "acme-trading-fns",
             "function_name": "SentimentAnalyser",
@@ -292,7 +461,6 @@ POTENTIAL_AGENTS = [
         "team": "platform-ai",
         "source": "servicenow",
         "confidence": 38.0,
-        "discovery_status": "potential",
         "evidence": {
             "instance": "acme.service-now.com",
             "table": "incident",
@@ -305,7 +473,6 @@ POTENTIAL_AGENTS = [
         "team": "data-engineering",
         "source": "mcp",
         "confidence": 80.0,
-        "discovery_status": "potential",
         "evidence": {
             "server_name": "acme-data-mcp",
             "tools": ["query_warehouse", "generate_report", "explain_anomaly"],
@@ -318,7 +485,6 @@ POTENTIAL_AGENTS = [
         "team": "platform-ai",
         "source": "github",
         "confidence": 55.0,
-        "discovery_status": "potential",
         "evidence": {
             "repository": "acme/backend-api",
             "workflow_file": ".github/workflows/test-gen.yml",
@@ -332,7 +498,6 @@ POTENTIAL_AGENTS = [
         "team": "risk-analytics",
         "source": "cloud_functions",
         "confidence": 69.0,
-        "discovery_status": "potential",
         "evidence": {
             "function_name": "DocExtractorFn",
             "runtime": "nodejs18.x",
@@ -347,13 +512,56 @@ POTENTIAL_AGENTS = [
         "team": "product-ml",
         "source": "n8n",
         "confidence": 50.0,
-        "discovery_status": "potential",
         "evidence": {
             "workflow_id": "wf_3812",
             "workflow_name": "Lead Scoring Pipeline",
             "nodes": ["OpenAI", "CRM Webhook", "Slack"],
             "trigger": "schedule",
             "first_seen": "2026-05-25",
+        },
+    },
+    # ── New platform-discovered agents ────────────────────────────────────────
+    {
+        "agent_id_raw": "azure-devops-pr-reviewer",
+        "team": "platform-ai",
+        "source": "azure_devops",
+        "confidence": 68.0,
+        "evidence": {
+            "organisation": "acme",
+            "project": "CorePlatform",
+            "pipeline": "AI-PR-Review",
+            "pipeline_id": 1147,
+            "task": "OpenAI Review Gate",
+            "env_vars_detected": ["OPENAI_API_KEY", "AZURE_OPENAI_ENDPOINT"],
+            "first_seen": "2026-06-12",
+        },
+    },
+    {
+        "agent_id_raw": "gh-pr-analyst",
+        "team": "platform-ai",
+        "source": "github",
+        "confidence": 62.0,
+        "evidence": {
+            "repository": "acme/data-platform",
+            "workflow_file": ".github/workflows/pr-analyst.yml",
+            "api_calls_detected": ["anthropic.messages.create", "openai.ChatCompletion.create"],
+            "trigger": "pull_request",
+            "first_seen": "2026-06-14",
+            "commit": "f88da31",
+        },
+    },
+    {
+        "agent_id_raw": "lambda-budget-forecast",
+        "team": "risk-analytics",
+        "source": "cloud_functions",
+        "confidence": 71.0,
+        "evidence": {
+            "function_name": "BudgetForecastFn",
+            "runtime": "python3.12",
+            "env_vars_detected": ["ANTHROPIC_API_KEY"],
+            "region": "us-west-2",
+            "trigger": "EventBridge (weekly)",
+            "first_seen": "2026-06-09",
         },
     },
 ]
@@ -441,15 +649,18 @@ def seed_registry_row(db, org_id, now, agent_id_raw, meta, discovery_status,
     if meta.get("claimed_days_ago"):
         claimed_at = now - timedelta(days=meta["claimed_days_ago"])
 
+    # Build evidence — merge registry evidence with per-agent evidence
+    evi = evidence or meta.get("evidence")
+
     fields = dict(
         agent_id_raw=agent_id_raw,
         agent_name=agent_id_raw,
         status=lifecycle,
         source=source,
-        discovery_source=source,   # mirrors source so the frontend badge is correct
+        discovery_source=source,
         discovery_status=discovery_status,
         confidence_score=confidence,
-        evidence=json.dumps(evidence) if evidence else None,
+        evidence=json.dumps(evi) if evi else None,
         owner=meta.get("owner"),
         team=meta.get("team"),
         environment=meta.get("env"),
@@ -499,9 +710,40 @@ def seed(clear=False):
         now   = datetime.now(timezone.utc)
         total = 0
 
-        # ── Gateway agents: telemetry + registry ──
-        print("Gateway agents (verified via telemetry):")
+        # ── Gateway agents with explicit headers (verified, 95%) ──────────────
+        print("Gateway agents — explicit headers (verified, 95% confidence):")
         for agent_id_raw, team, profile, version, env in GATEWAY_AGENTS:
+            calls = make_calls(agent_id_raw, team, profile, org_id, now, version, env)
+            for c in calls:
+                db.add(c)
+            total += len(calls)
+
+            meta = GATEWAY_REGISTRY.get(agent_id_raw, {})
+            evidence = {
+                "resolution_method": "explicit_headers",
+                "needs_admin_review": False,
+                "evidence": [f"Explicit header: X-Agent-Name='{agent_id_raw}'"],
+                **({"agent_version": version} if version else {}),
+            }
+            seed_registry_row(
+                db, org_id, now,
+                agent_id_raw=agent_id_raw,
+                meta=meta,
+                discovery_status="verified",
+                source=meta.get("source", "gateway_telemetry"),
+                confidence=meta.get("confidence", 95.0),
+                evidence=evidence,
+            )
+            lifecycle = meta.get("lifecycle", "unassigned")
+            print(f"  {agent_id_raw:<32} {team:<22} {lifecycle:<18} calls={len(calls)}")
+
+        db.commit()
+
+        # ── Auto-detected gateway agents (varied confidence) ──────────────────
+        print(f"\nGateway agents — auto-detected (no explicit headers):")
+        for (agent_id_raw, team, profile, version, env,
+             resolution_method, confidence, lifecycle) in AUTO_DETECTED_AGENTS:
+
             calls = make_calls(agent_id_raw, team, profile, org_id, now, version, env)
             for c in calls:
                 db.add(c)
@@ -513,15 +755,15 @@ def seed(clear=False):
                 agent_id_raw=agent_id_raw,
                 meta=meta,
                 discovery_status="verified",
-                source=meta.get("source", "gateway_telemetry"),
-                confidence=meta.get("confidence", 95.0),
+                source="gateway_telemetry",
+                confidence=confidence,
+                evidence=meta.get("evidence"),
             )
-            lifecycle = meta.get("lifecycle", "unassigned")
-            print(f"  {agent_id_raw:<30} {team:<22} {lifecycle:<12} {profile:<14} calls={len(calls)}")
+            print(f"  {agent_id_raw:<32} {team:<22} {lifecycle:<18} method={resolution_method:<20} confidence={confidence:.0f}%  calls={len(calls)}")
 
         db.commit()
 
-        # ── Platform-discovered potential agents: registry only ──
+        # ── Platform-discovered potential agents (registry only) ───────────────
         print(f"\nPlatform-discovered agents (potential, awaiting validation):")
         for pa in POTENTIAL_AGENTS:
             seed_registry_row(
@@ -533,34 +775,52 @@ def seed(clear=False):
                 confidence=pa["confidence"],
                 evidence=pa["evidence"],
             )
-            print(f"  {pa['agent_id_raw']:<30} {pa['team']:<22} source={pa['source']:<18} confidence={pa['confidence']:.0f}%")
+            print(f"  {pa['agent_id_raw']:<32} {pa['team']:<22} source={pa['source']:<18} confidence={pa['confidence']:.0f}%")
 
         db.commit()
 
-        n_verified  = sum(1 for a in GATEWAY_REGISTRY.values() if a.get("lifecycle") == "managed")
-        n_unassigned = sum(1 for a in GATEWAY_REGISTRY.values() if a.get("lifecycle") == "unassigned") + len(POTENTIAL_AGENTS)
-        n_retired   = sum(1 for a in GATEWAY_REGISTRY.values() if a.get("lifecycle") == "retired")
+        # ── Summary ───────────────────────────────────────────────────────────
+        n_managed    = sum(1 for a in GATEWAY_REGISTRY.values() if a.get("lifecycle") == "managed")
+        n_unassigned = (sum(1 for a in GATEWAY_REGISTRY.values() if a.get("lifecycle") == "unassigned")
+                        + sum(1 for _, _, _, _, _, _, _, lc in AUTO_DETECTED_AGENTS if lc == "unassigned"))
+        n_needs_val  = sum(1 for _, _, _, _, _, _, _, lc in AUTO_DETECTED_AGENTS if lc == "needs_validation")
+        n_retired    = sum(1 for a in GATEWAY_REGISTRY.values() if a.get("lifecycle") == "retired")
+
+        by_method = {}
+        for _, _, _, _, _, m, c, _ in AUTO_DETECTED_AGENTS:
+            by_method.setdefault(m, []).append(c)
 
         print(f"""
 Summary
-───────────────────────────────────────────────
-  Telemetry records     : {total}
-  Gateway agents        : {len(GATEWAY_AGENTS)} (verified, confidence 95%)
-  Platform agents       : {len(POTENTIAL_AGENTS)} (potential, awaiting validation)
+───────────────────────────────────────────────────────────────
+  Telemetry records            : {total}
+  Gateway agents (explicit)    : {len(GATEWAY_AGENTS)} (verified, 95% confidence)
+  Gateway agents (auto-detect) : {len(AUTO_DETECTED_AGENTS)} (verified, 15–75% confidence)
+  Platform agents              : {len(POTENTIAL_AGENTS)} (potential, awaiting validation)
 
-  Managed               : {n_verified}
-  Unassigned / Potential: {n_unassigned}
-  Retired               : {n_retired}
+  Lifecycle breakdown
+    Managed                    : {n_managed}
+    Unassigned                 : {n_unassigned}
+    Needs validation           : {n_needs_val}  ← auto-detected, admin review required
+    Retired                    : {n_retired}
 
-Discovery sources in demo
-  gateway_telemetry : {sum(1 for a in GATEWAY_AGENTS)}
-  github            : {sum(1 for p in POTENTIAL_AGENTS if p['source'] == 'github')}
-  n8n               : {sum(1 for p in POTENTIAL_AGENTS if p['source'] == 'n8n')}
-  slack             : {sum(1 for p in POTENTIAL_AGENTS if p['source'] == 'slack')}
-  cloud_functions   : {sum(1 for p in POTENTIAL_AGENTS if p['source'] == 'cloud_functions')}
-  jira              : {sum(1 for p in POTENTIAL_AGENTS if p['source'] == 'jira')}
-  servicenow        : {sum(1 for p in POTENTIAL_AGENTS if p['source'] == 'servicenow')}
-  mcp               : {sum(1 for p in POTENTIAL_AGENTS if p['source'] == 'mcp')}
+  Auto-detection methods used
+    explicit_headers  : {len(GATEWAY_AGENTS):>3} agents  (95%)
+    api_key_scope     : {len([a for a in AUTO_DETECTED_AGENTS if a[5]=='api_key_scope']):>3} agents  (75%)
+    framework_metadata: {len([a for a in AUTO_DETECTED_AGENTS if a[5]=='framework_metadata']):>3} agents  (65%)
+    request_origin    : {len([a for a in AUTO_DETECTED_AGENTS if a[5]=='request_origin']):>3} agents  (45%)
+    fallback_hash     : {len([a for a in AUTO_DETECTED_AGENTS if a[5]=='fallback_hash']):>3} agents  (15%)
+
+  Discovery sources (potential agents)
+    gateway_telemetry : {sum(1 for a in GATEWAY_AGENTS) + len(AUTO_DETECTED_AGENTS):>3}
+    github            : {sum(1 for p in POTENTIAL_AGENTS if p['source'] == 'github'):>3}
+    cloud_functions   : {sum(1 for p in POTENTIAL_AGENTS if p['source'] == 'cloud_functions'):>3}
+    n8n               : {sum(1 for p in POTENTIAL_AGENTS if p['source'] == 'n8n'):>3}
+    slack             : {sum(1 for p in POTENTIAL_AGENTS if p['source'] == 'slack'):>3}
+    jira              : {sum(1 for p in POTENTIAL_AGENTS if p['source'] == 'jira'):>3}
+    mcp               : {sum(1 for p in POTENTIAL_AGENTS if p['source'] == 'mcp'):>3}
+    servicenow        : {sum(1 for p in POTENTIAL_AGENTS if p['source'] == 'servicenow'):>3}
+    azure_devops      : {sum(1 for p in POTENTIAL_AGENTS if p['source'] == 'azure_devops'):>3}
 
 Open http://localhost:5173 and refresh.
 """)

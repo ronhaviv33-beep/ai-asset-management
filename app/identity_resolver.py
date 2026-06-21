@@ -142,11 +142,38 @@ def resolve_identity(
     """
     evidence: list[str] = []
 
-    # ── 1. Explicit headers — customer override, highest confidence ─────────
+    # ── 1a. SDK-populated headers (X-Agent-Source starts with "sdk-") ────────
+    #        Confidence 0.85 — identity auto-derived from runtime env vars.
+    #        Any sdk- prefix is recognised (sdk-python, sdk-typescript, …).
+    agent_source = headers.get("x-agent-source", "")
     explicit_name = (
         headers.get("x-agent-name")
         or headers.get("x-guard-agent")
     )
+    if explicit_name and explicit_name.strip() and agent_source.lower().startswith("sdk-"):
+        name        = _normalize(explicit_name)
+        team        = (headers.get("x-agent-team")
+                       or headers.get("x-guard-team")
+                       or caller_team)
+        owner       = headers.get("x-agent-owner")
+        environment = (headers.get("x-agent-environment")
+                       or headers.get("x-guard-environment")
+                       or caller_env)
+        evidence.append(f"SDK header: X-Agent-Name={explicit_name!r} (source={agent_source!r})")
+        return ResolvedIdentity(
+            agent_name=name,
+            agent_key=_stable_key(org_id, name),
+            team=team,
+            owner=owner,
+            environment=environment,
+            source="sdk_runtime",
+            confidence_score=0.85,
+            resolution_method="sdk_runtime",
+            needs_admin_review=False,
+            evidence=evidence,
+        )
+
+    # ── 1b. Explicit headers — customer-written override, highest confidence ──
     if explicit_name and explicit_name.strip():
         name        = _normalize(explicit_name)
         team        = (headers.get("x-agent-team")
@@ -156,7 +183,7 @@ def resolve_identity(
         environment = (headers.get("x-agent-environment")
                        or headers.get("x-guard-environment")
                        or caller_env)
-        source      = headers.get("x-agent-source") or "explicit_header"
+        source      = agent_source or "explicit_header"
         evidence.append(f"Explicit header: X-Agent-Name={explicit_name!r}")
         return ResolvedIdentity(
             agent_name=name,

@@ -13,6 +13,7 @@ const FONT = "'Geist','Söhne',-apple-system,sans-serif";
 
 const PLATFORM_META = {
   gateway_telemetry: { label: "Gateway Telemetry", color: T.accent,  icon: "◉", desc: "AI runtime gateway — primary discovery source" },
+  sdk_runtime:       { label: "SDK Runtime",        color: "#34d399", icon: "◈", desc: "Agents discovered through lightweight SDK metadata attached at runtime" },
   github:            { label: "GitHub Repositories", color: T.info,  icon: "◎", desc: "Repositories with AI SDK dependencies" },
   n8n:               { label: "n8n Workflows",       color: T.purple, icon: "◈", desc: "Automation workflows using AI nodes" },
   slack:             { label: "Slack Bots",           color: "#E8A138", icon: "◆", desc: "Slack app integrations using AI" },

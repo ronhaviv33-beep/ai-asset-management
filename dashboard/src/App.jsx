@@ -1963,7 +1963,7 @@ function LoginPage({ onLogin }) {
   );
 }
 
-function SortableUsersTable({ users, currentUser, editing, editSaving, setEditing, saveEdit, cancelEdit, handleToggle, handleDelete, inlineInput, inlineSelect, onChangePassword }) {
+function SortableUsersTable({ users, currentUser, editing, editSaving, setEditing, saveEdit, cancelEdit, handleToggle, handleDelete, onDisable, inlineInput, inlineSelect, onChangePassword }) {
   const roles = useRoles();
   const { sortKey, sortDir, toggle, sort } = useSortable("created_at");
   const colKey = { "Name":"name","Email":"email","Role":"role","Team":"team","Status":"is_active","Created":"created_at" };
@@ -2029,7 +2029,7 @@ function SortableUsersTable({ users, currentUser, editing, editSaving, setEditin
                         style={{ background:`${T.accent}12`, border:`1px solid ${T.accent}44`, color:T.accent, padding:"4px 10px", borderRadius:3, fontSize:11, fontFamily:FONT_MONO, cursor:"pointer" }}>
                         Password
                       </button>
-                      <button onClick={() => handleToggle(u)}
+                      <button onClick={() => u.is_active ? onDisable(u) : handleToggle(u)}
                         style={{ background:"transparent", border:`1px solid ${T.border}`, color:u.is_active?T.warn:T.accent, padding:"4px 10px", borderRadius:3, fontSize:11, fontFamily:FONT_MONO, cursor:"pointer" }}>
                         {u.is_active ? "Disable" : "Enable"}
                       </button>
@@ -2225,6 +2225,8 @@ function UsersPage() {
   const [pwConfirm, setPwConfirm] = useState("");
   const [pwSaving,  setPwSaving]  = useState(false);
   const [pwErr,     setPwErr]     = useState(null);
+  // disable confirmation: user object | null
+  const [disableConfirm, setDisableConfirm] = useState(null);
 
   const load = useCallback(async () => {
     try {
@@ -2337,6 +2339,7 @@ function UsersPage() {
         <SortableUsersTable users={users} currentUser={currentUser} editing={editing} editSaving={editSaving}
           setEditing={setEditing} saveEdit={saveEdit} cancelEdit={cancelEdit}
           handleToggle={handleToggle} handleDelete={handleDelete}
+          onDisable={setDisableConfirm}
           inlineInput={inlineInput} inlineSelect={inlineSelect}
           onChangePassword={openPwModal} />
       </Card>
@@ -2365,6 +2368,37 @@ function UsersPage() {
               <button onClick={savePassword} disabled={pwSaving}
                 style={{ background:T.accent, color:T.bg, border:"none", padding:"7px 18px", borderRadius:4, fontSize:12, fontFamily:FONT_MONO, fontWeight:600, cursor:"pointer", opacity:pwSaving?0.6:1 }}>
                 {pwSaving ? "Saving…" : "Save Password"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Disable Confirmation Modal ── */}
+      {disableConfirm && (
+        <div style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.65)", display:"flex", alignItems:"center", justifyContent:"center", zIndex:1000 }}>
+          <div style={{ background:T.panel, border:`1px solid ${T.warn}55`, borderRadius:10, padding:28, minWidth:340, maxWidth:420, display:"flex", flexDirection:"column", gap:18 }}>
+            <div style={{ display:"flex", alignItems:"center", gap:10 }}>
+              <span style={{ fontSize:20, color:T.warn }}>⚠</span>
+              <div style={{ fontWeight:700, color:T.text, fontSize:15 }}>Disable user?</div>
+            </div>
+            <div style={{ fontSize:13, color:T.textDim, lineHeight:1.6 }}>
+              You are about to disable{" "}
+              <strong style={{ color:T.text }}>{disableConfirm.name || disableConfirm.email}</strong>.
+              {disableConfirm.id === currentUser?.id && (
+                <span style={{ display:"block", marginTop:8, color:T.warn, fontWeight:600 }}>
+                  Warning: this is your own account. You will be logged out immediately.
+                </span>
+              )}
+            </div>
+            <div style={{ display:"flex", gap:10, justifyContent:"flex-end" }}>
+              <button onClick={() => setDisableConfirm(null)}
+                style={{ background:"transparent", border:`1px solid ${T.border}`, color:T.textDim, padding:"7px 18px", borderRadius:5, fontSize:12, fontFamily:FONT_MONO, cursor:"pointer" }}>
+                Cancel
+              </button>
+              <button onClick={() => { handleToggle(disableConfirm); setDisableConfirm(null); }}
+                style={{ background:`${T.warn}18`, border:`1px solid ${T.warn}55`, color:T.warn, padding:"7px 18px", borderRadius:5, fontSize:12, fontFamily:FONT_MONO, cursor:"pointer", fontWeight:600 }}>
+                Disable
               </button>
             </div>
           </div>
@@ -5262,335 +5296,522 @@ function CustomerWelcomePage({ onNavigate }) {
 
 // ─── Simple Integration Setup Page ───────────────────────────────────────────
 function SimpleIntegrationsPage({ onNavigate }) {
-  const gatewayUrl  = typeof BASE !== "undefined" && BASE.startsWith("http") ? BASE : window.location.origin;
-  const [copied, setCopied]   = useState(null);
-  const [open,   setOpen]     = useState({ openai: true, anthropic: false, typescript: false, curl: false });
-  const copy = (id, text) => { navigator.clipboard.writeText(text).catch(() => {}); setCopied(id); setTimeout(() => setCopied(null), 2000); };
+  const gatewayUrl = typeof BASE !== "undefined" && BASE.startsWith("http") ? BASE : window.location.origin;
+  const [copied, setCopied] = useState(null);
+  const [open, setOpen]     = useState({ sdk_openai: true, sdk_anthropic: false, sdk_env: false, manual_openai: false, manual_curl: false });
+  const [section, setSection] = useState(null); // "sdk" | "gateway" | "platform" | null
+  const copy   = (id, text) => { navigator.clipboard.writeText(text).catch(() => {}); setCopied(id); setTimeout(() => setCopied(null), 2000); };
   const toggle = (k) => setOpen(o => ({ ...o, [k]: !o[k] }));
 
-  const OPT_HEADERS = [
-    { name:"X-Agent-Name",        desc:"Override auto-detected agent name",   example:"soc-investigation-agent" },
-    { name:"X-Agent-Team",        desc:"Team or department",                  example:"Security" },
-    { name:"X-Agent-Owner",       desc:"Owner email or name",                 example:"alice@acme.com" },
-    { name:"X-Agent-Environment", desc:"prod / staging / dev",                example:"prod" },
-    { name:"X-Agent-Version",     desc:"Version tag",                         example:"v1.2.0" },
-    { name:"X-Agent-Source",      desc:"Source system",                       example:"github" },
+  // ── Discovery method cards ─────────────────────────────────────────────────
+  const METHODS = [
+    {
+      id: "sdk",
+      badge: "Recommended",
+      badgeColor: "#34d399",
+      title: "SDK Runtime Discovery",
+      desc: "Install the lightweight SDK once. It automatically attaches runtime identity metadata to AI requests and provides the most accurate agent discovery.",
+      accuracy: "High",
+      effort: "Low",
+      bestFor: "Production AI workloads",
+      benefits: [
+        "Strongest agent identity",
+        "Best cost attribution",
+        "Best runtime metadata",
+        "Minimal per-agent configuration",
+        "Supports OpenAI and Anthropic wrappers",
+      ],
+      cta: "Install SDK →",
+      color: "#34d399",
+    },
+    {
+      id: "gateway",
+      badge: null,
+      title: "Gateway Discovery",
+      desc: "Route AI traffic through the gateway without installing the SDK. The gateway derives agent identity from API key scope, request origin, provider metadata, user-agent, framework hints, and stable fingerprints.",
+      accuracy: "Medium",
+      effort: "Very Low",
+      bestFor: "Existing gateway traffic and quick onboarding",
+      benefits: [
+        "No SDK required",
+        "Works with existing traffic routed through the gateway",
+        "Detects unknown runtime identities",
+        "Creates verified but unassigned agents for admin review",
+      ],
+      cta: "Route Traffic →",
+      color: T.info,
+    },
+    {
+      id: "platform",
+      badge: null,
+      title: "Platform / Ecosystem Discovery",
+      desc: "Connect external platforms such as GitHub, n8n, Slack, Jira, ServiceNow, cloud functions, and AI development platforms to detect potential AI agents and shadow AI usage.",
+      accuracy: "Low to Medium",
+      effort: "Very Low",
+      bestFor: "Shadow AI detection",
+      benefits: [
+        "Detects AI signals outside the gateway",
+        "Finds potential unmanaged agents",
+        "Helps identify shadow AI",
+        "Requires admin validation before becoming managed inventory",
+      ],
+      cta: "Connect Platforms →",
+      color: T.purple,
+    },
   ];
 
-  const RESOLUTION_SOURCES = [
-    { method:"Explicit Headers",     confidence:95, color:T.accent, desc:"X-Agent-Name / X-Guard-Agent headers" },
-    { method:"API Key Scope",        confidence:75, color:T.accent, desc:"Caller name scoped on the API key" },
-    { method:"Framework Detection",  confidence:65, color:T.yellow, desc:"LangChain, CrewAI, AutoGen, etc. in User-Agent" },
-    { method:"Request Origin",       confidence:45, color:T.yellow, desc:"Hostname / service label" },
-    { method:"User-Agent Name",      confidence:30, color:T.warn,   desc:"Non-generic HTTP client name" },
-    { method:"Fallback Fingerprint", confidence:15, color:T.warn,   desc:"Stable hash — flagged for admin review" },
+  // ── Flows ──────────────────────────────────────────────────────────────────
+  const SDK_FLOW = [
+    { label:"Create Organisation API Key", color:T.accent },
+    { label:"Install SDK",                 color:"#34d399" },
+    { label:"Wrap AI Client",              color:"#34d399" },
+    { label:"Route Through Gateway",       color:T.warn   },
+    { label:"Verified Agent Created",      color:T.yellow },
+    { label:"Admin Claims Agent",          color:T.purple },
+  ];
+  const GW_FLOW = [
+    { label:"Create Organisation API Key", color:T.accent },
+    { label:"Route Traffic Through Gateway", color:T.warn },
+    { label:"Gateway Derives Identity",    color:T.info   },
+    { label:"Verified / Unassigned Agent Created", color:T.yellow },
+    { label:"Admin Reviews Agent",         color:T.purple },
+  ];
+  const PLATFORM_FLOW = [
+    { label:"Connect Platform",            color:T.info   },
+    { label:"Scan for AI Signals",         color:T.warn   },
+    { label:"Potential Agent Created",     color:T.yellow },
+    { label:"Admin Validates or Rejects",  color:T.purple },
+    { label:"Managed Agent",               color:T.accent },
+  ];
+
+  const GW_SIGNALS = [
+    { label:"API Key Scope",       desc:"Key named after a service — no headers needed" },
+    { label:"Framework Hints",     desc:"LangChain, CrewAI, AutoGen, n8n in User-Agent" },
+    { label:"Request Origin",      desc:"Meaningful hostname or service label" },
+    { label:"Provider Metadata",   desc:"User-Agent and client library name" },
+    { label:"Stable Fingerprint",  desc:"Hash of org + key + origin — flags for review" },
+  ];
+
+  const PLATFORMS = [
+    "GitHub", "n8n", "Slack", "Jira", "ServiceNow",
+    "Cloud Functions", "MCP Servers", "Azure DevOps", "Zapier",
+    "Copilot Studio", "Bedrock Agents", "OpenAI Agents SDK",
+  ];
+
+  const OPT_HEADERS = [
+    { name:"X-Agent-Name",        desc:"Override auto-detected agent name",    example:"soc-investigation-agent" },
+    { name:"X-Agent-Team",        desc:"Team or department",                   example:"Security" },
+    { name:"X-Agent-Owner",       desc:"Owner email or name",                  example:"alice@acme.com" },
+    { name:"X-Agent-Environment", desc:"prod / staging / dev",                 example:"prod" },
+    { name:"X-Agent-Version",     desc:"Version tag",                          example:"v1.2.0" },
+    { name:"X-Agent-Source",      desc:"Set by SDK automatically (sdk-python)",example:"sdk-python" },
   ];
 
   const snippets = {
-    openai:
-`import openai
+    sdk_openai:
+`pip install ai-agent-inventory-sdk
 
-# One API key per organisation/environment — agents are auto-detected.
-client = openai.OpenAI(
-    base_url=f"GATEWAY_URL/v1",
-    api_key="gk-...",     # your org-level gateway key
+from ai_agent_inventory import OpenAI
+
+# Option A: explicit params
+client = OpenAI(
+    api_key="org_gateway_key",
+    gateway_url="GATEWAY_URL/v1",
+    agent_name="soc-investigation-agent",
+    team="Security",
+    environment="prod",
+    debug=True,          # prints attached headers on first call
 )
 
-# Minimal — gateway auto-identifies the agent from framework metadata,
-# API key scope, request origin, and User-Agent.
+# Option B: zero-code env-var setup
+# SERVICE_NAME=soc-investigation-agent  TEAM=Security  ENVIRONMENT=prod
+client = OpenAI(api_key="org_gateway_key", gateway_url="GATEWAY_URL/v1")
+
 response = client.chat.completions.create(
     model="gpt-4o-mini",
     messages=[{"role": "user", "content": "Analyze this alert"}],
 )
 
-# Optional: send headers to improve naming accuracy (confidence 95%)
+# Per-request override — X-Agent-Name in extra_headers wins over SDK default
 response = client.chat.completions.create(
     model="gpt-4o-mini",
-    messages=[{"role": "user", "content": "Analyze this alert"}],
+    messages=[{"role": "user", "content": "Investigate phishing"}],
+    extra_headers={"X-Agent-Name": "phishing-investigation-agent"},
+)`,
+
+    sdk_anthropic:
+`pip install ai-agent-inventory-sdk anthropic
+
+from ai_agent_inventory import Anthropic
+
+client = Anthropic(
+    api_key="org_gateway_key",
+    gateway_url="GATEWAY_URL",   # no /v1 — Anthropic SDK adds the path
+    agent_name="document-summariser",
+    team="Legal",
+    environment="prod",
+)
+
+response = client.messages.create(
+    model="claude-haiku-4-5-20251001",
+    max_tokens=1024,
+    messages=[{"role": "user", "content": "Summarise this contract"}],
+)`,
+
+    sdk_env:
+`# Zero-code setup: set these env vars before starting your service.
+SERVICE_NAME=soc-investigation-agent
+TEAM=Security
+ENVIRONMENT=prod
+APP_VERSION=1.2.0
+
+# SDK reads them automatically:
+pip install ai-agent-inventory-sdk
+from ai_agent_inventory import OpenAI
+client = OpenAI(api_key="org_gateway_key", gateway_url="GATEWAY_URL/v1")
+
+# For LangChain / CrewAI / custom httpx clients:
+import httpx
+from ai_agent_inventory import wrap_httpx_client
+
+http = wrap_httpx_client(httpx.Client(), agent_name="langchain-rag-agent", team="DataEng")
+# Pass to: ChatOpenAI(http_client=http, openai_api_base="GATEWAY_URL/v1", openai_api_key="org_gateway_key")`,
+
+    manual_openai:
+`# Advanced override — use when you need per-request control without the SDK.
+import openai
+
+client = openai.OpenAI(base_url="GATEWAY_URL/v1", api_key="gk-...")
+
+client.chat.completions.create(
+    model="gpt-4o-mini",
+    messages=[{"role": "user", "content": "Hello"}],
     extra_headers={
-        "X-Agent-Name":        "soc-investigation-agent",   # optional override
+        "X-Agent-Name":        "soc-investigation-agent",
         "X-Agent-Team":        "Security",
         "X-Agent-Environment": "prod",
     },
 )`,
 
-    anthropic:
-`import anthropic
-
-# One API key per organisation/environment — agents are auto-detected.
-client = anthropic.Anthropic(
-    base_url="GATEWAY_URL",
-    api_key="gk-...",     # your org-level gateway key
-)
-
-# Minimal — gateway auto-identifies the agent.
-response = client.messages.create(
-    model="claude-haiku-4-5-20251001",
-    max_tokens=1024,
-    messages=[{"role": "user", "content": "Summarise this document"}],
-)
-
-# Optional: headers improve naming accuracy
-response = client.messages.create(
-    model="claude-haiku-4-5-20251001",
-    max_tokens=1024,
-    messages=[{"role": "user", "content": "Summarise this document"}],
-    extra_headers={
-        "X-Agent-Name":        "document-summariser",       # optional override
-        "X-Agent-Team":        "Legal",
-        "X-Agent-Environment": "staging",
-    },
-)`,
-
-    typescript:
-`import OpenAI from "openai";
-
-// One API key per organisation/environment — agents are auto-detected.
-const client = new OpenAI({
-  baseURL: "GATEWAY_URL/v1",
-  apiKey:  "gk-...",   // your org-level gateway key
-  // Optional: default headers improve naming accuracy for this client
-  defaultHeaders: {
-    "X-Agent-Name":        "support-bot",             // optional override
-    "X-Agent-Team":        "CustomerSuccess",
-    "X-Agent-Environment": "prod",
-  },
-});
-
-const response = await client.chat.completions.create({
-  model:    "gpt-4o-mini",
-  messages: [{ role: "user", content: "How can I help?" }],
-});`,
-
-    curl:
-`# One API key — no headers required, agents are auto-detected.
-curl GATEWAY_URL/v1/chat/completions \
-  -H "Authorization: Bearer gk-..." \
-  -H "Content-Type: application/json" \
-  -d '{"model":"gpt-4o-mini","messages":[{"role":"user","content":"Hello"}]}'
-
-# Optional: headers improve naming accuracy
-curl GATEWAY_URL/v1/chat/completions \
-  -H "Authorization: Bearer gk-..." \
-  -H "X-Agent-Name: curl-test-agent" \
-  -H "Content-Type: application/json" \
+    manual_curl:
+`# Advanced override — minimal curl example.
+curl GATEWAY_URL/v1/chat/completions \\
+  -H "Authorization: Bearer gk-..." \\
+  -H "X-Agent-Name: soc-investigation-agent" \\
+  -H "Content-Type: application/json" \\
   -d '{"model":"gpt-4o-mini","messages":[{"role":"user","content":"Hello"}]}'`,
   };
 
-  // Replace placeholder with live URL
   const resolvedSnippets = Object.fromEntries(
     Object.entries(snippets).map(([k, v]) => [k, v.replace(/GATEWAY_URL/g, gatewayUrl)])
   );
 
-  const sdkList = [
-    { key:"openai",     label:"Python · OpenAI SDK",     color:T.info   },
-    { key:"anthropic",  label:"Python · Anthropic SDK",  color:T.accent },
-    { key:"typescript", label:"TypeScript · OpenAI SDK", color:T.yellow },
-    { key:"curl",       label:"cURL",                    color:T.purple },
-  ];
+  // ── Small helpers ──────────────────────────────────────────────────────────
+  const AccuracyDot = ({ label, color }) => (
+    <span style={{ display:"inline-flex", alignItems:"center", gap:5 }}>
+      <span style={{ width:7, height:7, borderRadius:"50%", background:color, flexShrink:0 }} />
+      <span style={{ fontSize:11, color, fontFamily:FONT_MONO }}>{label}</span>
+    </span>
+  );
 
-  const steps = [
-    {
-      n:"1", color:T.accent,
-      title:"Create an Organisation API Key",
-      desc:"Use one key per organisation or environment (prod, staging, dev). You do not need a separate key per agent — the gateway identifies agents automatically.",
-      cta:{ label:"Go to API Keys →", page:"apikeys" },
-    },
-    {
-      n:"2", color:T.warn,
-      title:"Route Traffic Through the Gateway",
-      desc:"Change the base URL in your AI SDK from the provider's URL to the gateway URL below. That's the only required code change.",
-      code:`${gatewayUrl}/v1`,
-      codeId:"url",
-    },
-    {
-      n:"3", color:T.info,
-      title:"Automatic Identity Resolution",
-      desc:"The gateway detects agent identities automatically — no headers required. It tries multiple signals in confidence order and creates agent records for admin review. Optional headers improve accuracy from ~15–65% to 95%.",
-    },
-    {
-      n:"4", color:T.yellow,
-      title:"Agents Appear for Admin Review",
-      desc:"Detected agents land in Discovery Center → Potential Agents. An admin reviews and claims them to move them to Verified Agents.",
-      cta:{ label:"Open Discovery Center →", page:"discovery" },
-    },
-    {
-      n:"5", color:T.purple,
-      title:"Optional: Improve Accuracy with Headers",
-      desc:"Send X-Agent-Name (and optional X-Agent-Team, X-Agent-Environment) to override auto-detection and get high-confidence records immediately without waiting for review.",
-    },
-  ];
+  const FlowColumn = ({ steps }) => (
+    <div style={{ display:"flex", flexDirection:"column", alignItems:"flex-start", gap:0 }}>
+      {steps.map((s, i) => (
+        <div key={i} style={{ display:"flex", flexDirection:"column", alignItems:"flex-start" }}>
+          <div style={{ display:"flex", alignItems:"center", gap:10 }}>
+            <div style={{ width:8, height:8, borderRadius:"50%", background:s.color, flexShrink:0 }} />
+            <span style={{ fontSize:12, color:T.text }}>{s.label}</span>
+          </div>
+          {i < steps.length - 1 && (
+            <div style={{ width:1, height:16, background:T.border, marginLeft:3 }} />
+          )}
+        </div>
+      ))}
+    </div>
+  );
 
-  const flowNodes = [
-    { label:"Organisation API Key",     sub:"gk-…",                                color:T.accent },
-    { label:"Gateway",                  sub:gatewayUrl,                            color:T.info   },
-    { label:"Automatic Identity Resolver", sub:"headers → key scope → framework → host → hash", color:T.warn },
-    { label:"Auto Discovery",           sub:"agent record created for review",      color:T.yellow },
-    { label:"Admin Claim",              sub:"→ Verified · Managed",                color:T.purple },
-  ];
+  const SectionHeader = ({ id, label, badge, color }) => (
+    <div
+      onClick={() => setSection(s => s === id ? null : id)}
+      style={{ display:"flex", alignItems:"center", gap:10, cursor:"pointer", userSelect:"none", marginBottom: section === id ? 20 : 0 }}
+    >
+      <div style={{ width:3, height:20, borderRadius:2, background:color }} />
+      <div style={{ fontSize:15, fontWeight:700, color:T.text }}>{label}</div>
+      {badge && (
+        <span style={{ background:`${color}18`, color, border:`1px solid ${color}44`, fontSize:10, fontFamily:FONT_MONO, padding:"2px 8px", borderRadius:3, textTransform:"uppercase", letterSpacing:"0.08em" }}>{badge}</span>
+      )}
+      <div style={{ flex:1 }} />
+      <span style={{ color:T.textMute, fontSize:11, fontFamily:FONT_MONO }}>{section === id ? "▲ collapse" : "▼ expand"}</span>
+    </div>
+  );
 
   return (
-    <div style={{ maxWidth:820, margin:"0 auto", padding:"32px 24px", fontFamily:FONT_UI }}>
+    <div style={{ maxWidth:880, margin:"0 auto", padding:"32px 24px", fontFamily:FONT_UI }}>
 
-      {/* Header */}
-      <div style={{ marginBottom:24 }}>
-        <div style={{ fontSize:11, fontFamily:FONT_MONO, color:T.textMute, letterSpacing:"0.12em", textTransform:"uppercase", marginBottom:6 }}>Administration · Gateway Setup</div>
-        <div style={{ fontSize:26, fontWeight:700, color:T.text, marginBottom:10, lineHeight:1.2 }}>Connect Your AI Runtime</div>
-        <div style={{ fontSize:13, color:T.textDim, lineHeight:1.7, maxWidth:580 }}>
-          Route AI traffic through the gateway once. Agent identities are resolved automatically — the platform detects them from runtime context and creates records for admin review. Optional headers improve accuracy.
-        </div>
-      </div>
-
-      {/* Info banner */}
-      <div style={{ background:`${T.info}0d`, border:`1px solid ${T.info}33`, borderRadius:8, padding:"14px 18px", marginBottom:28, display:"flex", gap:12, alignItems:"flex-start" }}>
-        <span style={{ color:T.info, fontSize:16, flexShrink:0, lineHeight:1 }}>ℹ</span>
-        <div style={{ fontSize:12, color:T.textDim, lineHeight:1.7 }}>
-          <strong style={{ color:T.text }}>One API key, many agents.</strong>{" "}
-          The platform automatically detects runtime identities and creates agent records for admin review.
-          Optional SDK metadata or request headers improve accuracy — but are never required.
-        </div>
-      </div>
-
-      {/* Flow diagram */}
+      {/* ── Page header ── */}
       <div style={{ marginBottom:32 }}>
-        <div style={{ fontSize:11, fontFamily:FONT_MONO, color:T.textMute, letterSpacing:"0.12em", textTransform:"uppercase", marginBottom:14 }}>How it works</div>
-        <div style={{ display:"flex", flexDirection:"column", alignItems:"flex-start", gap:0 }}>
-          {flowNodes.map((node, i) => (
-            <div key={node.label} style={{ display:"flex", flexDirection:"column", alignItems:"flex-start" }}>
-              <div style={{ display:"flex", alignItems:"center", gap:12 }}>
-                <div style={{ width:10, height:10, borderRadius:"50%", background:node.color, flexShrink:0 }} />
-                <div style={{ background:T.panel, border:`1px solid ${node.color}33`, borderRadius:6, padding:"8px 16px", display:"flex", flexDirection:"column", gap:2, minWidth:300 }}>
-                  <div style={{ fontSize:13, fontWeight:600, color:T.text }}>{node.label}</div>
-                  <div style={{ fontSize:11, fontFamily:FONT_MONO, color:node.color, opacity:0.8 }}>{node.sub}</div>
-                </div>
-              </div>
-              {i < flowNodes.length - 1 && (
-                <div style={{ width:1, height:20, background:T.border, marginLeft:4 }} />
-              )}
-            </div>
-          ))}
+        <div style={{ fontSize:11, fontFamily:FONT_MONO, color:T.textMute, letterSpacing:"0.12em", textTransform:"uppercase", marginBottom:6 }}>Administration · Gateway Setup</div>
+        <div style={{ fontSize:24, fontWeight:700, color:T.text, marginBottom:10, lineHeight:1.2 }}>Choose Your Discovery Method</div>
+        <div style={{ fontSize:13, color:T.textDim, lineHeight:1.7, maxWidth:640 }}>
+          Discover AI agents from runtime SDK metadata, gateway traffic, and connected platforms.
+          Use the SDK for the highest accuracy, but agents can also be detected through gateway and ecosystem signals.
         </div>
       </div>
 
-      {/* Steps */}
-      <div style={{ marginBottom:28 }}>
-        <div style={{ fontSize:11, fontFamily:FONT_MONO, color:T.textMute, letterSpacing:"0.12em", textTransform:"uppercase", marginBottom:14 }}>Setup Steps</div>
-        {steps.map((s, i) => (
-          <div key={s.n} style={{ display:"flex", gap:0 }}>
-            <div style={{ display:"flex", flexDirection:"column", alignItems:"center", marginRight:18, flexShrink:0 }}>
-              <div style={{ width:32, height:32, borderRadius:"50%", background:`${s.color}15`, border:`1.5px solid ${s.color}44`, display:"flex", alignItems:"center", justifyContent:"center", fontSize:13, fontWeight:700, color:s.color, fontFamily:FONT_MONO }}>{s.n}</div>
-              {i < steps.length - 1 && <div style={{ width:1, flex:1, minHeight:16, background:T.border, margin:"6px 0" }} />}
+      {/* ── Three method cards ── */}
+      <div style={{ display:"grid", gridTemplateColumns:"repeat(3,1fr)", gap:16, marginBottom:36 }}>
+        {METHODS.map(m => (
+          <div key={m.id} style={{ background:T.panel, border:`1px solid ${section === m.id ? m.color+"55" : T.border}`, borderRadius:10, padding:"20px 18px", display:"flex", flexDirection:"column", gap:12, transition:"border-color 0.15s" }}>
+            <div style={{ display:"flex", alignItems:"flex-start", justifyContent:"space-between", gap:8 }}>
+              <div style={{ fontSize:14, fontWeight:700, color:T.text, lineHeight:1.3 }}>{m.title}</div>
+              {m.badge && (
+                <span style={{ background:`${m.color}18`, color:m.color, border:`1px solid ${m.color}44`, fontSize:9, fontFamily:FONT_MONO, padding:"2px 8px", borderRadius:3, textTransform:"uppercase", letterSpacing:"0.1em", flexShrink:0 }}>{m.badge}</span>
+              )}
             </div>
-            <div style={{ flex:1, paddingBottom:24 }}>
-              <div style={{ fontSize:14, fontWeight:600, color:T.text, marginBottom:5 }}>{s.title}</div>
-              <div style={{ fontSize:12, color:T.textDim, lineHeight:1.65, marginBottom:10 }}>{s.desc}</div>
-              {s.code && (
-                <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:s.cta ? 10 : 0 }}>
-                  <code style={{ background:T.bg, border:`1px solid ${T.border}`, borderRadius:4, padding:"4px 10px", fontSize:12, fontFamily:FONT_MONO, color:T.accent }}>{s.code}</code>
-                  <button onClick={() => copy(s.codeId, s.code)}
-                    style={{ background:"transparent", border:`1px solid ${T.border}`, color:copied===s.codeId?T.accent:T.textMute, borderRadius:4, padding:"3px 10px", fontSize:10, fontFamily:FONT_MONO, cursor:"pointer" }}>
-                    {copied===s.codeId?"copied":"copy"}
-                  </button>
+
+            <div style={{ fontSize:12, color:T.textDim, lineHeight:1.65 }}>{m.desc}</div>
+
+            <div style={{ display:"flex", flexDirection:"column", gap:5, padding:"10px 12px", background:T.panelHi, borderRadius:6 }}>
+              {[
+                ["Accuracy",     m.accuracy],
+                ["Setup Effort", m.effort],
+                ["Best For",     m.bestFor],
+              ].map(([k, v]) => (
+                <div key={k} style={{ display:"flex", gap:6, fontSize:11 }}>
+                  <span style={{ color:T.textMute, width:80, flexShrink:0, fontFamily:FONT_MONO }}>{k}</span>
+                  <span style={{ color:T.text }}>{v}</span>
                 </div>
-              )}
-              {s.cta && (
-                <button onClick={() => onNavigate(s.cta.page)}
-                  style={{ background:T.panelHi, border:`1px solid ${T.border}`, color:s.color, borderRadius:5, padding:"6px 14px", fontSize:11, fontFamily:FONT_MONO, cursor:"pointer" }}>
-                  {s.cta.label}
-                </button>
-              )}
+              ))}
             </div>
+
+            <ul style={{ margin:0, padding:"0 0 0 14px", display:"flex", flexDirection:"column", gap:4 }}>
+              {m.benefits.map(b => (
+                <li key={b} style={{ fontSize:11, color:T.textDim, lineHeight:1.5 }}>{b}</li>
+              ))}
+            </ul>
+
+            <button
+              onClick={() => setSection(s => s === m.id ? null : m.id)}
+              style={{ marginTop:"auto", background:`${m.color}14`, border:`1px solid ${m.color}44`, color:m.color, borderRadius:6, padding:"8px 14px", fontSize:12, fontFamily:FONT_MONO, cursor:"pointer", fontWeight:600, textAlign:"center" }}
+            >
+              {section === m.id ? "▲ Collapse" : m.cta}
+            </button>
           </div>
         ))}
       </div>
 
-      {/* Identity resolution card */}
-      <div style={{ background:T.panel, border:`1px solid ${T.border}`, borderRadius:8, padding:"18px 20px", marginBottom:28 }}>
-        <div style={{ fontSize:11, fontFamily:FONT_MONO, color:T.textMute, letterSpacing:"0.12em", textTransform:"uppercase", marginBottom:14 }}>How Identity Resolution Works</div>
-        <div style={{ fontSize:12, color:T.textDim, marginBottom:14, lineHeight:1.65 }}>
-          The gateway tries each signal source in order and returns the highest-confidence identity available. Agents resolved at lower confidence are flagged for admin review.
-        </div>
-        <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
-          {RESOLUTION_SOURCES.map((src, i) => (
-            <div key={i} style={{ display:"flex", alignItems:"center", gap:10 }}>
-              <div style={{ width:20, fontSize:11, color:T.textMute, textAlign:"right", flexShrink:0 }}>{i + 1}.</div>
-              <div style={{ flex:1 }}>
-                <span style={{ fontWeight:600, color:T.text, fontSize:12, fontFamily:FONT_MONO }}>{src.method}</span>
-                <span style={{ color:T.textDim, fontSize:12, marginLeft:8 }}>{src.desc}</span>
-              </div>
-              <div style={{ display:"flex", alignItems:"center", gap:8, flexShrink:0 }}>
-                <div style={{ width:60, height:4, borderRadius:2, background:T.border, overflow:"hidden" }}>
-                  <div style={{ width:`${src.confidence}%`, height:"100%", background:src.color, borderRadius:2 }} />
-                </div>
-                <span style={{ fontSize:11, color:src.color, fontWeight:600, fontFamily:FONT_MONO, minWidth:28, textAlign:"right" }}>{src.confidence}%</span>
-              </div>
-            </div>
-          ))}
-        </div>
-      </div>
+      {/* ── SDK Runtime Discovery ── */}
+      <div style={{ border:`1px solid ${section === "sdk" ? "#34d39944" : T.border}`, borderRadius:10, padding:"20px 24px", marginBottom:16, transition:"border-color 0.15s" }}>
+        <SectionHeader id="sdk" label="SDK Runtime Discovery" badge="Recommended" color="#34d399" />
 
-      {/* SDK Examples */}
-      <div style={{ marginBottom:28 }}>
-        <div style={{ fontSize:11, fontFamily:FONT_MONO, color:T.textMute, letterSpacing:"0.12em", textTransform:"uppercase", marginBottom:6 }}>SDK Examples</div>
-        <div style={{ fontSize:12, color:T.textDim, marginBottom:12, lineHeight:1.65 }}>
-          Minimal examples work without any headers — optional headers are shown as comments.
-        </div>
-        <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
-          {sdkList.map(sdk => (
-            <div key={sdk.key} style={{ border:`1px solid ${open[sdk.key] ? sdk.color+"44" : T.border}`, borderRadius:8, overflow:"hidden", transition:"border-color 0.15s" }}>
-              <button onClick={() => toggle(sdk.key)}
-                style={{ width:"100%", background:open[sdk.key] ? T.panelHi : T.panel, border:"none", padding:"12px 16px", display:"flex", alignItems:"center", gap:12, cursor:"pointer", textAlign:"left" }}>
-                <span style={{ width:8, height:8, borderRadius:"50%", background:sdk.color, flexShrink:0 }} />
-                <span style={{ fontSize:12, fontFamily:FONT_MONO, color:open[sdk.key] ? T.text : T.textDim, flex:1, letterSpacing:"0.04em" }}>{sdk.label}</span>
-                <span style={{ fontSize:11, fontFamily:FONT_MONO, color:T.textMute }}>{open[sdk.key] ? "▲ close" : "▼ open"}</span>
-              </button>
-              {open[sdk.key] && (
-                <div style={{ position:"relative", borderTop:`1px solid ${T.border}` }}>
-                  <pre style={{ margin:0, padding:"16px", fontSize:12, fontFamily:FONT_MONO, color:T.text, lineHeight:1.7, overflow:"auto", background:T.bg, maxHeight:420 }}>{resolvedSnippets[sdk.key]}</pre>
-                  <button onClick={() => copy(sdk.key, resolvedSnippets[sdk.key])}
-                    style={{ position:"absolute", top:8, right:8, background:copied===sdk.key?`${sdk.color}18`:"transparent", border:`1px solid ${copied===sdk.key?sdk.color+"55":T.border}`, color:copied===sdk.key?sdk.color:T.textMute, borderRadius:4, padding:"3px 12px", fontSize:10, fontFamily:FONT_MONO, cursor:"pointer" }}>
-                    {copied===sdk.key?"copied":"copy"}
-                  </button>
+        {section === "sdk" && (
+          <div>
+            <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:24, marginBottom:24 }}>
+              <div>
+                <div style={{ fontSize:12, color:T.textDim, lineHeight:1.7, marginBottom:16 }}>
+                  The SDK automatically collects runtime context such as service name, environment, version, and framework metadata.
+                  This improves discovery accuracy and reduces manual configuration.
+                  The gateway automatically creates a verified agent record and enriches it with runtime metadata collected by the SDK.
                 </div>
-              )}
-            </div>
-          ))}
-        </div>
-      </div>
-
-      {/* Optional headers table */}
-      <div style={{ marginBottom:28 }}>
-        <div style={{ fontSize:11, fontFamily:FONT_MONO, color:T.textMute, letterSpacing:"0.12em", textTransform:"uppercase", marginBottom:12 }}>Optional: Improve Discovery Accuracy</div>
-        <div style={{ fontSize:12, color:T.textDim, marginBottom:14, lineHeight:1.65 }}>
-          These headers are never required — the gateway works without them. Send any combination to override auto-detection and boost confidence scores to 95%.
-        </div>
-        <div style={{ background:T.panel, border:`1px solid ${T.border}`, borderRadius:8, overflow:"hidden" }}>
-          <table style={{ width:"100%", borderCollapse:"collapse" }}>
-            <thead>
-              <tr style={{ background:T.panelHi }}>
-                {["Header","Description","Example"].map(h => (
-                  <th key={h} style={{ padding:"9px 14px", textAlign:"left", fontSize:10, fontFamily:FONT_MONO, color:T.textMute, letterSpacing:"0.1em", textTransform:"uppercase", borderBottom:`1px solid ${T.border}` }}>{h}</th>
+                <FlowColumn steps={SDK_FLOW} />
+              </div>
+              <div>
+                <div style={{ fontSize:11, fontFamily:FONT_MONO, color:T.textMute, textTransform:"uppercase", letterSpacing:"0.1em", marginBottom:10 }}>What the SDK collects</div>
+                {[
+                  ["SERVICE_NAME / APP_NAME", "Agent identity (env var or explicit param)"],
+                  ["ENVIRONMENT / ENV",        "prod / staging / dev"],
+                  ["TEAM",                     "Owning team"],
+                  ["APP_VERSION",              "Version tag"],
+                  ["Hostname",                 "Stored as metadata only — not used as name"],
+                  ["Python version",           "Runtime metadata"],
+                ].map(([k, v]) => (
+                  <div key={k} style={{ display:"flex", gap:8, padding:"5px 0", borderBottom:`1px solid ${T.border}`, fontSize:12 }}>
+                    <code style={{ fontFamily:FONT_MONO, color:"#34d399", fontSize:11, minWidth:180, flexShrink:0 }}>{k}</code>
+                    <span style={{ color:T.textDim }}>{v}</span>
+                  </div>
                 ))}
-              </tr>
-            </thead>
-            <tbody>
-              {OPT_HEADERS.map((row, i) => (
-                <tr key={row.name} style={{ background: i % 2 === 0 ? T.panel : T.bg }}>
-                  <td style={{ padding:"9px 14px", borderBottom:`1px solid ${T.border}` }}>
-                    <code style={{ fontSize:11, fontFamily:FONT_MONO, color:T.textDim }}>{row.name}</code>
-                  </td>
-                  <td style={{ padding:"9px 14px", borderBottom:`1px solid ${T.border}`, fontSize:12, color:T.textDim }}>{row.desc}</td>
-                  <td style={{ padding:"9px 14px", borderBottom:`1px solid ${T.border}` }}>
-                    <code style={{ fontSize:11, fontFamily:FONT_MONO, color:T.textMute }}>"{row.example}"</code>
-                  </td>
-                </tr>
+              </div>
+            </div>
+
+            {/* SDK code examples */}
+            <div style={{ fontSize:11, fontFamily:FONT_MONO, color:T.textMute, textTransform:"uppercase", letterSpacing:"0.1em", marginBottom:10 }}>SDK Examples</div>
+            <div style={{ display:"flex", flexDirection:"column", gap:8, marginBottom:20 }}>
+              {[
+                { key:"sdk_openai",    label:"Python · OpenAI SDK" },
+                { key:"sdk_anthropic", label:"Python · Anthropic SDK" },
+                { key:"sdk_env",       label:"Env-var · httpx · LangChain" },
+              ].map(({ key, label }) => (
+                <div key={key} style={{ border:`1px solid ${open[key] ? "#34d39944" : T.border}`, borderRadius:8, overflow:"hidden" }}>
+                  <button onClick={() => toggle(key)}
+                    style={{ width:"100%", background:open[key] ? T.panelHi : T.panel, border:"none", padding:"11px 16px", display:"flex", alignItems:"center", gap:12, cursor:"pointer", textAlign:"left" }}>
+                    <span style={{ width:7, height:7, borderRadius:"50%", background:"#34d399", flexShrink:0 }} />
+                    <span style={{ fontSize:12, fontFamily:FONT_MONO, color:open[key] ? T.text : T.textDim, flex:1 }}>{label}</span>
+                    <span style={{ fontSize:11, fontFamily:FONT_MONO, color:T.textMute }}>{open[key] ? "▲ close" : "▼ open"}</span>
+                  </button>
+                  {open[key] && (
+                    <div style={{ position:"relative", borderTop:`1px solid ${T.border}` }}>
+                      <pre style={{ margin:0, padding:"16px", fontSize:12, fontFamily:FONT_MONO, color:T.text, lineHeight:1.7, overflow:"auto", background:T.bg, maxHeight:380 }}>{resolvedSnippets[key]}</pre>
+                      <button onClick={() => copy(key, resolvedSnippets[key])}
+                        style={{ position:"absolute", top:8, right:8, background:"transparent", border:`1px solid ${T.border}`, color:copied===key?"#34d399":T.textMute, borderRadius:4, padding:"3px 10px", fontSize:10, fontFamily:FONT_MONO, cursor:"pointer" }}>
+                        {copied===key?"copied":"copy"}
+                      </button>
+                    </div>
+                  )}
+                </div>
               ))}
-            </tbody>
-          </table>
-          <div style={{ padding:"10px 14px", background:T.panelHi, borderTop:`1px solid ${T.border}`, fontSize:11, color:T.textMute, fontFamily:FONT_MONO }}>
-            Legacy <code style={{ color:T.textDim }}>X-Guard-Agent</code> / <code style={{ color:T.textDim }}>X-Guard-Team</code> headers are still accepted for backward compatibility.
+            </div>
+
+            {/* Advanced override */}
+            <div style={{ background:`${T.warn}08`, border:`1px solid ${T.warn}22`, borderRadius:8, padding:"12px 16px", marginBottom:8 }}>
+              <div style={{ fontSize:11, fontFamily:FONT_MONO, color:T.warn, textTransform:"uppercase", letterSpacing:"0.1em", marginBottom:8 }}>Advanced Override — Manual Headers</div>
+              <div style={{ fontSize:12, color:T.textDim, marginBottom:12, lineHeight:1.65 }}>
+                Use manual headers when you need per-request control or cannot install the SDK.
+                All existing X-Agent-* and X-Guard-* headers remain supported.
+              </div>
+              <div style={{ display:"flex", flexDirection:"column", gap:6, marginBottom:12 }}>
+                {[
+                  { key:"manual_openai", label:"Manual headers · OpenAI" },
+                  { key:"manual_curl",   label:"Manual headers · cURL" },
+                ].map(({ key, label }) => (
+                  <div key={key} style={{ border:`1px solid ${T.border}`, borderRadius:6, overflow:"hidden" }}>
+                    <button onClick={() => toggle(key)}
+                      style={{ width:"100%", background:T.panel, border:"none", padding:"9px 14px", display:"flex", alignItems:"center", gap:10, cursor:"pointer", textAlign:"left" }}>
+                      <span style={{ fontSize:12, fontFamily:FONT_MONO, color:T.textDim, flex:1 }}>{label}</span>
+                      <span style={{ fontSize:11, fontFamily:FONT_MONO, color:T.textMute }}>{open[key] ? "▲ close" : "▼ open"}</span>
+                    </button>
+                    {open[key] && (
+                      <div style={{ position:"relative", borderTop:`1px solid ${T.border}` }}>
+                        <pre style={{ margin:0, padding:"14px", fontSize:12, fontFamily:FONT_MONO, color:T.text, lineHeight:1.7, overflow:"auto", background:T.bg, maxHeight:280 }}>{resolvedSnippets[key]}</pre>
+                        <button onClick={() => copy(key, resolvedSnippets[key])}
+                          style={{ position:"absolute", top:8, right:8, background:"transparent", border:`1px solid ${T.border}`, color:copied===key?T.accent:T.textMute, borderRadius:4, padding:"3px 10px", fontSize:10, fontFamily:FONT_MONO, cursor:"pointer" }}>
+                          {copied===key?"copied":"copy"}
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+              <div style={{ background:T.panel, border:`1px solid ${T.border}`, borderRadius:6, overflow:"hidden" }}>
+                <table style={{ width:"100%", borderCollapse:"collapse" }}>
+                  <thead>
+                    <tr style={{ background:T.panelHi }}>
+                      {["Header","Description","Example"].map(h => (
+                        <th key={h} style={{ padding:"7px 12px", textAlign:"left", fontSize:10, fontFamily:FONT_MONO, color:T.textMute, letterSpacing:"0.1em", textTransform:"uppercase", borderBottom:`1px solid ${T.border}` }}>{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {OPT_HEADERS.map((row, i) => (
+                      <tr key={row.name} style={{ background: i % 2 === 0 ? T.panel : T.bg }}>
+                        <td style={{ padding:"7px 12px", borderBottom:`1px solid ${T.border}` }}>
+                          <code style={{ fontSize:11, fontFamily:FONT_MONO, color:T.textDim }}>{row.name}</code>
+                        </td>
+                        <td style={{ padding:"7px 12px", borderBottom:`1px solid ${T.border}`, fontSize:11, color:T.textDim }}>{row.desc}</td>
+                        <td style={{ padding:"7px 12px", borderBottom:`1px solid ${T.border}` }}>
+                          <code style={{ fontSize:11, fontFamily:FONT_MONO, color:T.textMute }}>{row.example}</code>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
           </div>
-        </div>
+        )}
+      </div>
+
+      {/* ── Gateway Discovery ── */}
+      <div style={{ border:`1px solid ${section === "gateway" ? T.info+"55" : T.border}`, borderRadius:10, padding:"20px 24px", marginBottom:16, transition:"border-color 0.15s" }}>
+        <SectionHeader id="gateway" label="Gateway Discovery" color={T.info} />
+
+        {section === "gateway" && (
+          <div>
+            <div style={{ fontSize:12, color:T.textDim, lineHeight:1.7, marginBottom:20 }}>
+              No SDK required. Simply point your AI client's base URL at the gateway. The gateway analyses every request and derives agent identity from available signals.
+              Agents are created as <strong style={{ color:T.text }}>Verified · Unassigned</strong> and appear in the Discovery Center for admin review.
+            </div>
+
+            <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:24, marginBottom:20 }}>
+              <div>
+                <div style={{ fontSize:11, fontFamily:FONT_MONO, color:T.textMute, textTransform:"uppercase", letterSpacing:"0.1em", marginBottom:10 }}>Setup Flow</div>
+                <FlowColumn steps={GW_FLOW} />
+              </div>
+              <div>
+                <div style={{ fontSize:11, fontFamily:FONT_MONO, color:T.textMute, textTransform:"uppercase", letterSpacing:"0.1em", marginBottom:10 }}>Identity Signals (in priority order)</div>
+                {GW_SIGNALS.map((s, i) => (
+                  <div key={i} style={{ display:"flex", gap:8, padding:"6px 0", borderBottom:`1px solid ${T.border}`, fontSize:12 }}>
+                    <span style={{ color:T.textMute, fontFamily:FONT_MONO, fontSize:11, minWidth:16, flexShrink:0 }}>{i+1}.</span>
+                    <div>
+                      <span style={{ color:T.text, fontWeight:600 }}>{s.label}</span>
+                      <span style={{ color:T.textDim, marginLeft:8 }}>{s.desc}</span>
+                    </div>
+                  </div>
+                ))}
+                <div style={{ marginTop:12, fontSize:12, color:T.textDim, lineHeight:1.6 }}>
+                  If no signal is reliable, the gateway creates{" "}
+                  <code style={{ fontFamily:FONT_MONO, color:T.warn, fontSize:11 }}>unknown-agent-&#123;hash&#125;</code>{" "}
+                  with status <strong style={{ color:T.text }}>Needs Review</strong>.
+                </div>
+              </div>
+            </div>
+
+            <div style={{ background:T.panelHi, border:`1px solid ${T.border}`, borderRadius:8, padding:"12px 16px" }}>
+              <div style={{ fontSize:12, color:T.textDim, lineHeight:1.65 }}>
+                <strong style={{ color:T.text }}>Minimum setup:</strong> change{" "}
+                <code style={{ fontFamily:FONT_MONO, color:T.info, fontSize:11 }}>base_url</code> to{" "}
+                <code style={{ fontFamily:FONT_MONO, color:T.accent, fontSize:11 }}>{gatewayUrl}/v1</code>{" "}
+                and use your organisation API key. That's all that's required. The gateway handles the rest.
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* ── Platform / Ecosystem Discovery ── */}
+      <div style={{ border:`1px solid ${section === "platform" ? T.purple+"55" : T.border}`, borderRadius:10, padding:"20px 24px", marginBottom:16, transition:"border-color 0.15s" }}>
+        <SectionHeader id="platform" label="Platform / Ecosystem Discovery" color={T.purple} />
+
+        {section === "platform" && (
+          <div>
+            <div style={{ fontSize:12, color:T.textDim, lineHeight:1.7, marginBottom:20 }}>
+              Platform discovery identifies AI-related signals outside the gateway.
+              These are created as <strong style={{ color:T.text }}>potential agents</strong> and require admin validation before becoming managed inventory.
+              Use this method to detect shadow AI and unmanaged workloads across your organisation.
+            </div>
+
+            <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:24, marginBottom:20 }}>
+              <div>
+                <div style={{ fontSize:11, fontFamily:FONT_MONO, color:T.textMute, textTransform:"uppercase", letterSpacing:"0.1em", marginBottom:10 }}>Discovery Flow</div>
+                <FlowColumn steps={PLATFORM_FLOW} />
+
+                <div style={{ marginTop:16, background:`${T.purple}0d`, border:`1px solid ${T.purple}33`, borderRadius:8, padding:"10px 14px" }}>
+                  <div style={{ fontSize:11, color:T.purple, fontFamily:FONT_MONO, marginBottom:4 }}>Verified vs Potential</div>
+                  <div style={{ fontSize:12, color:T.textDim, lineHeight:1.6 }}>
+                    <strong style={{ color:T.text }}>Verified</strong> — came through gateway (SDK or direct routing)<br/>
+                    <strong style={{ color:T.text }}>Potential</strong> — discovered from platform scan, no gateway traffic seen yet
+                  </div>
+                </div>
+              </div>
+
+              <div>
+                <div style={{ fontSize:11, fontFamily:FONT_MONO, color:T.textMute, textTransform:"uppercase", letterSpacing:"0.1em", marginBottom:10 }}>Supported Platforms</div>
+                <div style={{ display:"flex", flexWrap:"wrap", gap:6 }}>
+                  {PLATFORMS.map(p => (
+                    <span key={p} style={{ background:T.panelHi, border:`1px solid ${T.border}`, color:T.textDim, fontSize:11, fontFamily:FONT_MONO, padding:"3px 10px", borderRadius:4 }}>{p}</span>
+                  ))}
+                </div>
+                <div style={{ marginTop:14, fontSize:12, color:T.textDim, lineHeight:1.65 }}>
+                  Platform integrations scan for AI API usage patterns, environment variables referencing AI providers, workflow nodes, and SDK dependencies — without requiring agent code changes.
+                </div>
+              </div>
+            </div>
+
+            <button onClick={() => onNavigate("ecosystem")}
+              style={{ background:`${T.purple}14`, border:`1px solid ${T.purple}44`, color:T.purple, borderRadius:6, padding:"8px 18px", fontSize:12, fontFamily:FONT_MONO, cursor:"pointer", fontWeight:600 }}>
+              View Connected Platforms →
+            </button>
+          </div>
+        )}
       </div>
 
     </div>
