@@ -88,7 +88,15 @@ async def me(current_user=Depends(get_current_user)):
 @router.get("/auth/users", response_model=list[UserOut])
 async def list_users(db: Session = Depends(get_db), actor=Depends(require_page_access("users"))):
     from app.models import User
-    return db.query(User).filter(User.organization_id == actor.organization_id).order_by(User.created_at).all()
+    return (
+        db.query(User)
+        .filter(
+            User.organization_id == actor.organization_id,
+            User.is_platform_admin == False,  # noqa: E712
+        )
+        .order_by(User.created_at)
+        .all()
+    )
 
 
 @router.post("/auth/users", response_model=UserOut, status_code=201)
@@ -116,7 +124,11 @@ async def create_user(req: UserCreate, db: Session = Depends(get_db), actor=Depe
 @router.patch("/auth/users/{user_id}", response_model=UserOut)
 async def update_user(user_id: int, req: UserUpdate, db: Session = Depends(get_db), actor=Depends(require_page_access("users"))):
     from app.models import User
-    user = db.query(User).filter(User.id == user_id, User.organization_id == actor.organization_id).first()
+    user = db.query(User).filter(
+        User.id == user_id,
+        User.organization_id == actor.organization_id,
+        User.is_platform_admin == False,  # noqa: E712
+    ).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
     updates = req.model_dump(exclude_none=True)
@@ -146,7 +158,11 @@ async def delete_user(user_id: int, db: Session = Depends(get_db), current_user=
     from app.models import User
     if user_id == current_user.id:
         raise HTTPException(status_code=400, detail="Cannot delete your own account")
-    user = db.query(User).filter(User.id == user_id, User.organization_id == current_user.organization_id).first()
+    user = db.query(User).filter(
+        User.id == user_id,
+        User.organization_id == current_user.organization_id,
+        User.is_platform_admin == False,  # noqa: E712
+    ).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
     db.delete(user)
