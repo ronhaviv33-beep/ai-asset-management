@@ -6242,7 +6242,7 @@ export default function App() {
 
         {!["dashboard","home","agent_inventory","discovery","governance","security_intel","ecosystem","cost","pricing","budgets","security","chat","users","apikeys","settings","integrations","onboarding"].includes(page) && <FilterBar filters={filters} setFilters={setFilters} allTeams={allTeams} allAgents={allAgents} user={user} rolesMap={rolesMap}/>}
 
-        <PageErrorBoundary key={page}>{renderPage()}</PageErrorBoundary>
+        <PageErrorBoundary key={`${page}-${demoMode}`}>{renderPage()}</PageErrorBoundary>
       </main>
     </div>
     </RolesContext.Provider>
