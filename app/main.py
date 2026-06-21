@@ -48,6 +48,36 @@ from app.models import calculate_cost, PRICING_LAST_UPDATED, Organization, Provi
 
 Base.metadata.create_all(bind=engine)
 
+
+def _run_alembic_migrations() -> None:
+    """Run any pending Alembic migrations on startup."""
+    from alembic.config import Config as AlembicConfig
+    from alembic import command as alembic_command
+    import pathlib
+    cfg = AlembicConfig(str(pathlib.Path(__file__).parent.parent / "alembic.ini"))
+    cfg.set_main_option("sqlalchemy.url", os.getenv("DATABASE_URL", "sqlite:////data/ai_asset_mgmt.db"))
+    cfg.set_main_option("script_location", str(pathlib.Path(__file__).parent.parent / "alembic"))
+    # On a fresh DB (no alembic_version table, or empty alembic_version table),
+    # stamp head so Alembic doesn't re-run the initial migration on a schema
+    # that create_all() already built.
+    from sqlalchemy import inspect as _sqlainspect, text as _sqlatext
+    with engine.connect() as _conn:
+        _tables = _sqlainspect(_conn).get_table_names()
+        _needs_stamp = "alembic_version" not in _tables or not _conn.execute(
+            _sqlatext("SELECT version_num FROM alembic_version")
+        ).fetchall()
+    if _needs_stamp:
+        alembic_command.stamp(cfg, "head")
+    alembic_command.upgrade(cfg, "head")
+
+
+try:
+    _run_alembic_migrations()
+except Exception as _e:
+    import logging as _logging
+    _logging.getLogger("ai_asset_mgmt").warning("Alembic migration warning (non-fatal): %s", _e)
+
+
 # Run org migration on startup (idempotent — safe to call every boot)
 from app.migrate_orgs import run as _run_org_migration
 try:
@@ -141,50 +171,6 @@ except Exception as _e:
     _logging.getLogger("ai_asset_mgmt").warning("Role seed warning (non-fatal): %s", _e)
 
 
-def _migrate_pricing_estimated() -> None:
-    """Idempotent: add pricing_estimated column to telemetry if absent.
-    Existing rows backfilled as False (they were priced before this feature;
-    treat as exact rather than overwriting historical data).
-    """
-    from sqlalchemy import inspect as _inspect, text as _text
-    with engine.connect() as conn:
-        cols = {c["name"] for c in _inspect(engine).get_columns("telemetry")}
-        if "pricing_estimated" not in cols:
-            conn.execute(_text(
-                "ALTER TABLE telemetry ADD COLUMN pricing_estimated BOOLEAN NOT NULL DEFAULT 0"
-            ))
-            conn.commit()
-
-
-try:
-    _migrate_pricing_estimated()
-except Exception as _e:
-    import logging as _logging
-    _logging.getLogger("ai_asset_mgmt").warning("pricing_estimated migration warning (non-fatal): %s", _e)
-
-
-def _migrate_telemetry_asset_fields() -> None:
-    """Idempotent: add Phase 2 asset identity columns to telemetry if absent."""
-    from sqlalchemy import inspect as _inspect, text as _text
-    with engine.connect() as conn:
-        cols = {c["name"] for c in _inspect(engine).get_columns("telemetry")}
-        for col_name, col_def in [
-            ("asset_key",       "VARCHAR(64)"),
-            ("agent_id_raw",    "VARCHAR(256)"),
-            ("agent_version",   "VARCHAR(128)"),
-            ("team_raw",        "VARCHAR(128)"),
-            ("environment_raw", "VARCHAR(64)"),
-        ]:
-            if col_name not in cols:
-                conn.execute(_text(f"ALTER TABLE telemetry ADD COLUMN {col_name} {col_def}"))
-        conn.commit()
-
-
-try:
-    _migrate_telemetry_asset_fields()
-except Exception as _e:
-    import logging as _logging
-    _logging.getLogger("ai_asset_mgmt").warning("telemetry asset fields migration warning (non-fatal): %s", _e)
 
 
 def _backfill_asset_keys() -> None:
@@ -253,85 +239,6 @@ except Exception as _e:
     _logging.getLogger("ai_asset_mgmt").warning("asset key backfill warning (non-fatal): %s", _e)
 
 
-def _migrate_asset_registry_discovery_fields() -> None:
-    """Idempotent: add Phase 1 discovery classification columns to asset_registry."""
-    from sqlalchemy import inspect as _inspect, text as _text
-    with engine.connect() as conn:
-        try:
-            cols = {c["name"] for c in _inspect(engine).get_columns("asset_registry")}
-        except Exception:
-            return  # table doesn't exist yet — create_all will handle it
-        for col_name, col_def in [
-            ("discovery_status", "VARCHAR(32) DEFAULT 'verified'"),
-            ("discovery_source", "VARCHAR(64) DEFAULT 'gateway_telemetry'"),
-            ("discovery_reason", "TEXT"),
-            ("evidence",         "TEXT"),
-            ("confidence_score", "FLOAT DEFAULT 95.0"),
-        ]:
-            if col_name not in cols:
-                conn.execute(_text(f"ALTER TABLE asset_registry ADD COLUMN {col_name} {col_def}"))
-        # Backfill NULLs on existing rows (SQLite ALTER TABLE doesn't always set defaults on old rows)
-        conn.execute(_text("UPDATE asset_registry SET discovery_status='verified' WHERE discovery_status IS NULL"))
-        conn.execute(_text("UPDATE asset_registry SET discovery_source='gateway_telemetry' WHERE discovery_source IS NULL"))
-        conn.execute(_text("UPDATE asset_registry SET confidence_score=95.0 WHERE confidence_score IS NULL"))
-        conn.commit()
-
-
-try:
-    _migrate_asset_registry_discovery_fields()
-except Exception as _e:
-    import logging as _logging
-    _logging.getLogger("ai_asset_mgmt").warning("asset registry discovery fields migration warning (non-fatal): %s", _e)
-
-
-def _migrate_platform_admin() -> None:
-    """Idempotent: add is_platform_admin column to users; mark seed admin as platform admin."""
-    from sqlalchemy import inspect as _inspect, text as _text
-    with engine.connect() as conn:
-        try:
-            cols = {c["name"] for c in _inspect(engine).get_columns("users")}
-        except Exception:
-            return
-        if "is_platform_admin" not in cols:
-            conn.execute(_text("ALTER TABLE users ADD COLUMN is_platform_admin BOOLEAN NOT NULL DEFAULT 0"))
-        conn.execute(_text("UPDATE users SET is_platform_admin=1 WHERE email='admin@ai-asset-mgmt.local'"))
-        conn.commit()
-
-
-try:
-    _migrate_platform_admin()
-except Exception as _e:
-    import logging as _logging
-    _logging.getLogger("ai_asset_mgmt").warning("platform admin migration warning (non-fatal): %s", _e)
-
-
-def _migrate_chat_sessions_isolation() -> None:
-    """
-    Idempotent: add organization_id and user_id to chat_sessions.
-
-    Existing rows are left with NULL organization_id — they are effectively
-    orphaned (no org can claim them) rather than assigned to a wrong org.
-    This is intentional: we cannot reliably infer which org a pre-migration
-    session belongs to from user_name alone.
-    """
-    from sqlalchemy import inspect as _inspect, text as _text
-    with engine.connect() as conn:
-        try:
-            cols = {c["name"] for c in _inspect(engine).get_columns("chat_sessions")}
-        except Exception:
-            return  # table doesn't exist yet — create_all will handle it
-        if "organization_id" not in cols:
-            conn.execute(_text("ALTER TABLE chat_sessions ADD COLUMN organization_id INTEGER REFERENCES organizations(id)"))
-        if "user_id" not in cols:
-            conn.execute(_text("ALTER TABLE chat_sessions ADD COLUMN user_id INTEGER REFERENCES users(id)"))
-        conn.commit()
-
-
-try:
-    _migrate_chat_sessions_isolation()
-except Exception as _e:
-    import logging as _logging
-    _logging.getLogger("ai_asset_mgmt").warning("chat sessions isolation migration warning (non-fatal): %s", _e)
 
 
 # ── Pricing Registry: seed + start background sync ────────────────────────────
