@@ -548,3 +548,19 @@ export async function fetchPricingSyncStatus() {
   if (!r || !r.ok) throw new Error('Failed to fetch sync status')
   return r.json()
 }
+
+export async function fetchRelationships(params = {}) {
+  const q = new URLSearchParams()
+  if (params.source_agent_name) q.set('source_agent_name', params.source_agent_name)
+  if (params.target_type)        q.set('target_type',        params.target_type)
+  if (params.relationship_type)  q.set('relationship_type',  params.relationship_type)
+  const r = await authFetch(`${BASE}/relationships?${q}`)
+  if (!r || !r.ok) throw new Error('Failed to fetch relationships')
+  return r.json()
+}
+
+export async function fetchRelationshipsGraph() {
+  const r = await authFetch(`${BASE}/relationships/graph`)
+  if (!r || !r.ok) throw new Error('Failed to fetch relationship graph')
+  return r.json()
+}

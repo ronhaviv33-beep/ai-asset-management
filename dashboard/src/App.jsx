@@ -25,6 +25,7 @@ import DiscoveryCenter from "./pages/DiscoveryCenter.jsx";
 import GovernanceCenter from "./pages/GovernanceCenter.jsx";
 import SecurityIntelligence from "./pages/SecurityIntelligence.jsx";
 import EcosystemDiscovery from "./pages/EcosystemDiscovery.jsx";
+import RelationshipMap from "./pages/RelationshipMap.jsx";
 import {
   LineChart, Line, AreaChart, Area, BarChart, Bar,
   XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid,
@@ -1891,9 +1892,9 @@ const useRoles = () => useContext(RolesContext);
 const ROLES = {
   // pages  — controls navigation visibility and page-level UI gates
   // can    — explicit data/action capabilities not expressible as page visibility
-  admin:   { label:"Admin",   color: T.crit,   pages: ["dashboard","welcome","agent_inventory","discovery","governance","cost","security_intel","ecosystem","budgets","pricing","security","users","apikeys","settings","home","overview","agents","models","workflows","alerts","assets","chat","integrations","onboarding"], can: ["view_all_sessions"], team_scoped: false },
-  analyst: { label:"Analyst", color: T.warn,   pages: ["dashboard","welcome","agent_inventory","discovery","governance","cost","security_intel","ecosystem","home","overview","agents","models","workflows","alerts","assets","chat","integrations","onboarding"],                                                           can: [], team_scoped: true },
-  viewer:  { label:"Viewer",  color: T.info,   pages: ["dashboard","welcome","agent_inventory","discovery","governance","cost","security_intel","ecosystem","home","overview","agents","models","workflows","alerts","assets"],                                                                                            can: [], team_scoped: true },
+  admin:   { label:"Admin",   color: T.crit,   pages: ["dashboard","welcome","agent_inventory","discovery","governance","relationship_map","cost","security_intel","ecosystem","budgets","pricing","security","users","apikeys","settings","home","overview","agents","models","workflows","alerts","assets","chat","integrations","onboarding"], can: ["view_all_sessions"], team_scoped: false },
+  analyst: { label:"Analyst", color: T.warn,   pages: ["dashboard","welcome","agent_inventory","discovery","governance","relationship_map","cost","security_intel","ecosystem","home","overview","agents","models","workflows","alerts","assets","chat","integrations","onboarding"],                                                           can: [], team_scoped: true },
+  viewer:  { label:"Viewer",  color: T.info,   pages: ["dashboard","welcome","agent_inventory","discovery","governance","relationship_map","cost","security_intel","ecosystem","home","overview","agents","models","workflows","alerts","assets"],                                                                                            can: [], team_scoped: true },
 };
 
 // deny-by-default: unknown/null role → false, never crashes, never leaks.
@@ -5933,9 +5934,10 @@ const NAV_GROUPS = [
   {
     label: "INVENTORY",
     items: [
-      { id: "agent_inventory", label: "Agents" },
-      { id: "discovery",       label: "Discovery Center" },
-      { id: "governance",      label: "Governance Center" },
+      { id: "agent_inventory",  label: "Agents" },
+      { id: "discovery",        label: "Discovery Center" },
+      { id: "governance",       label: "Governance Center" },
+      { id: "relationship_map", label: "Relationship Map" },
     ],
   },
   {
@@ -6141,7 +6143,8 @@ export default function App() {
       case "discovery":      return <DiscoveryCenter initialTab={discoveryInitialTab} />;
       case "governance":     return <GovernanceCenter />;
       case "security_intel": return <SecurityIntelligence />;
-      case "ecosystem":      return <EcosystemDiscovery />;
+      case "ecosystem":        return <EcosystemDiscovery />;
+      case "relationship_map": return <RelationshipMap />;
       // ── Existing pages (unchanged) ──────────────────────────────────────
       case "cost":      return <CostIntelligence />;
       case "pricing":   return <PricingRegistry />;
@@ -6310,7 +6313,7 @@ export default function App() {
           </div>
         </header>
 
-        {!["dashboard","home","agent_inventory","discovery","governance","security_intel","ecosystem","cost","pricing","budgets","security","chat","users","apikeys","settings","integrations","onboarding"].includes(page) && <FilterBar filters={filters} setFilters={setFilters} allTeams={allTeams} allAgents={allAgents} user={user} rolesMap={rolesMap}/>}
+        {!["dashboard","home","agent_inventory","discovery","governance","relationship_map","security_intel","ecosystem","cost","pricing","budgets","security","chat","users","apikeys","settings","integrations","onboarding"].includes(page) && <FilterBar filters={filters} setFilters={setFilters} allTeams={allTeams} allAgents={allAgents} user={user} rolesMap={rolesMap}/>}
 
         <PageErrorBoundary key={`${page}-${demoMode}`}>{renderPage()}</PageErrorBoundary>
       </main>
