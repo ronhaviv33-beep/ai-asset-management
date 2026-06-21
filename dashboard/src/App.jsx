@@ -16,7 +16,7 @@ class PageErrorBoundary extends Component {
     return this.props.children;
   }
 }
-import { login as apiLogin, fetchMe, fetchUsers, createUser, updateUser, deleteUser, getToken, setToken, authFetch, fetchKeyStatuses, updateKey, BASE, fetchApiKeys, createApiKey, revokeApiKey, deleteApiKey, fetchGuardModes, setGuardMode, fetchHealth, fetchProviderCredentials, upsertProviderCredential, deleteProviderCredential, fetchRoles, createRole, updateRole, deleteRole, fetchTeams, fetchAssets, fetchAssetsSummary, fetchAssetTelemetry, fetchUnassignedAssets, claimAsset, updateAssetRegistry, fetchOrgConfig, updateOrgConfig, getDemoMode, setDemoMode, fetchOrganizations, setViewOrg, getViewOrg } from "./api.js";
+import { login as apiLogin, fetchMe, fetchUsers, createUser, updateUser, deleteUser, getToken, setToken, authFetch, fetchKeyStatuses, updateKey, BASE, fetchApiKeys, createApiKey, revokeApiKey, deleteApiKey, fetchGuardModes, setGuardMode, fetchHealth, fetchProviderCredentials, upsertProviderCredential, deleteProviderCredential, fetchRoles, createRole, updateRole, deleteRole, fetchTeams, fetchAssets, fetchAssetsSummary, fetchAssetTelemetry, fetchUnassignedAssets, claimAsset, updateAssetRegistry, fetchOrgConfig, updateOrgConfig, getDemoMode, setDemoMode, fetchOrganizations, setViewOrg, getViewOrg, fetchAgentsSummary, fetchRelationships } from "./api.js";
 import AgentInventory from "./pages/AgentInventory.jsx";
 import CostIntelligence from "./pages/CostIntelligence.jsx";
 import PricingRegistry from "./pages/PricingRegistry.jsx";
@@ -5383,8 +5383,24 @@ function SimpleIntegrationsPage({ onNavigate }) {
   const [copied, setCopied] = useState(null);
   const [open, setOpen]     = useState({ sdk_openai: true, sdk_anthropic: false, sdk_env: false, manual_openai: false, manual_curl: false });
   const [section, setSection] = useState(null); // "sdk" | "gateway" | "platform" | null
+  const [metrics, setMetrics] = useState({ agents: null, dependencies: null, workflows: null, platforms: null });
   const copy   = (id, text) => { navigator.clipboard.writeText(text).catch(() => {}); setCopied(id); setTimeout(() => setCopied(null), 2000); };
   const toggle = (k) => setOpen(o => ({ ...o, [k]: !o[k] }));
+
+  useEffect(() => {
+    Promise.allSettled([fetchAgentsSummary(), fetchRelationships()]).then(([agRes, relRes]) => {
+      const ag   = agRes.status  === "fulfilled" ? agRes.value  : null;
+      const rels = relRes.status === "fulfilled" ? relRes.value : [];
+      const wfRels = (rels || []).filter(r => ["triggers_workflow", "uses_workflow"].includes(r.relationship_type));
+      const platformCount = ag?.discovery_coverage ? Object.keys(ag.discovery_coverage).length : null;
+      setMetrics({
+        agents:       ag ? (ag.verified_agents?.total || 0) + (ag.potential_agents?.total || 0) : null,
+        dependencies: Array.isArray(rels) ? rels.length : null,
+        workflows:    new Set(wfRels.map(r => r.target_name)).size,
+        platforms:    platformCount,
+      });
+    });
+  }, []);
 
   // ── Discovery method cards ─────────────────────────────────────────────────
   const METHODS = [
@@ -5392,34 +5408,28 @@ function SimpleIntegrationsPage({ onNavigate }) {
       id: "sdk",
       badge: "Recommended",
       badgeColor: "#34d399",
-      title: "SDK Runtime Discovery",
-      desc: "Install the lightweight SDK once. It automatically attaches runtime identity metadata to AI requests and provides the most accurate agent discovery.",
-      accuracy: "High",
-      effort: "Low",
-      bestFor: "Production AI workloads",
+      title: "Connect AI Applications",
+      customerDesc: "Most agents are applications. Install the lightweight SDK once and every AI call is automatically attributed to the right agent — name, team, environment, and runtime dependencies all mapped.",
       benefits: [
-        "Strongest agent identity",
-        "Best cost attribution",
-        "Best runtime metadata",
-        "Minimal per-agent configuration",
+        "Strongest agent identity out of the box",
+        "Automatic runtime dependency mapping",
+        "Best cost attribution per agent",
         "Supports OpenAI and Anthropic wrappers",
+        "Zero config via env vars",
       ],
-      cta: "Install SDK →",
+      cta: "See Install Guide →",
       color: "#34d399",
     },
     {
       id: "gateway",
       badge: null,
-      title: "Gateway Discovery",
-      desc: "Route AI traffic through the gateway without installing the SDK. The gateway derives agent identity from API key scope, request origin, provider metadata, user-agent, framework hints, and stable fingerprints.",
-      accuracy: "Medium",
-      effort: "Very Low",
-      bestFor: "Existing gateway traffic and quick onboarding",
+      title: "Connect AI Traffic",
+      customerDesc: "Already routing AI traffic? Point any AI client at the gateway. We derive agent identity from request signals and map what your agents call — no code changes needed.",
       benefits: [
         "No SDK required",
-        "Works with existing traffic routed through the gateway",
-        "Detects unknown runtime identities",
-        "Creates verified but unassigned agents for admin review",
+        "Works with all existing gateway traffic",
+        "Detects unknown agents automatically",
+        "Creates agents ready for admin review",
       ],
       cta: "Route Traffic →",
       color: T.info,
@@ -5427,16 +5437,13 @@ function SimpleIntegrationsPage({ onNavigate }) {
     {
       id: "platform",
       badge: null,
-      title: "Platform / Ecosystem Discovery",
-      desc: "Connect external platforms such as GitHub, n8n, Slack, Jira, ServiceNow, cloud functions, and AI development platforms to detect potential AI agents and shadow AI usage.",
-      accuracy: "Low to Medium",
-      effort: "Very Low",
-      bestFor: "Shadow AI detection",
+      title: "Connect AI Ecosystem",
+      customerDesc: "Scan GitHub, n8n, Slack, Jira, and 12+ platforms for shadow AI usage. Surface potential agents outside the gateway before they become a governance risk.",
       benefits: [
-        "Detects AI signals outside the gateway",
-        "Finds potential unmanaged agents",
-        "Helps identify shadow AI",
-        "Requires admin validation before becoming managed inventory",
+        "Finds AI usage outside the gateway",
+        "Detects shadow AI and unmanaged agents",
+        "No agent code changes required",
+        "Requires admin validation before entering inventory",
       ],
       cta: "Connect Platforms →",
       color: T.purple,
@@ -5628,23 +5635,43 @@ curl GATEWAY_URL/v1/chat/completions \\
     </div>
   );
 
+  const fmtMetric = (v) => v === null ? "—" : String(v);
+
   return (
-    <div style={{ maxWidth:880, margin:"0 auto", padding:"32px 24px", fontFamily:FONT_UI }}>
+    <div style={{ maxWidth:900, margin:"0 auto", padding:"32px 24px", fontFamily:FONT_UI }}>
 
       {/* ── Page header ── */}
-      <div style={{ marginBottom:32 }}>
+      <div style={{ marginBottom:28 }}>
         <div style={{ fontSize:11, fontFamily:FONT_MONO, color:T.textMute, letterSpacing:"0.12em", textTransform:"uppercase", marginBottom:6 }}>Administration · Gateway Setup</div>
-        <div style={{ fontSize:24, fontWeight:700, color:T.text, marginBottom:10, lineHeight:1.2 }}>Choose Your Discovery Method</div>
-        <div style={{ fontSize:13, color:T.textDim, lineHeight:1.7, maxWidth:640 }}>
-          Discover AI agents from runtime SDK metadata, gateway traffic, and connected platforms.
-          Use the SDK for the highest accuracy, but agents can also be detected through gateway and ecosystem signals.
+        <div style={{ fontSize:24, fontWeight:700, color:T.text, marginBottom:10, lineHeight:1.2 }}>Build Your AI Agent System of Record</div>
+        <div style={{ fontSize:13, color:T.textDim, lineHeight:1.7, maxWidth:660 }}>
+          Connect your AI applications, route your AI traffic, and link your AI ecosystem.
+          Every agent you discover, every dependency you map, every interaction you govern — all in one place.
+        </div>
+      </div>
+
+      {/* ── Your AI Estate summary panel ── */}
+      <div style={{ background:T.panel, border:`1px solid ${T.border}`, borderRadius:10, padding:"18px 24px", marginBottom:32 }}>
+        <div style={{ fontSize:11, fontFamily:FONT_MONO, color:T.textMute, textTransform:"uppercase", letterSpacing:"0.1em", marginBottom:14 }}>Your AI Estate</div>
+        <div style={{ display:"grid", gridTemplateColumns:"repeat(4,1fr)", gap:0 }}>
+          {[
+            { label:"Agents Discovered",    value:fmtMetric(metrics.agents),       color:T.accent },
+            { label:"Dependencies Mapped",   value:fmtMetric(metrics.dependencies), color:"#5BD9C5" },
+            { label:"Workflows Tracked",     value:fmtMetric(metrics.workflows),    color:T.warn },
+            { label:"Discovery Channels",    value:fmtMetric(metrics.platforms),    color:T.info },
+          ].map((m, i) => (
+            <div key={m.label} style={{ padding:"0 20px 0 0", borderRight: i < 3 ? `1px solid ${T.border}` : "none", marginRight: i < 3 ? 20 : 0 }}>
+              <div style={{ fontSize:26, fontWeight:700, color:m.color, fontFamily:FONT_MONO, letterSpacing:"-0.02em", lineHeight:1 }}>{m.value}</div>
+              <div style={{ fontSize:11, color:T.textMute, marginTop:5 }}>{m.label}</div>
+            </div>
+          ))}
         </div>
       </div>
 
       {/* ── Three method cards ── */}
-      <div style={{ display:"grid", gridTemplateColumns:"repeat(3,1fr)", gap:16, marginBottom:36 }}>
+      <div style={{ display:"grid", gridTemplateColumns:"repeat(3,1fr)", gap:16, marginBottom:28 }}>
         {METHODS.map(m => (
-          <div key={m.id} style={{ background:T.panel, border:`1px solid ${section === m.id ? m.color+"55" : T.border}`, borderRadius:10, padding:"20px 18px", display:"flex", flexDirection:"column", gap:12, transition:"border-color 0.15s" }}>
+          <div key={m.id} style={{ background:T.panel, border:`1px solid ${section === m.id ? m.color+"66" : T.border}`, borderRadius:10, padding:"22px 18px", display:"flex", flexDirection:"column", gap:14, transition:"border-color 0.15s", cursor:"default" }}>
             <div style={{ display:"flex", alignItems:"flex-start", justifyContent:"space-between", gap:8 }}>
               <div style={{ fontSize:14, fontWeight:700, color:T.text, lineHeight:1.3 }}>{m.title}</div>
               {m.badge && (
@@ -5652,22 +5679,9 @@ curl GATEWAY_URL/v1/chat/completions \\
               )}
             </div>
 
-            <div style={{ fontSize:12, color:T.textDim, lineHeight:1.65 }}>{m.desc}</div>
+            <div style={{ fontSize:12, color:T.textDim, lineHeight:1.7 }}>{m.customerDesc}</div>
 
-            <div style={{ display:"flex", flexDirection:"column", gap:5, padding:"10px 12px", background:T.panelHi, borderRadius:6 }}>
-              {[
-                ["Accuracy",     m.accuracy],
-                ["Setup Effort", m.effort],
-                ["Best For",     m.bestFor],
-              ].map(([k, v]) => (
-                <div key={k} style={{ display:"flex", gap:6, fontSize:11 }}>
-                  <span style={{ color:T.textMute, width:80, flexShrink:0, fontFamily:FONT_MONO }}>{k}</span>
-                  <span style={{ color:T.text }}>{v}</span>
-                </div>
-              ))}
-            </div>
-
-            <ul style={{ margin:0, padding:"0 0 0 14px", display:"flex", flexDirection:"column", gap:4 }}>
+            <ul style={{ margin:0, padding:"0 0 0 14px", display:"flex", flexDirection:"column", gap:5 }}>
               {m.benefits.map(b => (
                 <li key={b} style={{ fontSize:11, color:T.textDim, lineHeight:1.5 }}>{b}</li>
               ))}
@@ -5685,7 +5699,7 @@ curl GATEWAY_URL/v1/chat/completions \\
 
       {/* ── SDK Runtime Discovery ── */}
       <div style={{ border:`1px solid ${section === "sdk" ? "#34d39944" : T.border}`, borderRadius:10, padding:"20px 24px", marginBottom:16, transition:"border-color 0.15s" }}>
-        <SectionHeader id="sdk" label="SDK Runtime Discovery" badge="Recommended" color="#34d399" />
+        <SectionHeader id="sdk" label="SDK — Technical Setup" badge="Recommended" color="#34d399" />
 
         {section === "sdk" && (
           <div>
@@ -5805,7 +5819,7 @@ curl GATEWAY_URL/v1/chat/completions \\
 
       {/* ── Gateway Discovery ── */}
       <div style={{ border:`1px solid ${section === "gateway" ? T.info+"55" : T.border}`, borderRadius:10, padding:"20px 24px", marginBottom:16, transition:"border-color 0.15s" }}>
-        <SectionHeader id="gateway" label="Gateway Discovery" color={T.info} />
+        <SectionHeader id="gateway" label="Gateway — Technical Setup" color={T.info} />
 
         {section === "gateway" && (
           <div>
@@ -5852,7 +5866,7 @@ curl GATEWAY_URL/v1/chat/completions \\
 
       {/* ── Platform / Ecosystem Discovery ── */}
       <div style={{ border:`1px solid ${section === "platform" ? T.purple+"55" : T.border}`, borderRadius:10, padding:"20px 24px", marginBottom:16, transition:"border-color 0.15s" }}>
-        <SectionHeader id="platform" label="Platform / Ecosystem Discovery" color={T.purple} />
+        <SectionHeader id="platform" label="Ecosystem — Technical Setup" color={T.purple} />
 
         {section === "platform" && (
           <div>
@@ -5895,6 +5909,34 @@ curl GATEWAY_URL/v1/chat/completions \\
             </button>
           </div>
         )}
+      </div>
+
+      {/* ── Not sure where to start? ── */}
+      <div style={{ background:`${T.accent}0a`, border:`1px solid ${T.accent}33`, borderRadius:10, padding:"22px 28px", marginTop:24 }}>
+        <div style={{ display:"flex", alignItems:"flex-start", gap:20 }}>
+          <div style={{ flex:1 }}>
+            <div style={{ fontSize:14, fontWeight:700, color:T.text, marginBottom:6 }}>Not sure where to start?</div>
+            <div style={{ fontSize:12, color:T.textDim, lineHeight:1.7, maxWidth:520 }}>
+              Most teams start with the SDK — it takes under 5 minutes and gives you agent identity, cost attribution,
+              and runtime dependency mapping out of the box.
+              Once your first agent is sending traffic, explore the Dependency Map to see what it's touching.
+            </div>
+          </div>
+          <div style={{ display:"flex", flexDirection:"column", gap:8, flexShrink:0 }}>
+            <button onClick={() => setSection(s => s === "sdk" ? null : "sdk")}
+              style={{ background:T.accent, border:"none", color:"#fff", borderRadius:6, padding:"9px 18px", fontSize:12, fontFamily:FONT_MONO, cursor:"pointer", fontWeight:600, whiteSpace:"nowrap" }}>
+              Install the SDK →
+            </button>
+            <button onClick={() => onNavigate("agent_inventory")}
+              style={{ background:"transparent", border:`1px solid ${T.border}`, color:T.textDim, borderRadius:6, padding:"7px 18px", fontSize:12, fontFamily:FONT_MONO, cursor:"pointer", whiteSpace:"nowrap" }}>
+              Explore Agent Inventory
+            </button>
+            <button onClick={() => onNavigate("relationship_map")}
+              style={{ background:"transparent", border:`1px solid ${T.border}`, color:T.textDim, borderRadius:6, padding:"7px 18px", fontSize:12, fontFamily:FONT_MONO, cursor:"pointer", whiteSpace:"nowrap" }}>
+              View Dependency Map
+            </button>
+          </div>
+        </div>
       </div>
 
     </div>
