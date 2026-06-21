@@ -5298,9 +5298,18 @@ function CustomerWelcomePage({ onNavigate }) {
 function SimpleIntegrationsPage({ onNavigate }) {
   const gatewayUrl  = typeof BASE !== "undefined" && BASE.startsWith("http") ? BASE : window.location.origin;
   const [copied, setCopied]   = useState(null);
-  const [open,   setOpen]     = useState({ openai: true, anthropic: false, typescript: false, curl: false });
+  const [open,   setOpen]     = useState({ sdk_openai: true, sdk_anthropic: false, sdk_env: false, manual_openai: false, manual_curl: false });
   const copy = (id, text) => { navigator.clipboard.writeText(text).catch(() => {}); setCopied(id); setTimeout(() => setCopied(null), 2000); };
   const toggle = (k) => setOpen(o => ({ ...o, [k]: !o[k] }));
+
+  const RESOLUTION_SOURCES = [
+    { method:"SDK Runtime",        confidence:85, color:"#34d399", desc:"X-Agent-Source: sdk-python (or sdk-typescript, sdk-go…)" },
+    { method:"Explicit Headers",   confidence:95, color:T.accent,  desc:"X-Agent-Name set manually — use for per-request override" },
+    { method:"API Key Scope",      confidence:75, color:T.accent,  desc:"Caller name scoped on the API key" },
+    { method:"Framework Detection",confidence:65, color:T.yellow,  desc:"LangChain, CrewAI, AutoGen, etc. in User-Agent" },
+    { method:"Request Origin",     confidence:45, color:T.yellow,  desc:"Hostname / service label" },
+    { method:"Fallback Fingerprint",confidence:15,color:T.warn,    desc:"Stable hash — flagged for admin review" },
+  ];
 
   const OPT_HEADERS = [
     { name:"X-Agent-Name",        desc:"Override auto-detected agent name",   example:"soc-investigation-agent" },
@@ -5308,212 +5317,184 @@ function SimpleIntegrationsPage({ onNavigate }) {
     { name:"X-Agent-Owner",       desc:"Owner email or name",                 example:"alice@acme.com" },
     { name:"X-Agent-Environment", desc:"prod / staging / dev",                example:"prod" },
     { name:"X-Agent-Version",     desc:"Version tag",                         example:"v1.2.0" },
-    { name:"X-Agent-Source",      desc:"Source system",                       example:"github" },
-  ];
-
-  const RESOLUTION_SOURCES = [
-    { method:"Explicit Headers",     confidence:95, color:T.accent, desc:"X-Agent-Name / X-Guard-Agent headers" },
-    { method:"API Key Scope",        confidence:75, color:T.accent, desc:"Caller name scoped on the API key" },
-    { method:"Framework Detection",  confidence:65, color:T.yellow, desc:"LangChain, CrewAI, AutoGen, etc. in User-Agent" },
-    { method:"Request Origin",       confidence:45, color:T.yellow, desc:"Hostname / service label" },
-    { method:"User-Agent Name",      confidence:30, color:T.warn,   desc:"Non-generic HTTP client name" },
-    { method:"Fallback Fingerprint", confidence:15, color:T.warn,   desc:"Stable hash — flagged for admin review" },
+    { name:"X-Agent-Source",      desc:"Auto-set by SDK — do not set manually",example:"sdk-python" },
   ];
 
   const snippets = {
-    openai:
-`import openai
+    sdk_openai:
+`# pip install openai   (ai_inventory is included in the repo)
+from ai_inventory.openai_client import OpenAI
 
-# One API key per organisation/environment — agents are auto-detected.
+# Option A: explicit params
+client = OpenAI(
+    api_key="gk-...",
+    gateway_url="GATEWAY_URL/v1",
+    agent_name="soc-investigation-agent",
+    team="Security",
+    environment="prod",
+    debug=True,          # prints attached headers on first call
+)
+
+# Option B: env-var driven (zero code change)
+# Set: SERVICE_NAME=soc-investigation-agent  TEAM=Security  ENVIRONMENT=prod
+client = OpenAI(api_key="gk-...", gateway_url="GATEWAY_URL/v1")
+
+response = client.chat.completions.create(
+    model="gpt-4o-mini",
+    messages=[{"role": "user", "content": "Analyze this alert"}],
+)
+
+# Per-request override — explicit X-Agent-Name wins over SDK default
+response = client.chat.completions.create(
+    model="gpt-4o-mini",
+    messages=[{"role": "user", "content": "Investigate phishing"}],
+    extra_headers={"X-Agent-Name": "phishing-investigation-agent"},
+)`,
+
+    sdk_anthropic:
+`# pip install anthropic   (ai_inventory is included in the repo)
+from ai_inventory.anthropic_client import Anthropic
+
+client = Anthropic(
+    api_key="gk-...",
+    gateway_url="GATEWAY_URL",   # no /v1 — Anthropic SDK adds the path
+    agent_name="document-summariser",
+    team="Legal",
+    environment="prod",
+)
+
+response = client.messages.create(
+    model="claude-haiku-4-5-20251001",
+    max_tokens=1024,
+    messages=[{"role": "user", "content": "Summarise this contract"}],
+)`,
+
+    sdk_env:
+`# Zero-code setup: set env vars before starting your service.
+# The SDK reads these automatically — no code changes required.
+
+SERVICE_NAME=soc-investigation-agent
+TEAM=Security
+ENVIRONMENT=prod
+APP_VERSION=1.2.0
+
+# Then just:
+from ai_inventory.openai_client import OpenAI
+client = OpenAI(api_key="gk-...", gateway_url="GATEWAY_URL/v1")
+
+# For LangChain / CrewAI / custom httpx clients:
+import httpx
+from ai_inventory.httpx_wrapper import wrap_httpx_client
+
+http = wrap_httpx_client(httpx.Client(), agent_name="langchain-rag-agent", team="DataEng")
+# Pass http to ChatOpenAI(http_client=http, ...)`,
+
+    manual_openai:
+`# Advanced override only — most customers should use the SDK instead.
+import openai
+
 client = openai.OpenAI(
-    base_url=f"GATEWAY_URL/v1",
-    api_key="gk-...",     # your org-level gateway key
+    base_url="GATEWAY_URL/v1",
+    api_key="gk-...",
 )
 
-# Minimal — gateway auto-identifies the agent from framework metadata,
-# API key scope, request origin, and User-Agent.
-response = client.chat.completions.create(
+client.chat.completions.create(
     model="gpt-4o-mini",
-    messages=[{"role": "user", "content": "Analyze this alert"}],
-)
-
-# Optional: send headers to improve naming accuracy (confidence 95%)
-response = client.chat.completions.create(
-    model="gpt-4o-mini",
-    messages=[{"role": "user", "content": "Analyze this alert"}],
+    messages=[{"role": "user", "content": "Hello"}],
     extra_headers={
-        "X-Agent-Name":        "soc-investigation-agent",   # optional override
+        "X-Agent-Name":        "soc-investigation-agent",
         "X-Agent-Team":        "Security",
         "X-Agent-Environment": "prod",
     },
 )`,
 
-    anthropic:
-`import anthropic
-
-# One API key per organisation/environment — agents are auto-detected.
-client = anthropic.Anthropic(
-    base_url="GATEWAY_URL",
-    api_key="gk-...",     # your org-level gateway key
-)
-
-# Minimal — gateway auto-identifies the agent.
-response = client.messages.create(
-    model="claude-haiku-4-5-20251001",
-    max_tokens=1024,
-    messages=[{"role": "user", "content": "Summarise this document"}],
-)
-
-# Optional: headers improve naming accuracy
-response = client.messages.create(
-    model="claude-haiku-4-5-20251001",
-    max_tokens=1024,
-    messages=[{"role": "user", "content": "Summarise this document"}],
-    extra_headers={
-        "X-Agent-Name":        "document-summariser",       # optional override
-        "X-Agent-Team":        "Legal",
-        "X-Agent-Environment": "staging",
-    },
-)`,
-
-    typescript:
-`import OpenAI from "openai";
-
-// One API key per organisation/environment — agents are auto-detected.
-const client = new OpenAI({
-  baseURL: "GATEWAY_URL/v1",
-  apiKey:  "gk-...",   // your org-level gateway key
-  // Optional: default headers improve naming accuracy for this client
-  defaultHeaders: {
-    "X-Agent-Name":        "support-bot",             // optional override
-    "X-Agent-Team":        "CustomerSuccess",
-    "X-Agent-Environment": "prod",
-  },
-});
-
-const response = await client.chat.completions.create({
-  model:    "gpt-4o-mini",
-  messages: [{ role: "user", content: "How can I help?" }],
-});`,
-
-    curl:
-`# One API key — no headers required, agents are auto-detected.
-curl GATEWAY_URL/v1/chat/completions \
-  -H "Authorization: Bearer gk-..." \
-  -H "Content-Type: application/json" \
-  -d '{"model":"gpt-4o-mini","messages":[{"role":"user","content":"Hello"}]}'
-
-# Optional: headers improve naming accuracy
-curl GATEWAY_URL/v1/chat/completions \
-  -H "Authorization: Bearer gk-..." \
-  -H "X-Agent-Name: curl-test-agent" \
-  -H "Content-Type: application/json" \
+    manual_curl:
+`# Advanced override only — most customers should use the SDK instead.
+curl GATEWAY_URL/v1/chat/completions \\
+  -H "Authorization: Bearer gk-..." \\
+  -H "X-Agent-Name: soc-investigation-agent" \\
+  -H "Content-Type: application/json" \\
   -d '{"model":"gpt-4o-mini","messages":[{"role":"user","content":"Hello"}]}'`,
   };
 
-  // Replace placeholder with live URL
   const resolvedSnippets = Object.fromEntries(
     Object.entries(snippets).map(([k, v]) => [k, v.replace(/GATEWAY_URL/g, gatewayUrl)])
   );
 
-  const sdkList = [
-    { key:"openai",     label:"Python · OpenAI SDK",     color:T.info   },
-    { key:"anthropic",  label:"Python · Anthropic SDK",  color:T.accent },
-    { key:"typescript", label:"TypeScript · OpenAI SDK", color:T.yellow },
-    { key:"curl",       label:"cURL",                    color:T.purple },
-  ];
-
-  const steps = [
+  const STEPS = [
     {
       n:"1", color:T.accent,
       title:"Create an Organisation API Key",
-      desc:"Use one key per organisation or environment (prod, staging, dev). You do not need a separate key per agent — the gateway identifies agents automatically.",
+      desc:"One key per environment (prod, staging, dev). The key identifies your organisation — not individual agents.",
       cta:{ label:"Go to API Keys →", page:"apikeys" },
     },
     {
-      n:"2", color:T.warn,
-      title:"Route Traffic Through the Gateway",
-      desc:"Change the base URL in your AI SDK from the provider's URL to the gateway URL below. That's the only required code change.",
-      code:`${gatewayUrl}/v1`,
-      codeId:"url",
+      n:"2", color:"#34d399",
+      title:"Install the SDK",
+      desc:'Copy the ai_inventory/ folder into your project root, or install from the repo. No PyPI publishing required for this phase.',
+      code:`pip install -e .   # from project root`,
+      codeId:"install",
     },
     {
-      n:"3", color:T.info,
-      title:"Automatic Identity Resolution",
-      desc:"The gateway detects agent identities automatically — no headers required. It tries multiple signals in confidence order and creates agent records for admin review. Optional headers improve accuracy from ~15–65% to 95%.",
+      n:"3", color:T.warn,
+      title:"Wrap Your AI Client",
+      desc:"Replace openai.OpenAI or anthropic.Anthropic with the SDK wrapper. Set agent_name once on the client, or use SERVICE_NAME env var for zero-code setup.",
     },
     {
       n:"4", color:T.yellow,
       title:"Agents Appear for Admin Review",
-      desc:"Detected agents land in Discovery Center → Potential Agents. An admin reviews and claims them to move them to Verified Agents.",
+      desc:"The gateway detects the SDK source header and creates agent records with 85% confidence, no admin review required. Agents land in Discovery Center as Verified · Unassigned.",
       cta:{ label:"Open Discovery Center →", page:"discovery" },
     },
     {
       n:"5", color:T.purple,
-      title:"Optional: Improve Accuracy with Headers",
-      desc:"Send X-Agent-Name (and optional X-Agent-Team, X-Agent-Environment) to override auto-detection and get high-confidence records immediately without waiting for review.",
+      title:"Admin Claims Agents",
+      desc:"An admin assigns owner, team, criticality, and business purpose, then marks the agent as Managed.",
     },
   ];
 
-  const flowNodes = [
-    { label:"Organisation API Key",     sub:"gk-…",                                color:T.accent },
-    { label:"Gateway",                  sub:gatewayUrl,                            color:T.info   },
-    { label:"Automatic Identity Resolver", sub:"headers → key scope → framework → host → hash", color:T.warn },
-    { label:"Auto Discovery",           sub:"agent record created for review",      color:T.yellow },
-    { label:"Admin Claim",              sub:"→ Verified · Managed",                color:T.purple },
+  const sdkExamples = [
+    { key:"sdk_openai",    label:"Python · OpenAI SDK  (recommended)",  color:"#34d399" },
+    { key:"sdk_anthropic", label:"Python · Anthropic SDK",              color:"#34d399" },
+    { key:"sdk_env",       label:"Env-var / httpx / LangChain",         color:"#34d399" },
+  ];
+
+  const manualExamples = [
+    { key:"manual_openai", label:"Manual headers · OpenAI", color:T.textDim },
+    { key:"manual_curl",   label:"Manual headers · cURL",   color:T.textDim },
   ];
 
   return (
-    <div style={{ maxWidth:820, margin:"0 auto", padding:"32px 24px", fontFamily:FONT_UI }}>
+    <div style={{ maxWidth:840, margin:"0 auto", padding:"32px 24px", fontFamily:FONT_UI }}>
 
       {/* Header */}
       <div style={{ marginBottom:24 }}>
         <div style={{ fontSize:11, fontFamily:FONT_MONO, color:T.textMute, letterSpacing:"0.12em", textTransform:"uppercase", marginBottom:6 }}>Administration · Gateway Setup</div>
         <div style={{ fontSize:26, fontWeight:700, color:T.text, marginBottom:10, lineHeight:1.2 }}>Connect Your AI Runtime</div>
         <div style={{ fontSize:13, color:T.textDim, lineHeight:1.7, maxWidth:580 }}>
-          Route AI traffic through the gateway once. Agent identities are resolved automatically — the platform detects them from runtime context and creates records for admin review. Optional headers improve accuracy.
+          Install the lightweight SDK once. It reads your deployment environment automatically and attaches identity metadata to every request — no per-request header configuration needed.
         </div>
       </div>
 
-      {/* Info banner */}
-      <div style={{ background:`${T.info}0d`, border:`1px solid ${T.info}33`, borderRadius:8, padding:"14px 18px", marginBottom:28, display:"flex", gap:12, alignItems:"flex-start" }}>
-        <span style={{ color:T.info, fontSize:16, flexShrink:0, lineHeight:1 }}>ℹ</span>
+      {/* SDK recommended banner */}
+      <div style={{ background:"#34d39910", border:"1px solid #34d39940", borderRadius:8, padding:"14px 18px", marginBottom:28, display:"flex", gap:12, alignItems:"flex-start" }}>
+        <span style={{ color:"#34d399", fontSize:16, flexShrink:0, lineHeight:1 }}>✦</span>
         <div style={{ fontSize:12, color:T.textDim, lineHeight:1.7 }}>
-          <strong style={{ color:T.text }}>One API key, many agents.</strong>{" "}
-          The platform automatically detects runtime identities and creates agent records for admin review.
-          Optional SDK metadata or request headers improve accuracy — but are never required.
-        </div>
-      </div>
-
-      {/* Flow diagram */}
-      <div style={{ marginBottom:32 }}>
-        <div style={{ fontSize:11, fontFamily:FONT_MONO, color:T.textMute, letterSpacing:"0.12em", textTransform:"uppercase", marginBottom:14 }}>How it works</div>
-        <div style={{ display:"flex", flexDirection:"column", alignItems:"flex-start", gap:0 }}>
-          {flowNodes.map((node, i) => (
-            <div key={node.label} style={{ display:"flex", flexDirection:"column", alignItems:"flex-start" }}>
-              <div style={{ display:"flex", alignItems:"center", gap:12 }}>
-                <div style={{ width:10, height:10, borderRadius:"50%", background:node.color, flexShrink:0 }} />
-                <div style={{ background:T.panel, border:`1px solid ${node.color}33`, borderRadius:6, padding:"8px 16px", display:"flex", flexDirection:"column", gap:2, minWidth:300 }}>
-                  <div style={{ fontSize:13, fontWeight:600, color:T.text }}>{node.label}</div>
-                  <div style={{ fontSize:11, fontFamily:FONT_MONO, color:node.color, opacity:0.8 }}>{node.sub}</div>
-                </div>
-              </div>
-              {i < flowNodes.length - 1 && (
-                <div style={{ width:1, height:20, background:T.border, marginLeft:4 }} />
-              )}
-            </div>
-          ))}
+          <strong style={{ color:T.text }}>Recommended: use the SDK.</strong>{" "}
+          The SDK sets <code style={{ fontFamily:FONT_MONO, color:"#34d399" }}>X-Agent-Source: sdk-python</code> automatically,
+          giving your agents 85% confidence and verified status with no admin review.
+          Manual headers are still supported as an advanced override.
         </div>
       </div>
 
       {/* Steps */}
-      <div style={{ marginBottom:28 }}>
+      <div style={{ marginBottom:32 }}>
         <div style={{ fontSize:11, fontFamily:FONT_MONO, color:T.textMute, letterSpacing:"0.12em", textTransform:"uppercase", marginBottom:14 }}>Setup Steps</div>
-        {steps.map((s, i) => (
+        {STEPS.map((s, i) => (
           <div key={s.n} style={{ display:"flex", gap:0 }}>
             <div style={{ display:"flex", flexDirection:"column", alignItems:"center", marginRight:18, flexShrink:0 }}>
               <div style={{ width:32, height:32, borderRadius:"50%", background:`${s.color}15`, border:`1.5px solid ${s.color}44`, display:"flex", alignItems:"center", justifyContent:"center", fontSize:13, fontWeight:700, color:s.color, fontFamily:FONT_MONO }}>{s.n}</div>
-              {i < steps.length - 1 && <div style={{ width:1, flex:1, minHeight:16, background:T.border, margin:"6px 0" }} />}
+              {i < STEPS.length - 1 && <div style={{ width:1, flex:1, minHeight:16, background:T.border, margin:"6px 0" }} />}
             </div>
             <div style={{ flex:1, paddingBottom:24 }}>
               <div style={{ fontSize:14, fontWeight:600, color:T.text, marginBottom:5 }}>{s.title}</div>
@@ -5540,16 +5521,16 @@ curl GATEWAY_URL/v1/chat/completions \
 
       {/* Identity resolution card */}
       <div style={{ background:T.panel, border:`1px solid ${T.border}`, borderRadius:8, padding:"18px 20px", marginBottom:28 }}>
-        <div style={{ fontSize:11, fontFamily:FONT_MONO, color:T.textMute, letterSpacing:"0.12em", textTransform:"uppercase", marginBottom:14 }}>How Identity Resolution Works</div>
+        <div style={{ fontSize:11, fontFamily:FONT_MONO, color:T.textMute, letterSpacing:"0.12em", textTransform:"uppercase", marginBottom:12 }}>Identity Resolution Priority</div>
         <div style={{ fontSize:12, color:T.textDim, marginBottom:14, lineHeight:1.65 }}>
-          The gateway tries each signal source in order and returns the highest-confidence identity available. Agents resolved at lower confidence are flagged for admin review.
+          The gateway tries each signal in order. SDK runtime sits just below explicit override — giving you 85% confidence with zero per-request configuration.
         </div>
         <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
           {RESOLUTION_SOURCES.map((src, i) => (
             <div key={i} style={{ display:"flex", alignItems:"center", gap:10 }}>
               <div style={{ width:20, fontSize:11, color:T.textMute, textAlign:"right", flexShrink:0 }}>{i + 1}.</div>
               <div style={{ flex:1 }}>
-                <span style={{ fontWeight:600, color:T.text, fontSize:12, fontFamily:FONT_MONO }}>{src.method}</span>
+                <span style={{ fontWeight:600, color:i < 2 ? src.color : T.text, fontSize:12, fontFamily:FONT_MONO }}>{src.method}</span>
                 <span style={{ color:T.textDim, fontSize:12, marginLeft:8 }}>{src.desc}</span>
               </div>
               <div style={{ display:"flex", alignItems:"center", gap:8, flexShrink:0 }}>
@@ -5563,15 +5544,13 @@ curl GATEWAY_URL/v1/chat/completions \
         </div>
       </div>
 
-      {/* SDK Examples */}
-      <div style={{ marginBottom:28 }}>
-        <div style={{ fontSize:11, fontFamily:FONT_MONO, color:T.textMute, letterSpacing:"0.12em", textTransform:"uppercase", marginBottom:6 }}>SDK Examples</div>
-        <div style={{ fontSize:12, color:T.textDim, marginBottom:12, lineHeight:1.65 }}>
-          Minimal examples work without any headers — optional headers are shown as comments.
-        </div>
+      {/* SDK examples */}
+      <div style={{ marginBottom:20 }}>
+        <div style={{ fontSize:11, fontFamily:FONT_MONO, color:T.textMute, letterSpacing:"0.12em", textTransform:"uppercase", marginBottom:6 }}>SDK Examples  <span style={{ color:"#34d399" }}>← recommended</span></div>
+        <div style={{ fontSize:12, color:T.textDim, marginBottom:12 }}>Install once, configure via env vars or constructor params. Per-request <code style={{ fontFamily:FONT_MONO }}>extra_headers</code> override the SDK defaults automatically.</div>
         <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
-          {sdkList.map(sdk => (
-            <div key={sdk.key} style={{ border:`1px solid ${open[sdk.key] ? sdk.color+"44" : T.border}`, borderRadius:8, overflow:"hidden", transition:"border-color 0.15s" }}>
+          {sdkExamples.map(sdk => (
+            <div key={sdk.key} style={{ border:`1px solid ${open[sdk.key] ? "#34d39944" : T.border}`, borderRadius:8, overflow:"hidden" }}>
               <button onClick={() => toggle(sdk.key)}
                 style={{ width:"100%", background:open[sdk.key] ? T.panelHi : T.panel, border:"none", padding:"12px 16px", display:"flex", alignItems:"center", gap:12, cursor:"pointer", textAlign:"left" }}>
                 <span style={{ width:8, height:8, borderRadius:"50%", background:sdk.color, flexShrink:0 }} />
@@ -5582,7 +5561,7 @@ curl GATEWAY_URL/v1/chat/completions \
                 <div style={{ position:"relative", borderTop:`1px solid ${T.border}` }}>
                   <pre style={{ margin:0, padding:"16px", fontSize:12, fontFamily:FONT_MONO, color:T.text, lineHeight:1.7, overflow:"auto", background:T.bg, maxHeight:420 }}>{resolvedSnippets[sdk.key]}</pre>
                   <button onClick={() => copy(sdk.key, resolvedSnippets[sdk.key])}
-                    style={{ position:"absolute", top:8, right:8, background:copied===sdk.key?`${sdk.color}18`:"transparent", border:`1px solid ${copied===sdk.key?sdk.color+"55":T.border}`, color:copied===sdk.key?sdk.color:T.textMute, borderRadius:4, padding:"3px 12px", fontSize:10, fontFamily:FONT_MONO, cursor:"pointer" }}>
+                    style={{ position:"absolute", top:8, right:8, background:"transparent", border:`1px solid ${T.border}`, color:copied===sdk.key?"#34d399":T.textMute, borderRadius:4, padding:"3px 12px", fontSize:10, fontFamily:FONT_MONO, cursor:"pointer" }}>
                     {copied===sdk.key?"copied":"copy"}
                   </button>
                 </div>
@@ -5592,38 +5571,54 @@ curl GATEWAY_URL/v1/chat/completions \
         </div>
       </div>
 
-      {/* Optional headers table */}
+      {/* Manual headers — advanced override */}
       <div style={{ marginBottom:28 }}>
-        <div style={{ fontSize:11, fontFamily:FONT_MONO, color:T.textMute, letterSpacing:"0.12em", textTransform:"uppercase", marginBottom:12 }}>Optional: Improve Discovery Accuracy</div>
-        <div style={{ fontSize:12, color:T.textDim, marginBottom:14, lineHeight:1.65 }}>
-          These headers are never required — the gateway works without them. Send any combination to override auto-detection and boost confidence scores to 95%.
+        <div style={{ fontSize:11, fontFamily:FONT_MONO, color:T.textMute, letterSpacing:"0.12em", textTransform:"uppercase", marginBottom:6 }}>Advanced Override  <span style={{ color:T.textMute }}>— manual headers</span></div>
+        <div style={{ fontSize:12, color:T.textDim, marginBottom:12 }}>Use manual headers when you need per-request control or cannot install the SDK. All existing X-Agent-* and X-Guard-* headers remain supported.</div>
+        <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
+          {manualExamples.map(sdk => (
+            <div key={sdk.key} style={{ border:`1px solid ${open[sdk.key] ? T.border : T.border}`, borderRadius:8, overflow:"hidden", opacity:0.8 }}>
+              <button onClick={() => toggle(sdk.key)}
+                style={{ width:"100%", background:T.panel, border:"none", padding:"12px 16px", display:"flex", alignItems:"center", gap:12, cursor:"pointer", textAlign:"left" }}>
+                <span style={{ width:8, height:8, borderRadius:"50%", background:T.textMute, flexShrink:0 }} />
+                <span style={{ fontSize:12, fontFamily:FONT_MONO, color:T.textDim, flex:1, letterSpacing:"0.04em" }}>{sdk.label}</span>
+                <span style={{ fontSize:11, fontFamily:FONT_MONO, color:T.textMute }}>{open[sdk.key] ? "▲ close" : "▼ open"}</span>
+              </button>
+              {open[sdk.key] && (
+                <div style={{ position:"relative", borderTop:`1px solid ${T.border}` }}>
+                  <pre style={{ margin:0, padding:"16px", fontSize:12, fontFamily:FONT_MONO, color:T.text, lineHeight:1.7, overflow:"auto", background:T.bg, maxHeight:360 }}>{resolvedSnippets[sdk.key]}</pre>
+                  <button onClick={() => copy(sdk.key, resolvedSnippets[sdk.key])}
+                    style={{ position:"absolute", top:8, right:8, background:"transparent", border:`1px solid ${T.border}`, color:copied===sdk.key?T.accent:T.textMute, borderRadius:4, padding:"3px 12px", fontSize:10, fontFamily:FONT_MONO, cursor:"pointer" }}>
+                    {copied===sdk.key?"copied":"copy"}
+                  </button>
+                </div>
+              )}
+            </div>
+          ))}
         </div>
-        <div style={{ background:T.panel, border:`1px solid ${T.border}`, borderRadius:8, overflow:"hidden" }}>
+        <div style={{ marginTop:12, background:T.panel, border:`1px solid ${T.border}`, borderRadius:8, overflow:"hidden" }}>
           <table style={{ width:"100%", borderCollapse:"collapse" }}>
             <thead>
               <tr style={{ background:T.panelHi }}>
                 {["Header","Description","Example"].map(h => (
-                  <th key={h} style={{ padding:"9px 14px", textAlign:"left", fontSize:10, fontFamily:FONT_MONO, color:T.textMute, letterSpacing:"0.1em", textTransform:"uppercase", borderBottom:`1px solid ${T.border}` }}>{h}</th>
+                  <th key={h} style={{ padding:"8px 14px", textAlign:"left", fontSize:10, fontFamily:FONT_MONO, color:T.textMute, letterSpacing:"0.1em", textTransform:"uppercase", borderBottom:`1px solid ${T.border}` }}>{h}</th>
                 ))}
               </tr>
             </thead>
             <tbody>
               {OPT_HEADERS.map((row, i) => (
                 <tr key={row.name} style={{ background: i % 2 === 0 ? T.panel : T.bg }}>
-                  <td style={{ padding:"9px 14px", borderBottom:`1px solid ${T.border}` }}>
+                  <td style={{ padding:"8px 14px", borderBottom:`1px solid ${T.border}` }}>
                     <code style={{ fontSize:11, fontFamily:FONT_MONO, color:T.textDim }}>{row.name}</code>
                   </td>
-                  <td style={{ padding:"9px 14px", borderBottom:`1px solid ${T.border}`, fontSize:12, color:T.textDim }}>{row.desc}</td>
-                  <td style={{ padding:"9px 14px", borderBottom:`1px solid ${T.border}` }}>
-                    <code style={{ fontSize:11, fontFamily:FONT_MONO, color:T.textMute }}>"{row.example}"</code>
+                  <td style={{ padding:"8px 14px", borderBottom:`1px solid ${T.border}`, fontSize:12, color:T.textDim }}>{row.desc}</td>
+                  <td style={{ padding:"8px 14px", borderBottom:`1px solid ${T.border}` }}>
+                    <code style={{ fontSize:11, fontFamily:FONT_MONO, color:T.textMute }}>{row.example}</code>
                   </td>
                 </tr>
               ))}
             </tbody>
           </table>
-          <div style={{ padding:"10px 14px", background:T.panelHi, borderTop:`1px solid ${T.border}`, fontSize:11, color:T.textMute, fontFamily:FONT_MONO }}>
-            Legacy <code style={{ color:T.textDim }}>X-Guard-Agent</code> / <code style={{ color:T.textDim }}>X-Guard-Team</code> headers are still accepted for backward compatibility.
-          </div>
         </div>
       </div>
 
