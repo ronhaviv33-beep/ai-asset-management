@@ -1,5 +1,6 @@
 import os
 import json
+import base64
 import asyncio
 import hashlib
 import time
@@ -15,6 +16,8 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
 
 from app.database import engine, get_db
 from app.models import Base
@@ -516,6 +519,33 @@ def _caller_name(caller) -> str | None:
     return caller.get("name") if isinstance(caller, dict) else getattr(caller, "name", None)
 
 
+def _proxy_rate_limit_key(request: Request) -> str:
+    """Stable rate-limit key for proxy endpoints.
+
+    API keys (gk-...): SHA-256 of the full token → one bucket per issued key.
+    JWT callers: 'sub' claim from the unverified payload → one bucket per user ID.
+    Fallback: client IP.
+    """
+    auth = request.headers.get("authorization", "")
+    if auth.lower().startswith("bearer "):
+        token = auth[7:]
+        if token.startswith("gk-"):
+            return "apikey:" + hashlib.sha256(token.encode()).hexdigest()[:24]
+        # JWT: decode payload without re-validating signature (already done by get_proxy_caller)
+        try:
+            parts = token.split(".")
+            if len(parts) == 3:
+                pad = 4 - len(parts[1]) % 4
+                payload = json.loads(base64.urlsafe_b64decode(parts[1] + "=" * pad))
+                return f"user:{payload.get('sub', 'unknown')}"
+        except Exception:
+            pass
+    return f"ip:{request.client.host if request.client else 'unknown'}"
+
+
+_proxy_limiter = Limiter(key_func=_proxy_rate_limit_key)
+
+
 # ─── Circuit breaker (protects callers during enforcement outages) ────────────
 _LLM_TIMEOUT      = float(os.getenv("GATEWAY_LLM_TIMEOUT_SECS", "30"))
 _ENFORCE_TIMEOUT  = float(os.getenv("GATEWAY_ENFORCE_TIMEOUT_SECS", "5"))
@@ -674,6 +704,10 @@ app = FastAPI(
     docs_url="/docs" if _DEBUG else None,
     redoc_url="/redoc" if _DEBUG else None,
 )
+
+# Rate limiting — must be attached before any route is registered
+app.state.limiter = _proxy_limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 # Add Bearer token support to Swagger UI
 from fastapi.openapi.utils import get_openapi
@@ -2087,6 +2121,7 @@ def _handle_enforcement_error(db: Session, team: str, findings_list: list,
 
 
 @app.post("/v1/chat/completions", tags=["POST — Ask / Create"])
+@_proxy_limiter.limit("60/minute")
 async def openai_compat_chat(
     request: FastAPIRequest,
     db: Session = Depends(get_db),
@@ -2293,6 +2328,7 @@ async def openai_compat_chat(
 # the standard Anthropic response shape, so existing code needs no changes.
 
 @app.post("/v1/messages", tags=["POST — Ask / Create"])
+@_proxy_limiter.limit("60/minute")
 async def anthropic_compat_messages(
     request: FastAPIRequest,
     db: Session = Depends(get_db),
