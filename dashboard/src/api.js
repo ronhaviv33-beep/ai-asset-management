@@ -1,12 +1,11 @@
-// In dev, VITE_API_BASE is empty and Vite proxy rewrites /api/* → http://localhost:8000/*.
-// In production, VITE_API_BASE is the full backend origin — no /api prefix needed.
-// Accept either VITE_API_BASE (preferred) or VITE_API_URL (Render fromService host),
-// and normalize a bare hostname like "ai-asset-backend.onrender.com" to a full https URL.
+// In dev, Vite proxy rewrites /api/* → http://localhost:8000/*.
+// In production (combined server), frontend and backend share the same origin so BASE is ''.
+// VITE_API_BASE / VITE_API_URL can still override to an explicit URL for separate-service setups.
 function resolveBase() {
   let raw = import.meta.env.VITE_API_BASE || import.meta.env.VITE_API_URL || ''
-  raw = raw.trim().replace(/\/+$/, '')                    // strip trailing slashes
-  if (!raw) return '/api'                                 // dev: Vite proxy handles /api/*
-  if (!/^https?:\/\//i.test(raw)) raw = `https://${raw}`  // bare host → add scheme
+  raw = raw.trim().replace(/\/+$/, '')                        // strip trailing slashes
+  if (!raw) return import.meta.env.PROD ? '' : '/api'         // prod: same-origin; dev: Vite proxy
+  if (!/^https?:\/\//i.test(raw)) raw = `https://${raw}`     // bare host → add scheme
   return raw
 }
 

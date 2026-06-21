@@ -2395,3 +2395,15 @@ async def anthropic_compat_messages(
             "security_findings":  findings_list,
         },
     }
+
+
+# ── Serve React frontend (production combined-server mode) ─────────────────
+# In production the Render build step runs `npm run build` first, so
+# dashboard/dist exists.  In dev it won't exist and this block is skipped,
+# leaving Vite's dev server to proxy /api/* to this backend instead.
+_DIST = os.path.normpath(
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "dashboard", "dist")
+)
+if os.path.isdir(_DIST):
+    from fastapi.staticfiles import StaticFiles
+    app.mount("/", StaticFiles(directory=_DIST, html=True), name="frontend")
