@@ -208,10 +208,10 @@ def get_security_alerts(db: Session, organization_id: int | None,
     sensitive = _q().filter(Telemetry.sensitive == True).all()
     if sensitive:
         alerts.append({
-            "type": "sensitive_data_exposure", "sev": "critical",
+            "type": "sensitive_data_exposure", "sev": "warning",
             "entity": sensitive[0].agent,
-            "msg": f"{len(sensitive)} requests flagged with sensitive data (PII / credentials)",
-            "action": "Enable PII redaction policy on this workflow",
+            "msg": f"Sensitive content detected in {len(sensitive)} request(s) during runtime activity",
+            "action": "Review runtime activity and enable redaction controls if required",
             "ts": sensitive[0].timestamp.isoformat(),
         })
 

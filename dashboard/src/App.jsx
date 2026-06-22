@@ -1511,7 +1511,7 @@ function AuditLogTable({ audit, hasMore = false, loadingMore = false, onLoadMore
                             <div style={{ fontSize:11, fontFamily:FONT_MONO, letterSpacing:"0.14em", textTransform:"uppercase", color:T.textDim, fontWeight:600 }}>Request Details</div>
                             <div style={{ display:"flex", gap:6 }}>
                               {r.blocked   && <Pill color={T.crit}>blocked</Pill>}
-                              {r.sensitive && <Pill color={T.warn}>PII</Pill>}
+                              {r.sensitive && <Pill color={T.warn}>Sensitive Content</Pill>}
                               {loopFlag    && <Pill color="#eab308">loop</Pill>}
                               {afterHrs    && <Pill color={T.info}>after-hrs</Pill>}
                               {r.pricing_estimated && <Pill color="#f97316">est. pricing</Pill>}
@@ -3074,7 +3074,7 @@ function ChatPage() {
                   <span>{msg.meta.tokens.toLocaleString()} tokens</span>
                   <span style={{ color:T.accent }}>${msg.meta.cost.toFixed(6)}</span>
                   <span>{msg.meta.latency.toFixed(0)}ms</span>
-                  {msg.meta.findings?.length > 0 && <span style={{ color:T.warn }}>⚠ {msg.meta.findings.length} PII finding{msg.meta.findings.length===1?"":"s"}</span>}
+                  {msg.meta.findings?.length > 0 && <span style={{ color:T.warn }}>⚠ {msg.meta.findings.length} safety finding{msg.meta.findings.length===1?"":"s"}</span>}
                   {msg.meta.warnings?.length > 0 && <span style={{ color:T.warn }}>⚠ Budget {msg.meta.warnings[0].pct}% used</span>}
                   {msg.askSession && <span style={{ color:T.purple, background:`${T.purple}15`, border:`1px solid ${T.purple}33`, borderRadius:3, padding:"1px 6px" }}>◇ single-shot · session {msg.askSession.slice(0,8)}…</span>}
                 </div>

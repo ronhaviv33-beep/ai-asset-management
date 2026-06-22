@@ -35,7 +35,7 @@ POST /v1/chat/completions  (OpenAI-compatible)
 POST /v1/messages          (Anthropic-compatible)
       │
       ├─ JWT or opaque Bearer auth
-      ├─ PII / sensitive data scan  (10 pattern types)
+      ├─ Optional runtime safety check (sensitive content, opt-in per org)
       ├─ Model policy check         (allowlist / blocklist per team)
       ├─ Budget enforcement         (daily / monthly per team + agent)
       ├─ Relationship capture       (X-MCP-* / X-Agent-* / X-Workflow-* headers)
