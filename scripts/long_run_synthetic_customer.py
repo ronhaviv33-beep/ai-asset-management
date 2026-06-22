@@ -5,16 +5,16 @@ Long-run synthetic customer test for the AI Asset Management Platform.
 Simulates Acme AI Inc. using the entire platform continuously for N hours
 by calling backend APIs directly through localhost. Covers every major
 feature: health, auth, org onboarding, users, teams, API keys, settings,
-runtime traffic, relationships, agent inventory, telemetry, PII, budgets,
-policies, audit, security alerts, sessions, dashboard APIs, and multi-tenant
-isolation.
+runtime traffic, asset inventory, runtime dependency map, telemetry, PII,
+budgets, policies, audit, security alerts, sessions, pricing/cost
+intelligence, dashboard APIs, and multi-tenant isolation.
 
 Usage:
     # 10-minute fast debugging run (no live LLM needed)
     python scripts/long_run_synthetic_customer.py --fast-mode --skip-live-llm
 
-    # Full 8-hour run
-    python scripts/long_run_synthetic_customer.py --duration-hours 8 --skip-live-llm
+    # Full 12-hour validation run
+    python scripts/long_run_synthetic_customer.py --duration-hours 12 --skip-live-llm
 
 Required env vars:
     PLATFORM_ADMIN_PASSWORD      Platform-level admin password
@@ -231,6 +231,8 @@ class Counter:
     rel_ok:            int = 0
     agent_checks:      int = 0
     agent_ok:          int = 0
+    asset_checks:      int = 0
+    asset_ok:          int = 0
     telemetry_checks:  int = 0
     telemetry_ok:      int = 0
     pii_checks:        int = 0
@@ -239,15 +241,19 @@ class Counter:
     budget_ok:         int = 0
     policy_checks:     int = 0
     policy_ok:         int = 0
+    pricing_checks:    int = 0
+    pricing_ok:        int = 0
     dashboard_checks:  int = 0
     dashboard_ok:      int = 0
     isolation_checks:  int = 0
     isolation_ok:      int = 0
+    checkpoint_count:  int = 0
 
-    agents_discovered:       int = 0
+    agents_discovered:        int = 0
+    assets_discovered:        int = 0
     relationships_discovered: int = 0
-    telemetry_records:       int = 0
-    cost_estimate_usd:       float = 0.0
+    telemetry_records:        int = 0
+    cost_estimate_usd:        float = 0.0
 
 
 # ── Runtime state ──────────────────────────────────────────────────────────────
@@ -271,6 +277,12 @@ class State:
     # Snapshots for "increases over time" checks
     last_telemetry_total: int          = 0
     last_rel_count:       int          = 0
+
+    # Asset / relationship discovery snapshots
+    asset_types_found:    list         = field(default_factory=list)
+    capabilities_found:   list         = field(default_factory=list)
+    rel_target_types:     list         = field(default_factory=list)
+    top_rel_targets:      list         = field(default_factory=list)
 
     # Setup summary
     setup_ok:       bool               = False
@@ -850,7 +862,12 @@ async def run_setup(
 # ── Traffic simulation ─────────────────────────────────────────────────────────
 
 def _agent_headers(agent: str, team: str) -> dict[str, str]:
-    """Return identity + relationship headers for each agent profile."""
+    """Return identity + relationship headers for each agent profile.
+
+    Headers generate relationship map entries in the platform.  Each agent
+    carries at least one relationship header so all six target_type values
+    (mcp_tool, workflow, api, crm, database, spreadsheet) appear over time.
+    """
     base = {
         "X-Agent-Name":   agent,
         "X-Agent-Team":   team,
@@ -858,33 +875,88 @@ def _agent_headers(agent: str, team: str) -> dict[str, str]:
         "X-Guard-Agent":  agent,
         "X-Guard-Team":   team,
     }
-    if agent == "sales-enrichment-agent":
-        base.update({
-            "X-MCP-Server":    "hubspot-mcp",
-            "X-MCP-Tool":      "create_lead",
-            "X-Agent-Relation": "uses_tool",
-        })
+    if agent == "support-triage-agent":
+        # MCP tool (Zendesk) + CRM (Salesforce) — varies each call via random pick
+        if random.random() < 0.5:
+            base.update({
+                "X-MCP-Server":     "zendesk-mcp",
+                "X-MCP-Tool":       "get_ticket",
+                "X-Agent-Relation": "uses_tool",
+            })
+        else:
+            base.update({
+                "X-Agent-Target":   "salesforce-crm",
+                "X-Agent-Relation": "reads_from",
+            })
+    elif agent == "sales-enrichment-agent":
+        # MCP tool (HubSpot) + CRM write
+        if random.random() < 0.6:
+            base.update({
+                "X-MCP-Server":     "hubspot-mcp",
+                "X-MCP-Tool":       "create_lead",
+                "X-Agent-Relation": "uses_tool",
+            })
+        else:
+            base.update({
+                "X-Agent-Target":   "hubspot-crm",
+                "X-Agent-Relation": "writes_to",
+            })
     elif agent == "ops-automation-agent":
-        base.update({
-            "X-Workflow-Provider": "n8n",
-            "X-Workflow-Name":     "incident-routing",
-            "X-Agent-Relation":    "invokes_workflow",
-        })
+        # Workflow (n8n) + database (postgres)
+        if random.random() < 0.5:
+            base.update({
+                "X-Workflow-Provider": "n8n",
+                "X-Workflow-Name":     "incident-routing",
+                "X-Agent-Relation":    "invokes_workflow",
+            })
+        else:
+            base.update({
+                "X-Agent-Target":   "postgres-ops-db",
+                "X-Agent-Relation": "reads_from",
+            })
     elif agent == "research-agent":
-        base.update({
-            "X-Agent-Target":  "internal-knowledge-api",
-            "X-Agent-Relation": "calls",
-        })
+        # API (knowledge) + spreadsheet (Google Sheets) + database (vector-db)
+        pick = random.random()
+        if pick < 0.4:
+            base.update({
+                "X-Agent-Target":   "internal-knowledge-api",
+                "X-Agent-Relation": "calls",
+            })
+        elif pick < 0.7:
+            base.update({
+                "X-Agent-Target":   "research-google-sheets",
+                "X-Agent-Relation": "reads_from",
+            })
+        else:
+            base.update({
+                "X-Agent-Target":   "pinecone-vector-db",
+                "X-Agent-Relation": "queries",
+            })
     elif agent == "security-investigation-agent":
-        base.update({
-            "X-Agent-Target":  "siem-api",
-            "X-Agent-Relation": "reads_from",
-        })
+        # API (SIEM) + MCP tool (vulnerability scanner)
+        if random.random() < 0.6:
+            base.update({
+                "X-Agent-Target":   "siem-api",
+                "X-Agent-Relation": "reads_from",
+            })
+        else:
+            base.update({
+                "X-MCP-Server":     "vuln-scanner-mcp",
+                "X-MCP-Tool":       "scan_host",
+                "X-Agent-Relation": "uses_tool",
+            })
     elif agent == "cost-burner-agent":
-        base.update({
-            "X-Agent-Target":  "analytics-pipeline",
-            "X-Agent-Relation": "writes_to",
-        })
+        # Analytics pipeline (api) + billing spreadsheet
+        if random.random() < 0.7:
+            base.update({
+                "X-Agent-Target":   "analytics-pipeline",
+                "X-Agent-Relation": "writes_to",
+            })
+        else:
+            base.update({
+                "X-Agent-Target":   "cost-tracking-sheet",
+                "X-Agent-Relation": "writes_to",
+            })
     return base
 
 
@@ -1038,21 +1110,34 @@ async def validate_relationships(
     counter: Counter, evlog: EventLog, strict: bool,
 ) -> None:
     counter.rel_checks += 1
-    expected_targets = {
-        "create_lead", "incident-routing", "internal-knowledge-api", "siem-api",
-    }
-    found_targets: set[str] = set()
+    found_targets:      set[str] = set()
+    found_target_types: set[str] = set()
+    EXPECTED_TARGET_TYPES = {"mcp_tool", "workflow", "api", "crm", "database", "spreadsheet"}
 
     st, data = await _get(client, f"{base}/relationships", token=state.acme_token)
     if st == 200 and isinstance(data, list):
         for rel in data:
-            tgt = rel.get("target_name", "")
+            tgt  = rel.get("target_name", "")
+            ttype = rel.get("target_type", "")
             if tgt:
                 found_targets.add(tgt)
+            if ttype:
+                found_target_types.add(ttype)
         counter.relationships_discovered = len(data)
         counter.last_rel_count = len(data)
+
+        # Track top relationships by request_count for the executive summary
+        sorted_rels = sorted(data, key=lambda r: r.get("request_count", 0), reverse=True)
+        state.top_rel_targets = [
+            {"target": r.get("target_name"), "type": r.get("target_type"),
+             "count": r.get("request_count", 0)}
+            for r in sorted_rels[:10]
+        ]
+
         evlog.write("validate_relationships", count=len(data),
-                    found_targets=sorted(found_targets), result="ok")
+                    found_targets=sorted(found_targets),
+                    target_types=sorted(found_target_types),
+                    result="ok")
     elif st == 404 and not strict:
         evlog.write("validate_relationships", result="skip_404")
         counter.skips += 1
@@ -1061,24 +1146,27 @@ async def validate_relationships(
         evlog.write("validate_relationships", http=st, result="fail")
         return
 
-    # Graph check
+    # Graph check — nodes and edges, verify target_type diversity
     st2, gdata = await _get(client, f"{base}/relationships/graph", token=state.acme_token)
     if st2 == 200 and isinstance(gdata, dict):
         nodes = gdata.get("nodes", [])
         edges = gdata.get("edges", [])
-        target_types = {n.get("type") for n in nodes if "type" in n}
-        evlog.write("validate_graph", nodes=len(nodes), edges=len(edges),
-                    target_types=sorted(target_types), result="ok")
-        ok = len(nodes) > 0 and len(edges) > 0
-        if ok:
+        graph_types = sorted({n.get("type") for n in nodes if n.get("type")})
+        state.rel_target_types = graph_types
+        found_expected = EXPECTED_TARGET_TYPES & set(graph_types)
+        evlog.write("validate_graph",
+                    nodes=len(nodes), edges=len(edges),
+                    target_types=graph_types,
+                    expected_types_found=sorted(found_expected),
+                    result="ok")
+        if len(nodes) > 0 and len(edges) > 0:
             counter.rel_ok += 1
     else:
         evlog.write("validate_graph", http=st2, result="skip")
         counter.rel_ok += 1  # count as ok if graph endpoint absent
 
-    missing = expected_targets - found_targets
-    if missing:
-        _log.debug("  Relationships: missing expected targets: %s", missing)
+    if not found_target_types:
+        _log.debug("  Relationships: no target_types yet — traffic still building")
 
 
 async def validate_agents(
@@ -1108,6 +1196,139 @@ async def validate_agents(
                     verified=summ.get("verified"), potential=summ.get("potential"))
     else:
         evlog.write("validate_agents_summary", http=st2, result="skip")
+
+
+async def validate_asset_inventory(
+    client: httpx.AsyncClient, base: str, state: State,
+    counter: Counter, evlog: EventLog,
+) -> None:
+    """Check I — Asset Inventory: assets, types, capabilities, discovery status, risk."""
+    counter.asset_checks += 1
+
+    # /assets — main listing
+    st, data = await _get(client, f"{base}/assets", token=state.acme_token)
+    if st == 200 and isinstance(data, list):
+        counter.assets_discovered = len(data)
+
+        risk_levels      = sorted({a.get("risk")             for a in data if a.get("risk")})
+        lifecycle_states = sorted({a.get("lifecycle_status") for a in data if a.get("lifecycle_status")})
+        discovery_states = sorted({a.get("discovery_status") for a in data if a.get("discovery_status")})
+        teams_found      = sorted({a.get("team")             for a in data if a.get("team")})
+
+        all_models: set[str] = set()
+        for a in data:
+            for m in (a.get("models_used") or []):
+                all_models.add(m)
+        state.capabilities_found = sorted(all_models)
+        state.asset_types_found  = teams_found
+
+        evlog.write("validate_asset_inventory",
+                    count=len(data),
+                    risk_levels=risk_levels,
+                    lifecycle_states=lifecycle_states,
+                    discovery_states=discovery_states,
+                    teams=teams_found,
+                    models=sorted(all_models),
+                    result="ok")
+    elif st == 404:
+        evlog.write("validate_asset_inventory", result="skip_404")
+        counter.skips += 1
+        return
+    else:
+        evlog.write("validate_asset_inventory", http=st, result="fail")
+        return
+
+    # /assets/summary — KPI cards
+    st2, summary = await _get(client, f"{base}/assets/summary", token=state.acme_token)
+    if st2 == 200 and isinstance(summary, dict):
+        evlog.write("validate_assets_summary",
+                    total=summary.get("total_agents", 0),
+                    high_risk=summary.get("high_risk_agents", 0),
+                    result="ok")
+    else:
+        evlog.write("validate_assets_summary", http=st2, result="skip")
+
+    # /agents — agent inventory with discovery_status (verified / potential)
+    st3, agents = await _get(client, f"{base}/agents", token=state.acme_token)
+    if st3 == 200 and isinstance(agents, list):
+        verified  = [a for a in agents if a.get("discovery_status") == "verified"]
+        potential = [a for a in agents if a.get("discovery_status") == "potential"]
+        risk_set  = sorted({a.get("risk") for a in agents if a.get("risk")})
+        evlog.write("validate_agent_inventory",
+                    total=len(agents),
+                    verified=len(verified),
+                    potential=len(potential),
+                    risk_levels=risk_set,
+                    result="ok")
+    else:
+        evlog.write("validate_agent_inventory", http=st3, result="skip")
+
+    # /assets/registry/unassigned — discovery queue
+    st4, unreg = await _get(client, f"{base}/assets/registry/unassigned", token=state.acme_token)
+    if st4 == 200 and isinstance(unreg, list):
+        evlog.write("validate_unassigned_assets", count=len(unreg), result="ok")
+    else:
+        evlog.write("validate_unassigned_assets", http=st4, result="skip")
+
+    counter.asset_ok += 1
+
+
+async def validate_pricing(
+    client: httpx.AsyncClient, base: str, state: State,
+    counter: Counter, evlog: EventLog, strict: bool,
+) -> None:
+    """Check R — Pricing / Cost Intelligence."""
+    counter.pricing_checks += 1
+    ok = True
+
+    # /pricing-registry — model pricing table
+    st, data = await _get(client, f"{base}/pricing-registry", token=state.acme_token)
+    if st == 200 and isinstance(data, dict):
+        pricing = data.get("pricing", [])
+        providers = sorted({p.get("provider") for p in pricing if p.get("provider")})
+        evlog.write("validate_pricing_registry",
+                    count=len(pricing), providers=providers, result="ok")
+    elif st == 404:
+        evlog.write("validate_pricing_registry", result="skip_404")
+        ok = not strict
+    else:
+        evlog.write("validate_pricing_registry", http=st, result="fail")
+        ok = False
+
+    # /pricing-registry/status — freshness / warnings
+    st2, pstatus = await _get(client, f"{base}/pricing-registry/status", token=state.acme_token)
+    if st2 == 200 and isinstance(pstatus, dict):
+        evlog.write("validate_pricing_status",
+                    warnings=len(pstatus.get("warnings", [])), result="ok")
+    elif st2 == 404:
+        evlog.write("validate_pricing_status", result="skip_404")
+    else:
+        evlog.write("validate_pricing_status", http=st2, result="fail")
+
+    # /cost-intelligence — unified cost overview
+    st3, ci = await _get(client, f"{base}/cost-intelligence", token=state.acme_token)
+    if st3 == 200 and isinstance(ci, dict):
+        runtime_cost = ci.get("runtime_cost", {})
+        evlog.write("validate_cost_intelligence",
+                    total_usd=runtime_cost.get("total_usd", 0),
+                    trend=runtime_cost.get("trend_direction"),
+                    result="ok")
+    elif st3 == 404:
+        evlog.write("validate_cost_intelligence", result="skip_404")
+    else:
+        evlog.write("validate_cost_intelligence", http=st3, result="fail")
+
+    # /billing/periods — cost reconciliation (optional)
+    st4, periods = await _get(client, f"{base}/billing/periods", token=state.acme_token)
+    if st4 == 200 and isinstance(periods, list):
+        evlog.write("validate_billing_periods", count=len(periods), result="ok")
+    elif st4 == 404:
+        evlog.write("validate_billing_periods", result="skip_404")
+    else:
+        evlog.write("validate_billing_periods", http=st4, result="skip")
+
+    if ok:
+        counter.pricing_ok += 1
 
 
 async def validate_telemetry(
@@ -1370,8 +1591,12 @@ async def validate_dashboard_apis(
         "/agents/summary",
         "/assets",
         "/assets/summary",
+        "/assets/registry/unassigned",
         "/cost-intelligence",
+        "/pricing-registry",
         "/pricing-registry/status",
+        "/pricing-registry/sync-status",
+        "/billing/periods",
     ]
     for ep in endpoints:
         st, data = await _get(client, f"{base}{ep}", token=state.acme_token)
@@ -1476,6 +1701,47 @@ async def test_rate_limit(
         evlog.write("rate_limit_result", got_429=False, result="no_429")
 
 
+# ── Checkpoint writer ─────────────────────────────────────────────────────────
+
+def _write_checkpoint(
+    counter: Counter,
+    state: State,
+    elapsed: float,
+    run_ts: str,
+    log_dir: Path,
+) -> None:
+    total = counter.requests
+    ok    = counter.successes + counter.acceptable
+    sr    = ok / total * 100 if total > 0 else 0.0
+    cp = {
+        "ts":              datetime.now(timezone.utc).isoformat(),
+        "elapsed_min":     round(elapsed / 60, 1),
+        "checkpoint":      counter.checkpoint_count,
+        "requests":        total,
+        "success_rate_pct": round(sr, 1),
+        "failures":        counter.failures,
+        "skips":           counter.skips,
+        "agents":          counter.agents_discovered,
+        "assets":          counter.assets_discovered,
+        "relationships":   counter.relationships_discovered,
+        "telemetry":       counter.telemetry_records,
+        "cost_usd":        round(counter.cost_estimate_usd, 4),
+        "asset_types":     state.asset_types_found,
+        "rel_target_types": state.rel_target_types,
+        "capabilities":    state.capabilities_found[:10],
+    }
+    counter.checkpoint_count += 1
+    path = log_dir / f"{run_ts}_checkpoints.jsonl"
+    with open(path, "a", encoding="utf-8") as f:
+        f.write(json.dumps(cp) + "\n")
+    _log.info(
+        "[checkpoint #%d] elapsed=%.1fm req=%d ok=%.0f%% agents=%d assets=%d rels=%d",
+        cp["checkpoint"], cp["elapsed_min"],
+        total, sr, counter.agents_discovered,
+        counter.assets_discovered, counter.relationships_discovered,
+    )
+
+
 # ── Progress printer ───────────────────────────────────────────────────────────
 
 def _print_progress(counter: Counter, elapsed: float, end_time: float) -> None:
@@ -1487,11 +1753,12 @@ def _print_progress(counter: Counter, elapsed: float, end_time: float) -> None:
     _log.info(
         "[progress] elapsed=%.1fm remaining=%.1fm | "
         "req=%d ok=%d fail=%d skip=%d accept=%d (%.0f%%) | "
-        "agents=%d rels=%d tel=%d cost=$%.4f | rate=%.1f/min",
+        "agents=%d assets=%d rels=%d tel=%d cost=$%.4f | rate=%.1f/min",
         elapsed / 60, remaining / 60,
         counter.requests, counter.successes, counter.failures,
         counter.skips, counter.acceptable, success_rate,
-        counter.agents_discovered, counter.relationships_discovered,
+        counter.agents_discovered, counter.assets_discovered,
+        counter.relationships_discovered,
         counter.telemetry_records, counter.cost_estimate_usd,
         rate * 60,
     )
@@ -1504,18 +1771,21 @@ async def _run_main_loop(
     args: argparse.Namespace, state: State,
     counter: Counter, evlog: EventLog,
     duration_secs: float,
+    run_ts: str,
 ) -> None:
     fast = args.fast_mode
     strict = args.strict
+    log_dir = Path("logs/long_run")
 
     # Interval definitions (seconds): normal / fast
     intervals = {
-        "progress":      (60,   30),
-        "validate_5min": (300,  60),
-        "validate_10min":(600, 120),
-        "validate_20min":(1200, 300),
-        "validate_30min":(1800, 300),
-        "pii":           (1800, 300),
+        "progress":       (60,   30),
+        "validate_5min":  (300,  60),
+        "validate_10min": (600, 120),
+        "validate_15min": (900, 180),
+        "validate_20min": (1200, 300),
+        "validate_30min": (1800, 300),
+        "pii":            (1800, 300),
     }
 
     def iv(name: str) -> float:
@@ -1546,12 +1816,12 @@ async def _run_main_loop(
                 _log.info("[main] Duration reached — stopping")
                 break
 
-            # Progress
+            # Progress — every minute
             if now - last["progress"] >= iv("progress"):
                 _print_progress(counter, elapsed, end_time)
                 last["progress"] = now
 
-            # Every 5-min validations
+            # Every 5-min: core relationship / agent / telemetry validations
             if now - last["validate_5min"] >= iv("validate_5min"):
                 _log.info("[check] 5-min validation …")
                 await validate_relationships(client, base, state, counter, evlog, strict)
@@ -1559,7 +1829,7 @@ async def _run_main_loop(
                 await validate_telemetry(client, base, state, counter, evlog)
                 last["validate_5min"] = now
 
-            # Every 10-min validations
+            # Every 10-min: governance + dashboard
             if now - last["validate_10min"] >= iv("validate_10min"):
                 _log.info("[check] 10-min validation …")
                 await validate_audit(client, base, state, counter, evlog)
@@ -1569,7 +1839,15 @@ async def _run_main_loop(
                 await validate_dashboard_apis(client, base, state, counter, evlog, strict)
                 last["validate_10min"] = now
 
-            # Every 20-min: sessions
+            # Every 15-min: asset inventory + pricing + checkpoint
+            if now - last["validate_15min"] >= iv("validate_15min"):
+                _log.info("[check] 15-min validation …")
+                await validate_asset_inventory(client, base, state, counter, evlog)
+                await validate_pricing(client, base, state, counter, evlog, strict)
+                _write_checkpoint(counter, state, elapsed, run_ts, log_dir)
+                last["validate_15min"] = now
+
+            # Every 20-min: sessions + isolation
             if now - last["validate_20min"] >= iv("validate_20min"):
                 await validate_sessions(client, base, state, counter, evlog)
                 await validate_isolation(client, base, state, args, counter, evlog)
@@ -1595,11 +1873,13 @@ async def _run_main_loop(
     _log.info("[main] Final validation sweep …")
     await validate_relationships(client, base, state, counter, evlog, strict)
     await validate_agents(client, base, state, counter, evlog)
+    await validate_asset_inventory(client, base, state, counter, evlog)
     await validate_telemetry(client, base, state, counter, evlog)
     await validate_audit(client, base, state, counter, evlog)
     await validate_security_alerts(client, base, state, counter, evlog)
     await validate_budgets(client, base, state, counter, evlog)
     await validate_policies(client, base, state, args, counter, evlog)
+    await validate_pricing(client, base, state, counter, evlog, strict)
     await validate_dashboard_apis(client, base, state, counter, evlog, strict)
     await validate_sessions(client, base, state, counter, evlog)
     await validate_isolation(client, base, state, args, counter, evlog)
@@ -1611,12 +1891,13 @@ async def _run_main_loop(
 def _generate_report(
     counter: Counter,
     state: State,
+    args: argparse.Namespace,
     start_time: float,
     end_time: float,
     run_ts: str,
     evlog: EventLog,
     log_dir: Path,
-) -> dict:
+) -> tuple[dict, Path]:
     elapsed = end_time - start_time
     total = counter.requests
     ok = counter.successes + counter.acceptable
@@ -1633,16 +1914,23 @@ def _generate_report(
         "skips":                 counter.skips,
         "success_rate_pct":      round(success_rate, 1),
         "agents_discovered":     counter.agents_discovered,
+        "assets_discovered":     counter.assets_discovered,
+        "asset_types_found":     state.asset_types_found,
+        "capabilities_found":    state.capabilities_found,
         "relationships_discovered": counter.relationships_discovered,
+        "rel_target_types":      state.rel_target_types,
+        "top_rel_targets":       state.top_rel_targets,
         "telemetry_records":     counter.telemetry_records,
         "cost_estimate_usd":     round(counter.cost_estimate_usd, 4),
         "checks": {
             "relationships":     {"total": counter.rel_checks,       "passed": counter.rel_ok},
             "agents":            {"total": counter.agent_checks,     "passed": counter.agent_ok},
+            "assets":            {"total": counter.asset_checks,     "passed": counter.asset_ok},
             "telemetry":         {"total": counter.telemetry_checks, "passed": counter.telemetry_ok},
             "pii":               {"total": counter.pii_checks,       "passed": counter.pii_ok},
             "budgets":           {"total": counter.budget_checks,    "passed": counter.budget_ok},
             "policies":          {"total": counter.policy_checks,    "passed": counter.policy_ok},
+            "pricing":           {"total": counter.pricing_checks,   "passed": counter.pricing_ok},
             "dashboard":         {"total": counter.dashboard_checks, "passed": counter.dashboard_ok},
             "isolation":         {"total": counter.isolation_checks, "passed": counter.isolation_ok},
         },
@@ -1654,6 +1942,7 @@ def _generate_report(
             "policy_id":         state.policy_id,
             "live_llm":          state.live_llm,
         },
+        "checkpoint_count":   counter.checkpoint_count,
         "event_log": str(evlog._path),
     }
 
@@ -1661,7 +1950,120 @@ def _generate_report(
     with open(report_path, "w", encoding="utf-8") as f:
         json.dump(report, f, indent=2)
 
+    summary_path = _write_executive_summary(report, state, args, run_ts, log_dir)
+    _log.info("Executive summary: %s", summary_path)
+
     return report, report_path
+
+
+def _write_executive_summary(
+    report: dict,
+    state: State,
+    args: argparse.Namespace,
+    run_ts: str,
+    log_dir: Path,
+) -> Path:
+    """Write a human-readable Markdown executive summary."""
+    elapsed_min  = report["duration_seconds"] / 60
+    elapsed_hr   = elapsed_min / 60
+    sr           = report["success_rate_pct"]
+    checks       = report["checks"]
+    total_checks = sum(v["total"] for v in checks.values())
+    passed_checks = sum(v["passed"] for v in checks.values())
+    verdict      = "✅ PASS" if report["failures"] == 0 else "❌ FAIL"
+    run_dt       = datetime.strptime(run_ts, "%Y%m%d_%H%M%S").strftime("%Y-%m-%d %H:%M UTC")
+
+    top_rels = report.get("top_rel_targets", [])
+    top_rels_md = "\n".join(
+        f"  - `{r['target']}` ({r['type']}) — {r['count']} requests"
+        for r in top_rels[:5]
+    ) or "  *(none recorded yet)*"
+
+    asset_types  = ", ".join(report.get("asset_types_found", [])) or "—"
+    capabilities = ", ".join(report.get("capabilities_found", [])[:8]) or "—"
+    rel_types    = ", ".join(report.get("rel_target_types", [])) or "—"
+
+    def check_row(name: str) -> str:
+        v   = checks.get(name, {"total": 0, "passed": 0})
+        pct = v["passed"] / v["total"] * 100 if v["total"] > 0 else 0
+        flag = "✓" if (v["total"] == 0 or pct == 100) else "~"
+        return f"| {flag} {name:<20} | {v['passed']}/{v['total']} | {pct:.0f}% |"
+
+    lines = [
+        "# AI Asset Management — Full System Validation Report",
+        "",
+        f"**Run:** {run_dt}  ",
+        f"**Duration:** {elapsed_hr:.2f} h ({elapsed_min:.1f} min)  ",
+        f"**Base URL:** {args.base_url}  ",
+        f"**Fast mode:** {'yes' if args.fast_mode else 'no'}  ",
+        f"**Skip live LLM:** {'yes' if args.skip_live_llm else 'no'}  ",
+        "",
+        "---",
+        "",
+        "## Verdict",
+        "",
+        f"### {verdict}",
+        "",
+        f"- **Success rate:** {sr:.1f}%",
+        f"- **Total proxy requests:** {report['total_requests']:,}",
+        f"- **Failures:** {report['failures']}",
+        f"- **Skips:** {report['skips']}",
+        f"- **Check suite:** {passed_checks}/{total_checks} passed",
+        "",
+        "---",
+        "",
+        "## Asset Inventory (System of Record)",
+        "",
+        f"- **Agents discovered:** {report['agents_discovered']}",
+        f"- **Assets in registry:** {report['assets_discovered']}",
+        f"- **Asset types (teams):** {asset_types}",
+        f"- **Capabilities (models used):** {capabilities}",
+        "",
+        "---",
+        "",
+        "## Runtime Dependency Map",
+        "",
+        f"- **Relationships discovered:** {report['relationships_discovered']}",
+        f"- **Target types seen:** {rel_types}",
+        "",
+        "**Top dependencies by request count:**",
+        top_rels_md,
+        "",
+        "---",
+        "",
+        "## Check Suite",
+        "",
+        "| Status | Check               | Passed/Total | Pass % |",
+        "|--------|---------------------|--------------|--------|",
+        check_row("relationships"),
+        check_row("agents"),
+        check_row("assets"),
+        check_row("telemetry"),
+        check_row("pii"),
+        check_row("budgets"),
+        check_row("policies"),
+        check_row("pricing"),
+        check_row("dashboard"),
+        check_row("isolation"),
+        "",
+        "---",
+        "",
+        "## Runtime Details",
+        "",
+        f"- **Telemetry records:** {report['telemetry_records']:,}",
+        f"- **Cost estimate:** ${report['cost_estimate_usd']:.4f}",
+        f"- **Live LLM:** {'yes' if report['setup']['live_llm'] else 'no (skip-live-llm mode)'}",
+        f"- **Checkpoints written:** {report.get('checkpoint_count', '—')}",
+        "",
+        "---",
+        "",
+        f"*Generated by long_run_synthetic_customer.py — run id: {run_ts}*",
+    ]
+
+    path = log_dir / f"{run_ts}_executive_summary.md"
+    with open(path, "w", encoding="utf-8") as f:
+        f.write("\n".join(lines) + "\n")
+    return path
 
 
 def _print_report(report: dict, report_path: Path) -> None:
@@ -1670,16 +2072,25 @@ def _print_report(report: dict, report_path: Path) -> None:
     _log.info("=" * 60)
     _log.info("FINAL REPORT")
     _log.info("=" * 60)
-    _log.info("Duration:             %.1f min", report["duration_seconds"] / 60)
+    _log.info("Duration:             %.1f min (%.2f hr)",
+              report["duration_seconds"] / 60, report["duration_seconds"] / 3600)
     _log.info("Total requests:       %d", report["total_requests"])
     _log.info("Success rate:         %.1f%%", report["success_rate_pct"])
     _log.info("Failures:             %d", report["failures"])
     _log.info("Skips:                %d", report["skips"])
     _log.info("")
-    _log.info("Agents discovered:    %d", report["agents_discovered"])
-    _log.info("Relationships found:  %d", report["relationships_discovered"])
+    _log.info("System of Record:")
+    _log.info("  Agents discovered:  %d", report["agents_discovered"])
+    _log.info("  Assets in registry: %d", report["assets_discovered"])
+    _log.info("  Asset types:        %s", ", ".join(report.get("asset_types_found", [])) or "—")
+    _log.info("  Capabilities:       %s", ", ".join(report.get("capabilities_found", [])[:5]) or "—")
+    _log.info("")
+    _log.info("Runtime Dependency Map:")
+    _log.info("  Relationships:      %d", report["relationships_discovered"])
+    _log.info("  Target types:       %s", ", ".join(report.get("rel_target_types", [])) or "—")
+    _log.info("")
+    _log.info("Cost:                 $%.4f", report["cost_estimate_usd"])
     _log.info("Telemetry records:    %d", report["telemetry_records"])
-    _log.info("Cost estimate:        $%.4f", report["cost_estimate_usd"])
     _log.info("")
     _log.info("Check results (passed/total):")
     for name, v in c.items():
@@ -1702,9 +2113,9 @@ async def _main() -> int:
     elif args.duration_hours is not None:
         duration_secs = args.duration_hours * 3600
     elif args.fast_mode:
-        duration_secs = 10 * 60  # 10 minutes default for fast mode
+        duration_secs = 10 * 60   # 10 minutes default for fast mode
     else:
-        duration_secs = 8 * 3600  # 8 hours default
+        duration_secs = 12 * 3600  # 12 hours default
 
     base = args.base_url.rstrip("/")
     run_ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
@@ -1763,7 +2174,7 @@ async def _main() -> int:
 
         # Main loop
         evlog.write("run_start", duration_secs=duration_secs)
-        await _run_main_loop(client, base, args, state, counter, evlog, duration_secs)
+        await _run_main_loop(client, base, args, state, counter, evlog, duration_secs, run_ts)
 
     end_time = time.monotonic()
     evlog.write("run_end",
@@ -1773,7 +2184,7 @@ async def _main() -> int:
                 failures=counter.failures)
 
     report, report_path = _generate_report(
-        counter, state, start_time, end_time, run_ts, evlog, log_dir,
+        counter, state, args, start_time, end_time, run_ts, evlog, log_dir,
     )
     _print_report(report, report_path)
     evlog.close()

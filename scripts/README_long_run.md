@@ -1,11 +1,12 @@
 # Long-Run Synthetic Customer Test
 
 Simulates **Acme AI Inc.** using the entire AI Asset Management Platform
-continuously for up to 8 hours through local backend APIs.  Covers every
+continuously for up to 12 hours through local backend APIs.  Covers every
 major feature: health, auth, org onboarding, users, teams, API keys, LLM
-gateway traffic, relationship mapping, agent inventory, telemetry, PII
-detection, budgets, policies, audit, security alerts, chat sessions,
-dashboard APIs, and multi-tenant isolation.
+gateway traffic, **asset inventory (System of Record)**, **runtime dependency
+map**, telemetry, PII detection, budgets, policies, audit, security alerts,
+chat sessions, pricing / cost intelligence, dashboard APIs, and multi-tenant
+isolation.
 
 ---
 
@@ -137,12 +138,12 @@ ACME_ADMIN_PASSWORD='your-acme-password' \
 
 ---
 
-## How to run the full 8-hour test
+## How to run the full 12-hour validation
 
 ```bash
 PLATFORM_ADMIN_PASSWORD=your-password \
   python scripts/long_run_synthetic_customer.py \
-  --duration-hours 8 \
+  --duration-hours 12 \
   --skip-live-llm
 ```
 
@@ -151,7 +152,7 @@ With real LLM provider credentials configured in the platform:
 ```bash
 PLATFORM_ADMIN_PASSWORD=your-password \
   python scripts/long_run_synthetic_customer.py \
-  --duration-hours 8
+  --duration-hours 12
 ```
 
 ---
@@ -165,7 +166,6 @@ usage: long_run_synthetic_customer.py [-h]
   [--admin-email EMAIL]
   [--admin-password PASSWORD]
   [--acme-admin-email EMAIL]
-  [--acme-admin-email EMAIL]
   [--acme-admin-password PASSWORD]
   [--concurrency N]
   [--strict]
@@ -178,7 +178,7 @@ usage: long_run_synthetic_customer.py [-h]
 
 | Flag | Description |
 |---|---|
-| `--duration-hours N` | Run for N hours (default 8) |
+| `--duration-hours N` | Run for N hours (default 12) |
 | `--duration-minutes N` | Run for N minutes (overrides hours) |
 | `--base-url URL` | Backend base URL (default `http://localhost:8000`) |
 | `--admin-email EMAIL` | Platform admin email (default `admin@ai-asset-mgmt.local`) |
@@ -216,9 +216,16 @@ usage: long_run_synthetic_customer.py [-h]
 6. **API keys** — create one key per team; keep raw keys in memory only
 7. **Settings** — set `pii_redaction_mode=findings_only`; guard mode `observe`
 8. **Provider credentials** — check status; run mock/skip if missing
-9. **Runtime traffic** — 7 agent profiles with relationship headers; 3 concurrent workers
-10. **Relationship mapping** — validate every 5 min; check graph nodes/edges
-11. **Agent inventory** — validate every 5 min; check team attribution, `last_seen_at`
+9. **Runtime traffic** — 7 agent profiles; 3 concurrent workers
+10. **Asset Inventory (System of Record)** — validate every 15 min:
+    - `/assets` — risk levels (low/medium/high), lifecycle_status (unassigned/managed/retired), discovery_status (verified/potential)
+    - `/assets/summary` — KPI cards
+    - `/agents` — verified vs potential, discovery coverage
+    - `/assets/registry/unassigned` — discovery queue
+11. **Runtime Dependency Map** — validate every 5 min:
+    - `/relationships` — target types: `mcp_tool`, `workflow`, `api`, `crm`, `database`, `spreadsheet`
+    - `/relationships/graph` — nodes and edges, target type diversity
+    - `request_count` increases over time
 12. **Telemetry** — validate every 5 min; check totals increase, costs, latency
 13. **PII scenario** — fake PII every 30 min; verify findings; verify redaction
 14. **Budgets** — create cost-burner budget; validate status updates
@@ -226,8 +233,14 @@ usage: long_run_synthetic_customer.py [-h]
 16. **Audit** — validate every 10 min; check blocked/sensitive events
 17. **Security alerts** — validate every 10 min; verify shape
 18. **Sessions / chat** — create, read, verify, close every 20 min
-19. **Dashboard APIs** — read all dashboard endpoints every 10 min
-20. **Multi-tenant isolation** — verify Acme cannot see OtherCo data
+19. **Pricing / Cost Intelligence** — validate every 15 min:
+    - `/pricing-registry` — model pricing table
+    - `/pricing-registry/status` — freshness warnings
+    - `/cost-intelligence` — runtime cost overview
+    - `/billing/periods` — reconciliation (skip 404)
+20. **Dashboard APIs** — read all dashboard endpoints every 10 min
+21. **Multi-tenant isolation** — verify Acme cannot see OtherCo data
+22. **Checkpoints** — written every 15 min to `*_checkpoints.jsonl`
 
 ---
 
@@ -272,9 +285,26 @@ Key fields:
 | `total_requests` | All proxy calls made |
 | `success_rate_pct` | Percentage of 200 + acceptable-502/503 |
 | `agents_discovered` | Agents visible in `/agents` at last check |
+| `assets_discovered` | Assets in `/assets` at last check |
+| `asset_types_found` | Teams with active agents |
+| `capabilities_found` | Models used across all agents |
 | `relationships_discovered` | Relationships in `/relationships` at last check |
+| `rel_target_types` | Unique target types seen in dependency graph |
+| `top_rel_targets` | Top 10 dependencies by request count |
 | `cost_estimate_usd` | Sum of `x_guard.cost_usd` from 200 responses |
 | `checks.*.passed/total` | Per-feature check pass rate |
+
+### Checkpoint log
+
+```bash
+cat logs/long_run/*_checkpoints.jsonl | python3 -m json.tool
+```
+
+### Executive summary
+
+```bash
+cat logs/long_run/*_executive_summary.md
+```
 
 ---
 
@@ -338,20 +368,30 @@ uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 # Terminal 2 — frontend (optional)
 cd dashboard && npm run dev
 
+# Terminal 3 — dry run (confirms backend is reachable)
+PLATFORM_ADMIN_PASSWORD=Admin123! \
+  python scripts/long_run_synthetic_customer.py --dry-run
+
 # Terminal 3 — fast 2-minute smoke test
 PLATFORM_ADMIN_PASSWORD=Admin123! \
   python scripts/long_run_synthetic_customer.py \
   --fast-mode --duration-minutes 2 --skip-live-llm
 
-# Terminal 3 — full 8-hour run
+# Terminal 3 — 10-minute fast test
+PLATFORM_ADMIN_PASSWORD=Admin123! \
+ACME_ADMIN_PASSWORD=AcmeAdmin1! \
+  python scripts/long_run_synthetic_customer.py \
+  --fast-mode --duration-minutes 10 --skip-live-llm
+
+# Terminal 3 — full 12-hour validation
 PLATFORM_ADMIN_PASSWORD=Admin123! \
   python scripts/long_run_synthetic_customer.py \
-  --duration-hours 8 --skip-live-llm
+  --duration-hours 12 --skip-live-llm
 
 # With live LLM + strict mode
 PLATFORM_ADMIN_PASSWORD=Admin123! \
   python scripts/long_run_synthetic_customer.py \
-  --duration-hours 8 --strict --strict-live
+  --duration-hours 12 --strict --strict-live
 
 # With rate-limit test and higher concurrency
 PLATFORM_ADMIN_PASSWORD=Admin123! \
