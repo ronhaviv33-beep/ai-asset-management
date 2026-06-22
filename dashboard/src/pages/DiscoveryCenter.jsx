@@ -52,6 +52,38 @@ function ConfidenceBadge({ score }) {
   );
 }
 
+function DiscoveryStatusBadge({ status }) {
+  const map = {
+    verified:   { label: "Verified",   color: T.accent,    bg: "#1A3D2B" },
+    likely:     { label: "Likely",     color: "#2DD4BF",   bg: "#0D2E2B" },
+    potential:  { label: "Potential",  color: T.warn,      bg: "#3D2E0D" },
+    historical: { label: "Historical", color: T.textDim,   bg: T.panelHi },
+  };
+  const m = map[status] || { label: status || "—", color: T.textDim, bg: T.panelHi };
+  return (
+    <span style={{ display: "inline-flex", alignItems: "center", gap: 4, background: m.bg, color: m.color, border: `1px solid ${m.color}33`, fontSize: 10, fontFamily: MONO, fontWeight: 600, padding: "2px 8px", borderRadius: 4, textTransform: "uppercase", letterSpacing: "0.05em" }}>
+      <span style={{ width: 4, height: 4, borderRadius: "50%", background: m.color }} />
+      {m.label}
+    </span>
+  );
+}
+
+function AssetTypeBadge({ assetType }) {
+  const map = {
+    agent:       { label: "Agent",    color: "#B47AFF", bg: "#1E1A3D" },
+    workflow:    { label: "Workflow",  color: "#6FA8FF", bg: "#0D1F3D" },
+    application: { label: "App",      color: "#F472B6", bg: "#2D0D1E" },
+    copilot:     { label: "Copilot",  color: "#FB923C", bg: "#2D1A0A" },
+    service:     { label: "Service",  color: T.accent,  bg: "#1A3D2B" },
+  };
+  const m = map[assetType] || { label: assetType || "agent", color: T.textDim, bg: T.panelHi };
+  return (
+    <span style={{ display: "inline-block", background: m.bg, color: m.color, border: `1px solid ${m.color}33`, fontSize: 9, fontFamily: MONO, fontWeight: 600, padding: "1px 6px", borderRadius: 3, textTransform: "uppercase", letterSpacing: "0.05em" }}>
+      {m.label}
+    </span>
+  );
+}
+
 function LifecycleBadge({ status }) {
   const map = {
     unassigned:       { label: "Unassigned",      color: T.yellow },
@@ -384,16 +416,19 @@ export default function DiscoveryCenter({ initialTab = "verified" }) {
     fetchOrgConfig().then(cfg => { if (cfg?.environments?.length) setEnvironments(cfg.environments); }).catch(() => {});
   }, []);
 
-  const verified  = useMemo(() => agents.filter(a => a.discovery_status === "verified"), [agents]);
-  const potential = useMemo(() => agents.filter(a => a.discovery_status !== "verified"), [agents]);
+  const verified   = useMemo(() => agents.filter(a => a.discovery_status === "verified"), [agents]);
+  const likely     = useMemo(() => agents.filter(a => a.discovery_status === "likely"), [agents]);
+  const historical = useMemo(() => agents.filter(a => a.discovery_status === "historical"), [agents]);
+  const potential  = useMemo(() => agents.filter(a => a.discovery_status === "potential"), [agents]);
 
   const filtered = useMemo(() => {
-    const sort = tab === "verified" ? vSort : pSort;
-    const list = tab === "verified" ? verified : potential;
+    const isVerifiedTab = tab === "verified" || tab === "historical";
+    const sort = isVerifiedTab ? vSort : pSort;
+    const list = tab === "verified" ? verified : tab === "likely" ? likely : tab === "historical" ? historical : potential;
     const q = search.toLowerCase();
     const searched = q ? list.filter(a => (a.agent_name || "").toLowerCase().includes(q) || (a.team || "").toLowerCase().includes(q) || (a.discovery_source || "").toLowerCase().includes(q)) : list;
     return sortItems(searched, sort.key, sort.dir);
-  }, [tab, verified, potential, search, vSort, pSort]);
+  }, [tab, verified, likely, historical, potential, search, vSort, pSort]);
 
   const handleClaim = async (agentId, body) => {
     await claimInventoryAgent(agentId, body);
@@ -458,8 +493,10 @@ export default function DiscoveryCenter({ initialTab = "verified" }) {
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 20 }}>
         <div style={{ display: "flex", gap: 0, background: T.panelHi, border: `1px solid ${T.border}`, borderRadius: 6, padding: 3 }}>
           {[
-            { id: "verified",  label: `Verified Agents (${verified.length})` },
-            { id: "potential", label: `Potential Agents (${potential.length})` },
+            { id: "verified",   label: `Verified (${verified.length})` },
+            { id: "likely",     label: `Likely (${likely.length})` },
+            { id: "potential",  label: `Potential (${potential.length})` },
+            { id: "historical", label: `Historical (${historical.length})` },
           ].map(t => (
             <button key={t.id} onClick={() => setTab(t.id)}
               style={{ background: tab === t.id ? T.panel : "transparent", border: tab === t.id ? `1px solid ${T.border}` : "1px solid transparent", color: tab === t.id ? T.text : T.textDim, padding: "7px 16px", borderRadius: 4, fontSize: 12, fontFamily: MONO, cursor: "pointer", transition: "all 0.12s" }}>
@@ -472,13 +509,24 @@ export default function DiscoveryCenter({ initialTab = "verified" }) {
       </div>
 
       {/* Context info */}
-      {tab === "verified" ? (
+      {tab === "verified" && (
         <div style={{ marginBottom: 16, padding: "10px 14px", background: T.accent + "0D", border: `1px solid ${T.accent}33`, borderRadius: 6, fontSize: 12, color: T.textDim }}>
           <span style={{ color: T.accent }}>●</span>&nbsp; Verified agents have been observed making real API calls through the runtime gateway. Confidence: 95%.
         </div>
-      ) : (
+      )}
+      {tab === "likely" && (
+        <div style={{ marginBottom: 16, padding: "10px 14px", background: "#2DD4BF0D", border: "1px solid #2DD4BF33", borderRadius: 6, fontSize: 12, color: T.textDim }}>
+          <span style={{ color: "#2DD4BF" }}>●</span>&nbsp; Likely agents have multiple evidence sources or high confidence scores (≥70%) from platform signals. Strong candidates for validation.
+        </div>
+      )}
+      {tab === "potential" && (
         <div style={{ marginBottom: 16, padding: "10px 14px", background: T.warn + "0D", border: `1px solid ${T.warn}33`, borderRadius: 6, fontSize: 12, color: T.textDim }}>
           <span style={{ color: T.warn }}>●</span>&nbsp; Potential agents were detected from platform signals (GitHub, Slack, Jira, etc.) but have not yet been confirmed through runtime traffic. Validate or reject each signal.
+        </div>
+      )}
+      {tab === "historical" && (
+        <div style={{ marginBottom: 16, padding: "10px 14px", background: T.textDim + "0D", border: `1px solid ${T.border}`, borderRadius: 6, fontSize: 12, color: T.textDim }}>
+          <span style={{ color: T.textDim }}>●</span>&nbsp; Historical agents were previously verified but have had no runtime activity for over 90 days. They may be decommissioned or hibernating.
         </div>
       )}
 
@@ -490,9 +538,11 @@ export default function DiscoveryCenter({ initialTab = "verified" }) {
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
             <thead>
               <tr>
-                {tab === "verified" ? (
+                {(tab === "verified" || tab === "historical") ? (
                   <>
                     <STH sortKey="agent_name" sort={vSort} onSort={toggleV}>Agent Name</STH>
+                    <STH sortKey="asset_type" sort={vSort} onSort={toggleV}>Type</STH>
+                    <STH sortKey="discovery_status" sort={vSort} onSort={toggleV}>Discovery</STH>
                     <STH sortKey="team" sort={vSort} onSort={toggleV}>Team</STH>
                     <STH sortKey="environment" sort={vSort} onSort={toggleV}>Environment</STH>
                     <STH sortKey="owner" sort={vSort} onSort={toggleV}>Owner</STH>
@@ -504,6 +554,8 @@ export default function DiscoveryCenter({ initialTab = "verified" }) {
                 ) : (
                   <>
                     <STH sortKey="agent_name" sort={pSort} onSort={toggleP}>Agent Name</STH>
+                    <STH sortKey="asset_type" sort={pSort} onSort={toggleP}>Type</STH>
+                    <STH sortKey="discovery_status" sort={pSort} onSort={toggleP}>Discovery</STH>
                     <STH sortKey="discovery_source" sort={pSort} onSort={toggleP}>Source</STH>
                     <STH sortKey="confidence_score" sort={pSort} onSort={toggleP}>Confidence</STH>
                     <STH sortKey="first_seen_at" sort={pSort} onSort={toggleP}>First Detected</STH>
@@ -515,16 +567,18 @@ export default function DiscoveryCenter({ initialTab = "verified" }) {
             <tbody>
               {filtered.length === 0 ? (
                 <tr>
-                  <td colSpan={7} style={{ textAlign: "center", padding: 32, color: T.textMute, fontFamily: MONO, fontSize: 13 }}>
-                    {search ? "No agents match your search" : tab === "verified" ? "No verified agents yet" : "No potential agents to review"}
+                  <td colSpan={8} style={{ textAlign: "center", padding: 32, color: T.textMute, fontFamily: MONO, fontSize: 13 }}>
+                    {search ? "No agents match your search" : tab === "verified" ? "No verified agents yet" : tab === "historical" ? "No historical agents" : tab === "likely" ? "No likely agents" : "No potential agents to review"}
                   </td>
                 </tr>
               ) : filtered.map(agent => {
                 const id = agent.agent_id || agent.id;
                 const isBusy = busy[id];
-                return tab === "verified" ? (
+                return (tab === "verified" || tab === "historical") ? (
                   <tr key={id}>
                     <TD><span style={{ fontFamily: MONO, color: T.accent }}>{agent.agent_name || agent.agent_id_raw || id}</span></TD>
+                    <TD><AssetTypeBadge assetType={agent.asset_type} /></TD>
+                    <TD><DiscoveryStatusBadge status={agent.discovery_status} /></TD>
                     <TD><span style={{ color: T.textDim }}>{agent.team || "—"}</span></TD>
                     <TD>
                       {agent.environment && agent.environment !== "Unknown"
@@ -546,6 +600,8 @@ export default function DiscoveryCenter({ initialTab = "verified" }) {
                 ) : (
                   <tr key={id}>
                     <TD><span style={{ fontFamily: MONO, color: T.warn }}>{agent.agent_name || agent.agent_id_raw || id}</span></TD>
+                    <TD><AssetTypeBadge assetType={agent.asset_type} /></TD>
+                    <TD><DiscoveryStatusBadge status={agent.discovery_status} /></TD>
                     <TD><SourceBadge source={agent.discovery_source} /></TD>
                     <TD><ConfidenceBadge score={agent.confidence_score} /></TD>
                     <TD><span style={{ fontFamily: MONO, color: T.textDim, fontSize: 12 }}>{relativeTime(agent.first_seen_at || agent.created_at)}</span></TD>
