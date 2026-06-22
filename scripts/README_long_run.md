@@ -67,14 +67,39 @@ npm run dev
 | `PLATFORM_ADMIN_PASSWORD` | **Yes** | — | Password for the platform admin account |
 | `BASE_URL` | No | `http://localhost:8000` | Backend base URL |
 | `PLATFORM_ADMIN_EMAIL` | No | `admin@ai-asset-mgmt.local` | Platform admin email |
-| `ACME_ADMIN_EMAIL` | No | `admin@acme-ai.example.com` | Acme org admin email |
-| `ACME_ADMIN_PASSWORD` | No | `AcmeAdmin1!` | Acme org admin password |
+| `ACME_ADMIN_EMAIL` | No | `admin@acme.ai` | Acme org admin email |
+| `ACME_ADMIN_PASSWORD` | No | *(empty)* | Acme admin password. When set, the script auto-creates the user if absent |
 
-Set via the shell or a `.env` file (do not commit `.env`):
+**bash / zsh:**
 
 ```bash
 export PLATFORM_ADMIN_PASSWORD="your-admin-password-here"
+export ACME_ADMIN_EMAIL="admin@acme.ai"
+export ACME_ADMIN_PASSWORD="your-acme-password-here"
 export BASE_URL="http://localhost:8000"
+```
+
+**PowerShell:**
+
+```powershell
+$env:BASE_URL="http://localhost:8000"
+$env:PLATFORM_ADMIN_EMAIL="admin@ai-asset-mgmt.local"
+$env:PLATFORM_ADMIN_PASSWORD="YOUR_PLATFORM_ADMIN_PASSWORD"
+$env:ACME_ADMIN_EMAIL="admin@acme.ai"
+$env:ACME_ADMIN_PASSWORD="YOUR_ACME_ADMIN_PASSWORD"
+
+python scripts/long_run_synthetic_customer.py --fast-mode --duration-minutes 10 --skip-live-llm
+```
+
+---
+
+## Quick start (dry-run first)
+
+Check that the script can reach the backend without creating anything:
+
+```bash
+PLATFORM_ADMIN_PASSWORD='your-password' \
+  python scripts/long_run_synthetic_customer.py --dry-run
 ```
 
 ---
@@ -88,10 +113,12 @@ error)" in telemetry, which is sufficient to exercise the enforcement
 pipeline, relationship mapping, and agent discovery.
 
 ```bash
-# Terminal 3 — test runner
+# Terminal 3 — test runner (bash / zsh)
 cd /path/to/ai-asset-management
 
-PLATFORM_ADMIN_PASSWORD=your-password \
+PLATFORM_ADMIN_PASSWORD='your-password' \
+ACME_ADMIN_EMAIL='admin@acme.ai' \
+ACME_ADMIN_PASSWORD='your-acme-password' \
   python scripts/long_run_synthetic_customer.py \
   --fast-mode \
   --skip-live-llm
@@ -100,7 +127,8 @@ PLATFORM_ADMIN_PASSWORD=your-password \
 Override the duration while keeping fast intervals:
 
 ```bash
-PLATFORM_ADMIN_PASSWORD=your-password \
+PLATFORM_ADMIN_PASSWORD='your-password' \
+ACME_ADMIN_PASSWORD='your-acme-password' \
   python scripts/long_run_synthetic_customer.py \
   --fast-mode \
   --duration-minutes 2 \
@@ -137,6 +165,7 @@ usage: long_run_synthetic_customer.py [-h]
   [--admin-email EMAIL]
   [--admin-password PASSWORD]
   [--acme-admin-email EMAIL]
+  [--acme-admin-email EMAIL]
   [--acme-admin-password PASSWORD]
   [--concurrency N]
   [--strict]
@@ -144,6 +173,7 @@ usage: long_run_synthetic_customer.py [-h]
   [--skip-live-llm]
   [--include-rate-limit]
   [--fast-mode]
+  [--dry-run]
 ```
 
 | Flag | Description |
@@ -151,12 +181,16 @@ usage: long_run_synthetic_customer.py [-h]
 | `--duration-hours N` | Run for N hours (default 8) |
 | `--duration-minutes N` | Run for N minutes (overrides hours) |
 | `--base-url URL` | Backend base URL (default `http://localhost:8000`) |
+| `--admin-email EMAIL` | Platform admin email (default `admin@ai-asset-mgmt.local`) |
+| `--acme-admin-email EMAIL` | Acme org admin email (default `admin@acme.ai`) |
+| `--acme-admin-password PW` | Acme admin password; auto-creates user if absent when set |
 | `--concurrency N` | Concurrent traffic workers (default 3) |
 | `--strict` | Treat endpoint-not-found (404) as a failure |
 | `--strict-live` | Fail if provider credentials are missing |
 | `--skip-live-llm` | Accept 502/503 from proxy (no provider creds needed) |
 | `--include-rate-limit` | Run rate-limit burst test after main loop |
 | `--fast-mode` | Short intervals; default 10-min duration |
+| `--dry-run` | Check health then exit without creating resources |
 
 ---
 

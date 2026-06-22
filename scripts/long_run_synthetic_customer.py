@@ -22,7 +22,10 @@ Required env vars:
 Optional env vars:
     BASE_URL                     default: http://localhost:8000
     PLATFORM_ADMIN_EMAIL         default: admin@ai-asset-mgmt.local
-    ACME_ADMIN_PASSWORD          default: AcmeAdmin1!
+    ACME_ADMIN_EMAIL             default: admin@acme.ai
+    ACME_ADMIN_PASSWORD          Password for the Acme admin user.  When set,
+                                 the script will create that user in the Acme
+                                 org if it does not already exist.
 """
 from __future__ import annotations
 
@@ -144,8 +147,10 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--base-url",         default=os.getenv("BASE_URL", "http://localhost:8000"))
     p.add_argument("--admin-email",      default=os.getenv("PLATFORM_ADMIN_EMAIL", "admin@ai-asset-mgmt.local"))
     p.add_argument("--admin-password",   default=os.getenv("PLATFORM_ADMIN_PASSWORD", ""))
-    p.add_argument("--acme-admin-email", default=os.getenv("ACME_ADMIN_EMAIL", "admin@acme-ai.example.com"))
-    p.add_argument("--acme-admin-password", default=os.getenv("ACME_ADMIN_PASSWORD", "AcmeAdmin1!"))
+    p.add_argument("--acme-admin-email", default=os.getenv("ACME_ADMIN_EMAIL", "admin@acme.ai"),
+                   help="Acme org admin email (default: admin@acme.ai)")
+    p.add_argument("--acme-admin-password", default=os.getenv("ACME_ADMIN_PASSWORD", ""),
+                   help="Acme admin password; when set, user is auto-created if absent")
     p.add_argument("--other-admin-email", default="admin@otherco-ai.example.com")
     p.add_argument("--other-admin-password", default="OtherCoAdmin1!")
     p.add_argument("--concurrency",      type=int, default=3,
@@ -160,6 +165,8 @@ def _parse_args() -> argparse.Namespace:
                    help="Include rate limit test (sends >60 requests on same key)")
     p.add_argument("--fast-mode",        action="store_true",
                    help="Use shorter intervals; default 10-min duration unless overridden")
+    p.add_argument("--dry-run",          action="store_true",
+                   help="Print configuration and check health, then exit without running traffic")
     return p.parse_args()
 
 
@@ -451,16 +458,75 @@ async def setup_create_org(
     return None
 
 
+async def setup_ensure_acme_user(
+    client: httpx.AsyncClient, base: str, args: argparse.Namespace,
+    state: State, evlog: EventLog,
+) -> None:
+    """Create the Acme admin user in the Acme org if it does not already exist.
+
+    Uses the platform admin token with X-View-Org so no Acme token is needed.
+    Requires both state.acme_org_id and args.acme_admin_password to be set.
+    """
+    if not state.acme_org_id or not args.acme_admin_password:
+        if not state.acme_org_id:
+            _log.info("  Cannot ensure Acme user — org_id unknown")
+        else:
+            _log.info("  ACME_ADMIN_PASSWORD not set — skipping auto-create of %s",
+                      args.acme_admin_email)
+        return
+
+    _log.info("  Ensuring Acme admin user %s exists in org %s …",
+              args.acme_admin_email, state.acme_org_id)
+    view_header = {"X-View-Org": str(state.acme_org_id)}
+    user_body = {
+        "email":    args.acme_admin_email,
+        "name":     "Acme Admin",
+        "password": args.acme_admin_password,
+        "role":     "admin",
+        "team":     "Support",
+    }
+    st, data = await _post(
+        client, f"{base}/auth/users", user_body,
+        token=state.platform_token, headers=view_header,
+    )
+    if st in (200, 201):
+        _log.info("  Created Acme admin user: %s", args.acme_admin_email)
+        evlog.write("acme_user_ensure", email=args.acme_admin_email, result="created")
+    elif st == 409:
+        _log.info("  Acme admin user already exists: %s", args.acme_admin_email)
+        evlog.write("acme_user_ensure", email=args.acme_admin_email, result="exists")
+    else:
+        _log.warning("  Could not create Acme admin user %s: HTTP %s %s",
+                     args.acme_admin_email, st, str(data)[:80])
+        evlog.write("acme_user_ensure", email=args.acme_admin_email, result="fail", http=st)
+
+
 async def setup_acme_login(
     client: httpx.AsyncClient, base: str, args: argparse.Namespace,
     state: State, evlog: EventLog,
 ) -> bool:
     _log.info("[setup] Acme admin login …")
     token = await _login(client, base, args.acme_admin_email, args.acme_admin_password)
+
+    if not token and args.acme_admin_password and state.acme_org_id:
+        # Login failed but we have a password — try to create the user first
+        _log.info("  Login failed — attempting to ensure user exists in Acme org …")
+        await setup_ensure_acme_user(client, base, args, state, evlog)
+        token = await _login(client, base, args.acme_admin_email, args.acme_admin_password)
+
     if not token:
+        print(
+            "\nAcme admin login failed.\n"
+            f"This script expects an Acme user:\n"
+            f"  {args.acme_admin_email}\n\n"
+            "Set ACME_ADMIN_PASSWORD to the password for that user, or let the "
+            "platform admin create/reset it.",
+            file=sys.stderr,
+        )
         _log.error("  Acme admin login failed for %s", args.acme_admin_email)
-        evlog.write("acme_login", result="fail")
+        evlog.write("acme_login", result="fail", email=args.acme_admin_email)
         return False
+
     state.acme_token = token
     # Verify /auth/me
     st, data = await _get(client, f"{base}/auth/me", token=token)
@@ -1651,13 +1717,29 @@ async def _main() -> int:
     _log.info("=" * 60)
     _log.info("AI Asset Management — Long-Run Synthetic Customer Test")
     _log.info("=" * 60)
-    _log.info("Base URL:     %s", base)
-    _log.info("Duration:     %.1f min (%.2f hr)", duration_secs / 60, duration_secs / 3600)
-    _log.info("Concurrency:  %d workers", args.concurrency)
-    _log.info("Fast mode:    %s", args.fast_mode)
-    _log.info("Skip live LLM:%s", args.skip_live_llm)
-    _log.info("Event log:    %s", evlog_path)
+    _log.info("Base URL:       %s", base)
+    _log.info("Platform admin: %s", args.admin_email)
+    _log.info("Acme admin:     %s", args.acme_admin_email)
+    _log.info("Acme password:  %s", "set" if args.acme_admin_password else "NOT SET (login will be attempted as-is)")
+    _log.info("Duration:       %.1f min (%.2f hr)", duration_secs / 60, duration_secs / 3600)
+    _log.info("Concurrency:    %d workers", args.concurrency)
+    _log.info("Fast mode:      %s", args.fast_mode)
+    _log.info("Skip live LLM:  %s", args.skip_live_llm)
+    _log.info("Dry run:        %s", args.dry_run)
+    _log.info("Event log:      %s", evlog_path)
     _log.info("")
+
+    if args.dry_run:
+        _log.info("DRY RUN — checking health then exiting (no resources created)")
+        async with httpx.AsyncClient(verify=False) as client:
+            ok = await setup_health(client, base, evlog)
+        evlog.close()
+        if ok:
+            _log.info("DRY RUN complete — backend is reachable at %s", base)
+            return 0
+        else:
+            _log.error("DRY RUN failed — backend not reachable at %s", base)
+            return 1
 
     state   = State()
     counter = Counter()
