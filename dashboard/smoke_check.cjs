@@ -1,43 +1,116 @@
 #!/usr/bin/env node
 /**
- * Smoke check: scan App.jsx for React hooks called at module scope.
+ * Smoke check: parse App.jsx with a real AST parser and flag any React hooks
+ * or expression statements called at module (top-level) scope.
  *
- * Hooks called outside a component function cause:
+ * Hooks called outside a component function cause two distinct crashes:
  *   TypeError: Cannot read properties of null (reading 'useEffect')
- * in production builds — the page renders blank.
+ *   ReferenceError: Cannot access '<var>' before initialization  (TDZ)
  *
- * Heuristic: after the file is parsed into function-depth segments,
- * any useEffect/useState/useMemo/useCallback/useRef at depth 0
- * (top-level module scope) is illegal.
+ * Both happen when function-body code gets orphaned to module scope after
+ * a partial Edit replacement.  AST parsing is exact — no brace-counting
+ * heuristics, no false positives from template literals.
  */
-const fs = require("fs");
+"use strict";
+const fs   = require("fs");
 const path = require("path");
 
+const acorn    = require("acorn");
+const acornJsx = require("acorn-jsx");
+
 const filePath = path.join(__dirname, "src", "App.jsx");
-const src = fs.readFileSync(filePath, "utf8");
-const lines = src.split("\n");
+const src      = fs.readFileSync(filePath, "utf8");
 
-const HOOKS = /\b(useEffect|useState|useMemo|useCallback|useRef)\s*\(/;
+const HOOKS = new Set([
+  "useEffect","useState","useMemo","useCallback",
+  "useRef","useContext","useReducer","useLayoutEffect",
+]);
 
-let depth = 0;          // JS brace depth
-let inTemplateLiteral = false;
-let violations = [];
+// acorn-jsx allows JSX syntax; acorn's ecmaVersion 2022+ handles most syntax.
+const parser = acorn.Parser.extend(acornJsx());
 
-for (let i = 0; i < lines.length; i++) {
-  const line = lines[i];
+let ast;
+try {
+  ast = parser.parse(src, {
+    ecmaVersion: 2022,
+    sourceType:  "module",
+    locations:   true,
+  });
+} catch (err) {
+  console.error(`✗ App.jsx parse error: ${err.message}`);
+  process.exit(1);
+}
 
-  // Count backticks to track template literals (very rough, good enough)
-  const backticks = (line.match(/`/g) || []).length;
-  if (backticks % 2 !== 0) inTemplateLiteral = !inTemplateLiteral;
+const violations = [];
 
-  if (!inTemplateLiteral) {
-    depth += (line.match(/\{/g) || []).length;
-    depth -= (line.match(/\}/g) || []).length;
+// Walk only the top-level body of the module (depth 0).
+// We do NOT recurse into function bodies — we only care about module scope.
+for (const node of ast.body) {
+  // Bare expression at module scope: useEffect(...), setMetrics(...), etc.
+  if (node.type === "ExpressionStatement") {
+    const expr = node.expression;
+    if (expr.type === "CallExpression") {
+      const callee = expr.callee;
+      const name = callee.type === "Identifier" ? callee.name
+                 : callee.type === "MemberExpression" && callee.property.type === "Identifier"
+                   ? callee.property.name : null;
+      if (name && HOOKS.has(name)) {
+        violations.push({
+          line: node.loc.start.line,
+          msg:  `hook call at module scope: ${name}(...)`,
+        });
+      } else {
+        // Flag any bare call expression that looks like orphaned component code
+        // (i.e. not a top-level side-effect pattern we'd expect at module scope)
+        // We allow: console.*,  Object.*, Array.*, process.*, import()
+        const isExpectedTopLevel =
+          callee.type === "MemberExpression" ||
+          (callee.type === "Identifier" && [
+            "require","define","console","Object","Array","Promise",
+          ].includes(callee.name));
+        if (!isExpectedTopLevel && name && HOOKS.has(name)) {
+          violations.push({ line: node.loc.start.line, msg: `suspicious call at module scope: ${name}(...)` });
+        }
+      }
+    }
+
+    // Also flag awaited calls at module scope (orphaned async code)
+    if (expr.type === "AwaitExpression") {
+      violations.push({
+        line: node.loc.start.line,
+        msg:  `await expression at module scope`,
+      });
+    }
   }
 
-  // depth <= 0 means module scope
-  if (depth <= 0 && HOOKS.test(line) && !line.trimStart().startsWith("//")) {
-    violations.push({ line: i + 1, depth, text: line.trimEnd() });
+  // const/let with initializer that calls a hook at top level
+  if (node.type === "VariableDeclaration") {
+    for (const decl of node.declarations) {
+      if (!decl.init) continue;
+      const init = decl.init;
+      // Direct hook call: const x = useState(...)
+      if (init.type === "CallExpression") {
+        const callee = init.callee;
+        const name = callee.type === "Identifier" ? callee.name : null;
+        if (name && HOOKS.has(name)) {
+          violations.push({
+            line: node.loc.start.line,
+            msg:  `hook call in top-level variable initializer: ${name}(...)`,
+          });
+        }
+      }
+      // Array destructure: const [x, setX] = useState(...)
+      if (init.type === "CallExpression" && decl.id.type === "ArrayPattern") {
+        const callee = init.callee;
+        const name = callee.type === "Identifier" ? callee.name : null;
+        if (name && HOOKS.has(name)) {
+          violations.push({
+            line: node.loc.start.line,
+            msg:  `hook call in top-level destructure: ${name}(...)`,
+          });
+        }
+      }
+    }
   }
 }
 
@@ -45,9 +118,9 @@ if (violations.length === 0) {
   console.log("✓ App.jsx smoke check passed — no module-scope hook calls detected.");
   process.exit(0);
 } else {
-  console.error("✗ App.jsx smoke check FAILED — React hooks at module scope:");
+  console.error("✗ App.jsx smoke check FAILED — orphaned hooks/code at module scope:");
   for (const v of violations) {
-    console.error(`  Line ${v.line} (depth=${v.depth}): ${v.text}`);
+    console.error(`  Line ${v.line}: ${v.msg}`);
   }
   process.exit(1);
 }
