@@ -1618,9 +1618,6 @@ function SecurityPage() {
   const [auditHasMore,  setAuditHasMore]  = useState(false);
   const [auditLoading,  setAuditLoading]  = useState(false);
   const AUDIT_PAGE = 50;
-  const [scanText,  setScanText]  = useState("");
-  const [scanResult,setScanResult]= useState(null);
-  const [scanning,  setScanning]  = useState(false);
   const [pForm,     setPForm]     = useState({ team:"", rule_type:"block_model", value:"*" });
   const [saving,    setSaving]    = useState(false);
   const [loading,   setLoading]   = useState(true);
@@ -1662,18 +1659,6 @@ function SecurityPage() {
 
   useEffect(() => { load(); }, [load]);
 
-  const handleScan = async () => {
-    if (!scanText.trim()) return;
-    setScanning(true);
-    try {
-      const r = await authFetch(`${BASE}/security/scan`, {
-        method: "POST",
-        body: JSON.stringify({ text: scanText }),
-      });
-      setScanResult(await r.json());
-    } finally { setScanning(false); }
-  };
-
   const handleCreatePolicy = async (e) => {
     e.preventDefault();
     setSaving(true);
@@ -1697,7 +1682,6 @@ function SecurityPage() {
 
   if (loading) return <div style={{ color:T.textDim, fontFamily:FONT_MONO, padding:24 }}>Loading security data…</div>;
 
-  const sensitiveCount = audit.filter((r) => r.sensitive).length;
   const blockedCount   = audit.filter((r) => r.blocked).length;
 
   return (
@@ -1768,39 +1752,28 @@ function SecurityPage() {
         )}
       </div>
 
-      {/* Sensitive content check — optional, collapsed by default */}
-      <Card title="Sensitive Content Check" subtitle="Optional — test text for credential or sensitive-data patterns">
-        <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
-          <textarea
-            value={scanText} onChange={(e) => setScanText(e.target.value)}
-            placeholder="Paste text to check for sensitive data patterns…"
-            rows={4}
-            style={{ width:"100%", background:T.panelHi, color:T.text, border:`1px solid ${T.border}`, borderRadius:4, padding:"10px 12px", fontSize:12, fontFamily:FONT_MONO, resize:"vertical", boxSizing:"border-box" }}
-          />
-          <div style={{ display:"flex", gap:10, alignItems:"center" }}>
-            <button onClick={handleScan} disabled={scanning || !scanText.trim()}
-              style={{ background:T.accent, color:T.bg, border:"none", padding:"8px 18px", borderRadius:4, fontSize:12, fontFamily:FONT_MONO, fontWeight:600, cursor:"pointer", opacity:scanning?0.6:1 }}>
-              {scanning ? "Scanning…" : "Check Text"}
-            </button>
-            {scanResult && (
-              <Pill color={scanResult.is_sensitive ? T.crit : T.accent}>
-                {scanResult.is_sensitive ? `${scanResult.findings.length} finding${scanResult.findings.length===1?"":"s"}` : "Clean"}
-              </Pill>
-            )}
-          </div>
-          {scanResult?.findings?.length > 0 && (
-            <div style={{ display:"flex", flexDirection:"column", gap:6, marginTop:4 }}>
-              {scanResult.findings.map((f, i) => (
-                <div key={i} style={{ display:"flex", alignItems:"center", gap:12, padding:"8px 12px", background:T.panelHi, borderLeft:`2px solid ${sevColor(f.severity)}`, borderRadius:3 }}>
-                  <Pill color={sevColor(f.severity)}>{f.severity}</Pill>
-                  <span style={{ fontFamily:FONT_MONO, fontSize:12, color:T.text }}>{f.type}</span>
-                  <span style={{ fontFamily:FONT_MONO, fontSize:11, color:T.textMute }}>{f.sample}</span>
-                </div>
-              ))}
-            </div>
-          )}
+      {/* Operational Risk Overview */}
+      <div style={{ background:T.panel, border:`1px solid ${T.border}`, borderRadius:8, padding:"20px 24px" }}>
+        <div style={{ fontSize:13, fontWeight:600, color:T.text, letterSpacing:"-0.01em", marginBottom:4 }}>Operational Risk Overview</div>
+        <div style={{ fontSize:12, color:T.textMute, marginBottom:16 }}>
+          Monitor policy violations, unmanaged AI assets, blocked requests, runtime anomalies, and governance events across your AI operations.
         </div>
-      </Card>
+        <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fill, minmax(180px, 1fr))", gap:12 }}>
+          {[
+            { label:"Live Alerts",    value:alerts.length,                                         color:alerts.length>0?T.crit:T.accent,   note:"Active findings" },
+            { label:"Policy Rules",   value:policies.length,                                        color:T.info,                            note:"Enforcement rules" },
+            { label:"Blocked Reqs",  value:blockedCount,                                           color:blockedCount>0?T.crit:T.accent,    note:"Last 50 audited" },
+            { label:"Critical Alerts", value:alerts.filter(a=>a.sev==="critical").length,          color:T.crit,                            note:"Require immediate review" },
+            { label:"Warning Alerts", value:alerts.filter(a=>a.sev==="warning").length,            color:T.warn,                            note:"Monitor closely" },
+          ].map(({ label, value, color, note }) => (
+            <div key={label} style={{ background:T.panelHi, border:`1px solid ${T.border}`, borderRadius:6, padding:"14px 16px" }}>
+              <div style={{ fontSize:9, fontFamily:FONT_MONO, color:T.textMute, letterSpacing:"0.12em", textTransform:"uppercase", marginBottom:8 }}>{label}</div>
+              <div style={{ fontSize:26, fontWeight:700, color, letterSpacing:"-0.02em", lineHeight:1 }}>{value}</div>
+              <div style={{ fontSize:10, color:T.textMute, fontFamily:FONT_MONO, marginTop:6 }}>{note}</div>
+            </div>
+          ))}
+        </div>
+      </div>
 
       {/* Policy rules — admin only */}
       {isAdmin && <Card title="Model Policy Rules" subtitle="Control which models each team is allowed to use. Team must match exactly what's sent in chat requests.">
