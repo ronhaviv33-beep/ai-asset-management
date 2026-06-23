@@ -98,7 +98,10 @@ async def upsert_provider_credential(
             reason = "provider returned an error — check the key is correct and active"
         raise HTTPException(status_code=422, detail=f"Key validation failed: {reason}")
 
-    enc   = encrypt_credential(raw_key)
+    try:
+        enc = encrypt_credential(raw_key)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
     last4 = raw_key[-4:] if len(raw_key) >= 4 else raw_key
 
     existing = db.query(ProviderCredential).filter(

@@ -201,7 +201,13 @@ export async function upsertProviderCredential(provider, key, base_url) {
   })
   if (!r || !r.ok) {
     const err = await r.json().catch(() => ({}))
-    throw new Error(err.detail || 'Failed to save credential')
+    const msg =
+      (typeof err.detail === 'string' ? err.detail : null) ||
+      err.detail?.message ||
+      err.error?.message ||
+      null
+    if (!msg) console.error('provider credential save error', r.status, err)
+    throw new Error(msg || 'Failed to save credential — check console for details')
   }
   return r.json()
 }
