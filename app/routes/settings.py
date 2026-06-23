@@ -59,10 +59,21 @@ async def upsert_provider_credential(
     raw_key  = body.get("key", "").strip()
     base_url = body.get("base_url")
 
+    _log = logging.getLogger("ai_asset_mgmt")
+
     if provider not in ("openai", "anthropic", "google", "local"):
-        raise HTTPException(status_code=400, detail="provider must be openai|anthropic|google|local")
+        raise HTTPException(status_code=400, detail={
+            "error": {"type": "invalid_provider", "message": "provider must be openai|anthropic|google|local"}
+        })
     if not raw_key:
-        raise HTTPException(status_code=400, detail="key is required")
+        raise HTTPException(status_code=400, detail={
+            "error": {"type": "invalid_provider_key", "provider": provider, "message": "key is required"}
+        })
+
+    # Resolve org name for error messages (non-fatal if missing)
+    from app.models import Organization
+    org = db.query(Organization).filter(Organization.id == actor.organization_id).first()
+    org_name = org.name if org else f"org:{actor.organization_id}"
 
     async def _validate():
         timeout = 10.0
@@ -87,18 +98,31 @@ async def upsert_provider_credential(
     except Exception as exc:
         msg = str(exc).lower()
         if "incorrect api key" in msg or "invalid api key" in msg or "unauthorized" in msg or "401" in msg:
-            reason = "key was rejected as invalid or inactive"
+            reason = f"The {provider.capitalize()} key was rejected as invalid or inactive. Verify the key is correct and active."
         elif "rate limit" in msg or "429" in msg:
-            reason = "rate limit hit during validation — wait a moment and try again"
+            reason = "Rate limit hit during validation — wait a moment and try again."
         elif "quota" in msg or "402" in msg or "insufficient" in msg:
-            reason = "account quota exceeded or billing issue on this key"
+            reason = "Account quota exceeded or billing issue on this key. Check the provider account."
         elif "timeout" in msg or "connect" in msg:
-            reason = "could not reach the provider — check network or base_url"
+            reason = f"Could not reach {provider.capitalize()} — check network connectivity or base_url."
         else:
-            reason = "provider returned an error — check the key is correct and active"
-        raise HTTPException(status_code=422, detail=f"Key validation failed: {reason}")
+            reason = f"{provider.capitalize()} returned an error during key validation. Check the key is correct and active."
+        _log.warning("provider credential validation failed: org=%s provider=%s reason=%s exc=%s",
+                     actor.organization_id, provider, reason, exc)
+        raise HTTPException(status_code=422, detail={
+            "error": {"type": "invalid_provider_key", "provider": provider, "organization": org_name, "message": reason}
+        })
 
-    enc   = encrypt_credential(raw_key)
+    try:
+        enc = encrypt_credential(raw_key)
+    except RuntimeError as exc:
+        err_str = str(exc)
+        err_type = "encryption_key_missing" if "not set" in err_str else "encryption_failed"
+        _log.error("credential encryption error: org=%s provider=%s type=%s", actor.organization_id, provider, err_type)
+        raise HTTPException(status_code=503, detail={
+            "error": {"type": err_type, "message": err_str}
+        })
+
     last4 = raw_key[-4:] if len(raw_key) >= 4 else raw_key
 
     existing = db.query(ProviderCredential).filter(
@@ -112,9 +136,7 @@ async def upsert_provider_credential(
         existing.base_url      = base_url
         existing.is_active     = True
         invalidate_org_client(actor.organization_id, provider)
-        logging.getLogger("ai_asset_mgmt").info(
-            "Provider credential updated: org=%s provider=%s by=%s", actor.organization_id, provider, actor.email
-        )
+        _log.info("Provider credential updated: org=%s provider=%s by=%s", actor.organization_id, provider, actor.email)
     else:
         db.add(ProviderCredential(
             organization_id=actor.organization_id,
@@ -123,11 +145,22 @@ async def upsert_provider_credential(
             last4=last4,
             base_url=base_url,
         ))
-        logging.getLogger("ai_asset_mgmt").info(
-            "Provider credential created: org=%s provider=%s by=%s", actor.organization_id, provider, actor.email
-        )
+        _log.info("Provider credential created: org=%s provider=%s by=%s", actor.organization_id, provider, actor.email)
 
-    db.commit()
+    try:
+        db.commit()
+    except Exception as exc:
+        db.rollback()
+        _log.error("DB commit failed saving provider credential: org=%s provider=%s exc=%s",
+                   actor.organization_id, provider, exc)
+        raise HTTPException(status_code=503, detail={
+            "error": {
+                "type": "provider_credential_save_failed",
+                "provider": provider,
+                "message": f"Failed to save credential to the database. Contact your administrator. ({type(exc).__name__})",
+            }
+        })
+
     return {"provider": provider, "last4": last4, "status": "saved"}
 
 
