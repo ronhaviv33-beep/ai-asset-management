@@ -109,8 +109,8 @@ def get_client_for_org(organization_id: int, model: str, db) -> AsyncOpenAI:
     Looks up the org's encrypted credential in provider_credentials, decrypts
     it, and returns an AsyncOpenAI client keyed to that org+provider pair.
 
-    Raises HTTPException 402 (with a clear message) if the org has no credential
-    for this provider — never falls back to the platform env-var keys.
+    Raises HTTPException 424 (with a structured error body) if the org has no
+    credential for this provider — never falls back to the platform env-var keys.
 
     The only org that reaches env-var keys is the platform (internal) org,
     and only via the standard _get_client() path, not through this function.
@@ -135,12 +135,20 @@ def get_client_for_org(organization_id: int, model: str, db) -> AsyncOpenAI:
     if cred is None:
         org = db.query(Organization).filter(Organization.id == organization_id).first()
         org_name = org.name if org else f"org:{organization_id}"
+        provider_display = provider.capitalize()
         raise HTTPException(
-            status_code=402,
-            detail=(
-                f"No {provider} credential configured for organization '{org_name}'. "
-                f"An admin must add the {provider.upper()}_API_KEY in Settings → Provider Keys."
-            ),
+            status_code=424,
+            detail={
+                "error": {
+                    "type": "provider_not_configured",
+                    "provider": provider,
+                    "organization": org_name,
+                    "message": (
+                        f"No {provider_display} provider credential is configured for this organization. "
+                        "Configure one in Settings → Organization AI Providers."
+                    ),
+                }
+            },
         )
 
     try:

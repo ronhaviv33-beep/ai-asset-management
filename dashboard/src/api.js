@@ -81,6 +81,18 @@ export async function fetchOrganizations() {
   return r.json()
 }
 
+export async function createOrganization(data) {
+  const r = await authFetch(`${BASE}/admin/organizations`, {
+    method: 'POST',
+    body: JSON.stringify(data),
+  })
+  if (!r || !r.ok) {
+    const err = await r.json().catch(() => ({}))
+    throw new Error(err.detail || 'Failed to create organization')
+  }
+  return r.json()
+}
+
 export async function fetchUsers() {
   const r = await authFetch(`${BASE}/auth/users`)
   if (!r || !r.ok) throw new Error('Failed to fetch users')
