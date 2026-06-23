@@ -4241,13 +4241,24 @@ function SettingsPage() {
       } else if (resp.status === 429) {
         setGwResult({ ok: null, msg: `Rate limited (429) — gateway is reachable`, status: 429 });
       } else {
-        const body = await resp.json().catch(() => ({}));
-        const err = body.detail?.error;
+        const body = await resp.json().catch(() => null);
+        const err = body?.detail?.error || body?.error;
         if (err?.type === "provider_not_configured") {
           setGwResult({ ok: false, msg: `No ${err.provider || "AI"} provider credential is configured for this organization. Add it under Settings → Organization AI Providers.`, status: resp.status });
+        } else if (err?.type === "provider_auth_failed") {
+          setGwResult({ ok: false, msg: err.message || "Provider authentication failed. Check the key in Settings → Organization AI Providers.", status: resp.status });
+        } else if (err?.type === "provider_model_error") {
+          setGwResult({ ok: false, msg: err.message || `Model not found or not available on this account.`, status: resp.status });
+        } else if (err?.type === "provider_upstream_error") {
+          setGwResult({ ok: false, msg: err.message || "Provider returned an error. Try again in a moment.", status: resp.status });
         } else {
-          const detail = (typeof body.detail === "string" ? body.detail : body.detail?.error?.message) || body.error?.message || resp.statusText || "Unknown error";
-          setGwResult({ ok: false, msg: `Gateway error: ${detail}`, status: resp.status });
+          const msg =
+            (body && typeof body.detail === "string" ? body.detail : null) ||
+            err?.message ||
+            body?.message ||
+            (body ? null : resp.statusText) ||
+            `HTTP ${resp.status} — check the server logs for details`;
+          setGwResult({ ok: false, msg: `Gateway error: ${msg}`, status: resp.status });
         }
       }
     } catch (e) {
@@ -6326,11 +6337,13 @@ export default function App() {
   // Platform guard mode badge (best-effort — silent if unauthenticated)
   const [platformMode,       setPlatformMode]       = useState(null);
   const [pricingLastUpdated, setPricingLastUpdated] = useState(null);
+  const [secretWarnings,     setSecretWarnings]     = useState([]);
   useEffect(() => {
     if (!user) return;
     fetchHealth().then(h => {
       setPlatformMode(h?.platform_mode);
       setPricingLastUpdated(h?.pricing_last_updated || null);
+      setSecretWarnings(h?.secret_warnings || []);
     }).catch(() => {});
   }, [user]);
 
@@ -6584,6 +6597,21 @@ export default function App() {
         </header>
 
         {!["dashboard","home","agent_inventory","discovery","governance","relationship_map","security_intel","ecosystem","cost","pricing","budgets","security","chat","users","apikeys","settings","integrations","onboarding","welcome"].includes(page) && <FilterBar filters={filters} setFilters={setFilters} allTeams={allTeams} allAgents={allAgents} user={user} rolesMap={rolesMap}/>}
+
+        {/* Admin-only: surface missing/invalid secrets detected at startup */}
+        {user?.role === "admin" && secretWarnings.length > 0 && (
+          <div style={{ marginBottom:16 }}>
+            {secretWarnings.map((w, i) => (
+              <div key={i} style={{ display:"flex", alignItems:"flex-start", gap:10, background:"rgba(239,68,68,0.08)", border:`1px solid ${T.crit}`, borderRadius:6, padding:"10px 14px", marginBottom:8 }}>
+                <span style={{ color:T.crit, fontFamily:FONT_MONO, fontSize:13, flexShrink:0 }}>⚠</span>
+                <div>
+                  <div style={{ color:T.crit, fontFamily:FONT_MONO, fontSize:11, fontWeight:600, letterSpacing:"0.05em", textTransform:"uppercase", marginBottom:3 }}>Configuration Warning</div>
+                  <div style={{ color:T.text, fontSize:12, fontFamily:FONT_MONO, lineHeight:1.5 }}>{w}</div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
 
         <PageErrorBoundary key={`${page}-${demoMode}`}>{renderPage()}</PageErrorBoundary>
       </main>

@@ -257,6 +257,7 @@ class HealthResponse(BaseModel):
     circuit_breaker: dict
     tenancy_hardened: bool
     pricing_last_updated: str = ""
+    secret_warnings: list[str] = []
 
 
 class LoginRequest(BaseModel):
