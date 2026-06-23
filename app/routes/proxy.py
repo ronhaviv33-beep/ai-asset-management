@@ -7,7 +7,7 @@ import uuid as _uuid_mod
 import time as _time_mod
 
 from fastapi import APIRouter, Depends, HTTPException, Request as FastAPIRequest
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from slowapi import Limiter
 from sqlalchemy.orm import Session
 
@@ -852,7 +852,7 @@ async def _openai_compat_chat_impl(
         "policy_warnings":   budget_warnings,
         "security_findings": findings_list,
     }
-    return resp_dict
+    return JSONResponse(content=resp_dict)
 
 
 @router.post("/v1/chat/completions", tags=["POST — Ask / Create"])
@@ -1114,7 +1114,7 @@ async def _anthropic_compat_messages_impl(
         _set_org_config(db, org_id, "demo_mode", False)
 
     _anth_cost, _anth_pricing_estimated = calculate_cost(resp_model, pt, ct)
-    return {
+    return JSONResponse(content={
         "id":            msg_id,
         "type":          "message",
         "role":          "assistant",
@@ -1135,7 +1135,7 @@ async def _anthropic_compat_messages_impl(
             "policy_warnings":   budget_warnings,
             "security_findings": findings_list,
         },
-    }
+    })
 
 
 @router.post("/v1/messages", tags=["POST — Ask / Create"])
