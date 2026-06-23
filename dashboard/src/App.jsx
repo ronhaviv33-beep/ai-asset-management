@@ -4241,13 +4241,24 @@ function SettingsPage() {
       } else if (resp.status === 429) {
         setGwResult({ ok: null, msg: `Rate limited (429) — gateway is reachable`, status: 429 });
       } else {
-        const body = await resp.json().catch(() => ({}));
-        const err = body.detail?.error;
+        const body = await resp.json().catch(() => null);
+        const err = body?.detail?.error || body?.error;
         if (err?.type === "provider_not_configured") {
           setGwResult({ ok: false, msg: `No ${err.provider || "AI"} provider credential is configured for this organization. Add it under Settings → Organization AI Providers.`, status: resp.status });
+        } else if (err?.type === "provider_auth_failed") {
+          setGwResult({ ok: false, msg: err.message || "Provider authentication failed. Check the key in Settings → Organization AI Providers.", status: resp.status });
+        } else if (err?.type === "provider_model_error") {
+          setGwResult({ ok: false, msg: err.message || `Model not found or not available on this account.`, status: resp.status });
+        } else if (err?.type === "provider_upstream_error") {
+          setGwResult({ ok: false, msg: err.message || "Provider returned an error. Try again in a moment.", status: resp.status });
         } else {
-          const detail = (typeof body.detail === "string" ? body.detail : body.detail?.error?.message) || body.error?.message || resp.statusText || "Unknown error";
-          setGwResult({ ok: false, msg: `Gateway error: ${detail}`, status: resp.status });
+          const msg =
+            (body && typeof body.detail === "string" ? body.detail : null) ||
+            err?.message ||
+            body?.message ||
+            (body ? null : resp.statusText) ||
+            `HTTP ${resp.status} — check the server logs for details`;
+          setGwResult({ ok: false, msg: `Gateway error: ${msg}`, status: resp.status });
         }
       }
     } catch (e) {

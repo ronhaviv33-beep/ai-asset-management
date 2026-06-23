@@ -40,6 +40,122 @@ from app.org_config import (
 
 router = APIRouter()
 
+import logging as _proxy_log
+_log = _proxy_log.getLogger("ai_asset_mgmt")
+
+
+def _classify_upstream_exc(exc: Exception, model: str) -> tuple[int, dict]:
+    """
+    Map an openai SDK (or generic) exception to an HTTP status and a structured
+    error dict that safe to return to the caller.
+
+    Returns (status_code, detail_dict) — always structured, never a plain string.
+    """
+    msg = str(exc)
+    msg_lo = msg.lower()
+
+    try:
+        import openai as _oai
+        if isinstance(exc, _oai.AuthenticationError):
+            return 401, {
+                "error": {
+                    "type": "provider_auth_failed",
+                    "provider": "openai",
+                    "message": (
+                        "The provider API key was rejected (authentication failed). "
+                        "Re-enter the key in Settings → Organization AI Providers."
+                    ),
+                }
+            }
+        if isinstance(exc, _oai.PermissionDeniedError):
+            return 403, {
+                "error": {
+                    "type": "provider_auth_failed",
+                    "provider": "openai",
+                    "message": (
+                        "The provider key does not have permission to use this model. "
+                        "Check the key's access level in the provider dashboard."
+                    ),
+                }
+            }
+        if isinstance(exc, _oai.NotFoundError):
+            return 404, {
+                "error": {
+                    "type": "provider_model_error",
+                    "provider": "openai",
+                    "model": model,
+                    "message": (
+                        f"Model '{model}' was not found or is not available on this account. "
+                        "Check the model name and your provider plan."
+                    ),
+                }
+            }
+        if isinstance(exc, _oai.RateLimitError):
+            return 429, {
+                "error": {
+                    "type": "provider_upstream_error",
+                    "provider": "openai",
+                    "message": "Provider rate limit reached. Wait a moment and try again.",
+                }
+            }
+        if isinstance(exc, _oai.BadRequestError):
+            return 400, {
+                "error": {
+                    "type": "provider_upstream_error",
+                    "provider": "openai",
+                    "message": f"Provider rejected the request: {msg}",
+                }
+            }
+        if isinstance(exc, (_oai.APITimeoutError, _oai.APIConnectionError)):
+            return 504, {
+                "error": {
+                    "type": "provider_upstream_error",
+                    "provider": "openai",
+                    "message": "Could not reach the AI provider (timeout or connection error). Check network connectivity.",
+                }
+            }
+        if isinstance(exc, _oai.APIStatusError):
+            return 502, {
+                "error": {
+                    "type": "provider_upstream_error",
+                    "provider": "openai",
+                    "message": f"Provider returned an error (HTTP {exc.status_code}): {msg}",
+                }
+            }
+    except ImportError:
+        pass
+
+    # Generic fallback — classify by string content
+    if "auth" in msg_lo or "401" in msg_lo or "incorrect api key" in msg_lo or "invalid api key" in msg_lo:
+        return 401, {
+            "error": {
+                "type": "provider_auth_failed",
+                "message": "Provider authentication failed. Check the key in Settings → Organization AI Providers.",
+            }
+        }
+    if "not found" in msg_lo or "404" in msg_lo:
+        return 404, {
+            "error": {
+                "type": "provider_model_error",
+                "model": model,
+                "message": f"Model '{model}' not found. Check the model name.",
+            }
+        }
+    if "timeout" in msg_lo or "connect" in msg_lo:
+        return 504, {
+            "error": {
+                "type": "provider_upstream_error",
+                "message": "Provider connection timed out.",
+            }
+        }
+
+    return 502, {
+        "error": {
+            "type": "provider_upstream_error",
+            "message": f"Upstream provider error: {msg}",
+        }
+    }
+
 
 # ── In-memory cache: known (org_id, asset_key) pairs already in asset_registry ──
 _known_assets: set[tuple[int, str]] = set()
@@ -698,26 +814,19 @@ async def openai_compat_chat(
     # ── Non-streaming ─────────────────────────────────────────────────────────
     try:
         resp_dict = await proxy_chat_complete(body, org_client=org_client)
-    except RuntimeError as exc:
-        import logging; logging.getLogger("ai_asset_mgmt").error("Service error", exc_info=True)
-        tel.save_blocked(db, team=team, agent=agent, model=model,
-                         prompt=last_user, reason=f"upstream_error: {exc}",
-                         sensitive=(scan_result.is_sensitive if scan_result else False),
-                         sensitive_findings=findings_list, organization_id=org_id,
-                         asset_key=asset_key, agent_id_raw=agent_id_raw,
-                         agent_version=agent_version, team_raw=team_raw,
-                         environment_raw=environment_raw, redact_pii_text=_pii_redact)
-        raise HTTPException(status_code=503, detail="Service temporarily unavailable. Please try again.")
     except Exception as exc:
-        import logging; logging.getLogger("ai_asset_mgmt").error("LLM error", exc_info=True)
+        if isinstance(exc, HTTPException):
+            raise
+        _log.error("upstream LLM error: %s", exc, exc_info=True)
         tel.save_blocked(db, team=team, agent=agent, model=model,
-                         prompt=last_user, reason=f"upstream_error: {exc}",
+                         prompt=last_user, reason=f"upstream_error: {type(exc).__name__}: {exc}",
                          sensitive=(scan_result.is_sensitive if scan_result else False),
                          sensitive_findings=findings_list, organization_id=org_id,
                          asset_key=asset_key, agent_id_raw=agent_id_raw,
                          agent_version=agent_version, team_raw=team_raw,
                          environment_raw=environment_raw, redact_pii_text=_pii_redact)
-        raise HTTPException(status_code=502, detail="Upstream LLM error. Please try again.")
+        status, detail = _classify_upstream_exc(exc, model)
+        raise HTTPException(status_code=status, detail=detail)
 
     latency_ms = resp_dict.pop("_latency_ms", 0.0)
     usage      = resp_dict.get("usage", {})
@@ -947,26 +1056,19 @@ async def anthropic_compat_messages(
     # ── Non-streaming ─────────────────────────────────────────────────────────
     try:
         resp_dict = await proxy_chat_complete(oai_body, org_client=org_client)
-    except RuntimeError as exc:
-        import logging; logging.getLogger("ai_asset_mgmt").error("Service error", exc_info=True)
-        tel.save_blocked(db, team=team, agent=agent, model=model,
-                         prompt=last_user, reason=f"upstream_error: {exc}",
-                         sensitive=(scan_result.is_sensitive if scan_result else False),
-                         sensitive_findings=findings_list, organization_id=org_id,
-                         asset_key=asset_key, agent_id_raw=agent_id_raw,
-                         agent_version=agent_version, team_raw=team_raw,
-                         environment_raw=environment_raw, redact_pii_text=_pii_redact)
-        raise HTTPException(status_code=503, detail="Service temporarily unavailable. Please try again.")
     except Exception as exc:
-        import logging; logging.getLogger("ai_asset_mgmt").error("LLM error", exc_info=True)
+        if isinstance(exc, HTTPException):
+            raise
+        _log.error("upstream LLM error: %s", exc, exc_info=True)
         tel.save_blocked(db, team=team, agent=agent, model=model,
-                         prompt=last_user, reason=f"upstream_error: {exc}",
+                         prompt=last_user, reason=f"upstream_error: {type(exc).__name__}: {exc}",
                          sensitive=(scan_result.is_sensitive if scan_result else False),
                          sensitive_findings=findings_list, organization_id=org_id,
                          asset_key=asset_key, agent_id_raw=agent_id_raw,
                          agent_version=agent_version, team_raw=team_raw,
                          environment_raw=environment_raw, redact_pii_text=_pii_redact)
-        raise HTTPException(status_code=502, detail="Upstream LLM error. Please try again.")
+        status, detail = _classify_upstream_exc(exc, model)
+        raise HTTPException(status_code=status, detail=detail)
 
     latency_ms = resp_dict.pop("_latency_ms", 0.0)
     usage      = resp_dict.get("usage", {})
