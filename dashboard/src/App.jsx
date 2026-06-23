@@ -3240,7 +3240,7 @@ print(llm.invoke("Hello").content)`,
             {
               n:"1", color:T.warn, done: false,
               label: "Add your provider key",
-              detail: <>Go to <strong style={{ color:T.accent }}>Settings → Provider Keys</strong> and paste your OpenAI / Anthropic / Google key. It's encrypted at rest — only the last 4 chars are shown after saving.</>,
+              detail: <>Go to <strong style={{ color:T.accent }}>Settings → Organization AI Providers</strong> and paste your OpenAI / Anthropic / Google key. It's encrypted at rest — only the last 4 chars are shown after saving.</>,
               action: isAdmin ? { label:"Open Settings →", href:"settings" } : null,
             },
             {
@@ -3374,7 +3374,7 @@ print(llm.invoke("Hello").content)`,
             ))}
           </div>
           <div style={{ marginTop:10, fontSize:10, color:T.textMute, fontFamily:FONT_MONO }}>
-            Provider key must be configured in <strong style={{ color:T.accent }}>Settings → Provider Keys</strong>
+            Provider key must be configured in <strong style={{ color:T.accent }}>Settings → Organization AI Providers</strong>
           </div>
         </Card>
       </div>
@@ -3620,7 +3620,7 @@ function ProviderCredentialsSection() {
   };
 
   return (
-    <Card title="Provider API Keys" subtitle="Per-org encrypted credentials. Keys are stored as Fernet ciphertext — only the last 4 characters are shown here.">
+    <Card title="Organization AI Providers" subtitle="Encrypted BYOK credentials used by this organization for AI runtime calls. Keys are write-only — only the last 4 characters are shown.">
       {err && <div style={{ color:T.crit, fontFamily:FONT_MONO, fontSize:12, marginBottom:12 }}>{err}</div>}
       {loading ? (
         <div style={{ color:T.textDim, fontFamily:FONT_MONO, fontSize:12, padding:12 }}>Loading…</div>
@@ -4105,7 +4105,7 @@ function SettingsPage() {
       <div style={{ display:"flex", alignItems:"flex-start", justifyContent:"space-between", gap:16 }}>
         <div>
           <div style={{ fontSize:20, fontWeight:500, color:T.text, letterSpacing:"-0.01em" }}>Settings</div>
-          <div style={{ fontSize:12, color:T.textDim, marginTop:4 }}>Configure provider keys, guard modes, and platform behaviour.</div>
+          <div style={{ fontSize:12, color:T.textDim, marginTop:4 }}>Configure your organization's AI providers, guard modes, and platform settings.</div>
         </div>
         <div style={{ display:"flex", alignItems:"center", gap:10, flexShrink:0 }}>
           {gwResult && (
@@ -4142,37 +4142,63 @@ function SettingsPage() {
         </div>
       </div>
 
-      {/* Provider API keys (BYOK) */}
+      {/* Organization AI Providers (BYOK) */}
       <ProviderCredentialsSection />
+
+      {/* Which keys should I configure? */}
+      <div style={{ background:T.panel, border:`1px solid ${T.border}`, borderRadius:8, padding:"16px 20px" }}>
+        <div style={{ fontSize:12, fontWeight:600, color:T.text, marginBottom:8 }}>Which keys should I configure?</div>
+        <div style={{ fontSize:12, color:T.textMute, lineHeight:1.7, marginBottom:10 }}>
+          Use <strong style={{ color:T.text }}>Organization AI Providers</strong> for your agents' model access.
+          Use <strong style={{ color:T.text }}>Platform Configuration</strong> only for deployment-level infrastructure settings.
+        </div>
+        <div style={{ display:"flex", flexDirection:"column", gap:5 }}>
+          {[
+            { label:"Organization AI Providers", desc:"Encrypted BYOK keys used by this organization's agents and gateway traffic to call AI models." },
+            { label:"Platform Configuration",    desc:"Runtime environment settings used by the platform deployment itself (API keys, JWT secret)." },
+            { label:"Gateway API Keys",          desc:"Keys issued to applications and agents to authenticate calls through the gateway." },
+          ].map(({ label, desc }) => (
+            <div key={label} style={{ display:"flex", gap:8, fontSize:11, color:T.textMute, fontFamily:FONT_MONO }}>
+              <span style={{ color:T.accent, flexShrink:0 }}>▸</span>
+              <span><strong style={{ color:T.textDim }}>{label}:</strong> {desc}</span>
+            </div>
+          ))}
+        </div>
+      </div>
 
       {/* Guard modes */}
       <GuardModesSection />
 
-      {/* Keys table */}
-      <Card title="Provider Keys" subtitle="Values are write-only — status only shown after save">
+      {/* Platform Configuration (environment / deployment-level keys) */}
+      <Card title="Platform Configuration" subtitle="Infrastructure-level settings used by the AI Operations platform. Stored in the server environment.">
         {err && <div style={{ color:T.crit, fontFamily:FONT_MONO, fontSize:12, marginBottom:12 }}>{err}</div>}
         <table style={{ width:"100%", borderCollapse:"collapse" }}>
           <thead>
             <tr style={{ borderBottom:`1px solid ${T.border}` }}>
-              {["Provider","Env Variable","Models Unlocked","Status",""].map(h => (
+              {["Service","Env Variable","Purpose","Status",""].map(h => (
                 <th key={h} style={{ textAlign:"left", padding:"10px 8px", fontFamily:FONT_MONO, fontSize:10, letterSpacing:"0.1em", textTransform:"uppercase", color:T.textDim, fontWeight:500 }}>{h}</th>
               ))}
             </tr>
           </thead>
           <tbody>
             {keys.map(k => {
-              const isEdit = editing === k.key;
-              const sc = statusColor(k);
-              const models = PROVIDER_MODELS[k.provider] || [];
+              const isEdit   = editing === k.key;
+              const sc       = statusColor(k);
+              const isAuth   = k.provider === "Auth";
+              const models   = PROVIDER_MODELS[k.provider] || [];
+              const SERVICE_LABELS = { OpenAI:"OpenAI Runtime", Anthropic:"Anthropic Runtime", Google:"Google Runtime", "Local LLM":"Local LLM Runtime", Auth:"Auth Secret" };
+              const serviceLabel = SERVICE_LABELS[k.provider] || k.provider;
               return (
                 <React.Fragment key={k.key}>
-                  <tr style={{ borderBottom: isEdit ? "none" : `1px solid ${T.border}` }}>
-                    <td style={{ padding:"14px 8px", fontSize:13, color:T.text, fontWeight:500 }}>{k.provider}</td>
+                  <tr style={{ borderBottom: isEdit ? "none" : `1px solid ${T.border}`, opacity: isAuth ? 0.7 : 1 }}>
+                    <td style={{ padding:"14px 8px", fontSize:13, color: isAuth ? T.textDim : T.text, fontWeight:500 }}>{serviceLabel}</td>
                     <td style={{ padding:"14px 8px", fontFamily:FONT_MONO, fontSize:12, color:T.textDim }}>{k.key}</td>
                     <td style={{ padding:"14px 8px", fontSize:11, color:T.textMute }}>
-                      {models.length > 0
-                        ? <span style={{ fontFamily:FONT_MONO }}>{models.join(", ")}</span>
-                        : <span style={{ color:T.textMute }}>—</span>}
+                      {isAuth
+                        ? <span style={{ fontFamily:FONT_MONO, color:T.textMute }}>JWT signing — dashboard and API authentication</span>
+                        : models.length > 0
+                          ? <span style={{ fontFamily:FONT_MONO }}>{models.join(", ")}</span>
+                          : <span style={{ color:T.textMute }}>—</span>}
                     </td>
                     <td style={{ padding:"14px 8px" }}>
                       <Pill color={sc}>{statusLabel(k)}</Pill>
@@ -4194,7 +4220,7 @@ function SettingsPage() {
                           <input
                             autoFocus
                             type="password"
-                            placeholder={`Paste new value for ${k.key}…`}
+                            placeholder={`Paste new value for ${k.key} (${serviceLabel})…`}
                             value={editVal}
                             onChange={e => setEditVal(e.target.value)}
                             onKeyDown={e => { if (e.key==="Enter") handleSave(k.key); if (e.key==="Escape") cancelEdit(); }}
@@ -4369,7 +4395,7 @@ message = client.messages.create(
       content: (
         <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
           <div style={{ fontSize: 12, color: T.textDim, lineHeight: 1.65 }}>
-            Go to <InlineNav label="Settings → Provider Keys" target="settings" /> and paste your
+            Go to <InlineNav label="Settings → Organization AI Providers" target="settings" /> and paste your
             OpenAI, Anthropic, or Google API key.{" "}
             <strong style={{ color: T.warn }}>Until this is done, every request fails with a 402
             "no credential configured" error.</strong> This is the step that stops most setups cold.
@@ -4450,7 +4476,7 @@ message = client.messages.create(
                 label: "Provider key",
                 example: "sk-…  /  sk-ant-…",
                 color: T.textMute,
-                note: "Stored in Settings → Provider Keys. Never in your app.",
+                note: "Stored in Settings → Organization AI Providers. Never in your app.",
               },
               {
                 label: "Gateway key",
