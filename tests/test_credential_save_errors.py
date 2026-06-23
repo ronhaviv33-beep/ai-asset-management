@@ -82,10 +82,12 @@ with patch("openai.AsyncOpenAI") as MockOAI:
 check("status is 422 (not 500)", r.status_code == 422,
       f"got {r.status_code}: {r.text[:120]}")
 body = r.json()
-detail = body.get("detail", "")
-check("detail is a string", isinstance(detail, str), str(detail))
-check("detail contains 'Key validation failed'", "Key validation failed" in detail, detail)
-check("detail contains actionable reason", "invalid" in detail.lower() or "rejected" in detail.lower(), detail)
+err = body.get("detail", {}).get("error", {}) if isinstance(body.get("detail"), dict) else {}
+check("error.type == invalid_provider_key", err.get("type") == "invalid_provider_key", str(err))
+check("error.provider == openai", err.get("provider") == "openai", str(err))
+check("error.message contains actionable text",
+      "invalid" in (err.get("message") or "").lower() or "rejected" in (err.get("message") or "").lower(),
+      str(err))
 
 # ── Missing encryption key → 503 with clear message ───────────────────────────
 print("\n=== missing CREDENTIAL_ENCRYPTION_KEY → 503 ===")
@@ -111,8 +113,11 @@ with patch("openai.AsyncOpenAI") as MockOAI2:
 check("status is 503 (not 500)", r.status_code == 503,
       f"got {r.status_code}: {r.text[:120]}")
 body = r.json()
-detail = body.get("detail", "")
-check("detail contains CREDENTIAL_ENCRYPTION_KEY hint", "CREDENTIAL_ENCRYPTION_KEY" in detail, detail)
+err = body.get("detail", {}).get("error", {}) if isinstance(body.get("detail"), dict) else {}
+check("error.type is encryption_key_missing or encryption_failed",
+      err.get("type") in ("encryption_key_missing", "encryption_failed"), str(err))
+check("error.message contains CREDENTIAL_ENCRYPTION_KEY hint",
+      "CREDENTIAL_ENCRYPTION_KEY" in (err.get("message") or ""), str(err))
 
 # ── Successful save ────────────────────────────────────────────────────────────
 print("\n=== successful save → 201 ===")

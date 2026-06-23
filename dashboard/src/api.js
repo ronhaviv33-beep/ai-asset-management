@@ -203,6 +203,7 @@ export async function upsertProviderCredential(provider, key, base_url) {
     const err = await r.json().catch(() => ({}))
     const msg =
       (typeof err.detail === 'string' ? err.detail : null) ||
+      err.detail?.error?.message ||
       err.detail?.message ||
       err.error?.message ||
       null

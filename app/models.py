@@ -98,7 +98,13 @@ def _fernet() -> Fernet:
             "CREDENTIAL_ENCRYPTION_KEY is not set. "
             "Generate one with: python -c \"from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())\""
         )
-    return Fernet(raw.encode())
+    try:
+        return Fernet(raw.encode())
+    except Exception as exc:
+        raise RuntimeError(
+            f"CREDENTIAL_ENCRYPTION_KEY is set but is not a valid Fernet key: {exc}. "
+            "Regenerate with: python -c \"from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())\""
+        ) from exc
 
 def encrypt_credential(plaintext: str) -> str:
     return _fernet().encrypt(plaintext.encode()).decode()
