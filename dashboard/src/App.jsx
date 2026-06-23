@@ -6326,11 +6326,13 @@ export default function App() {
   // Platform guard mode badge (best-effort — silent if unauthenticated)
   const [platformMode,       setPlatformMode]       = useState(null);
   const [pricingLastUpdated, setPricingLastUpdated] = useState(null);
+  const [secretWarnings,     setSecretWarnings]     = useState([]);
   useEffect(() => {
     if (!user) return;
     fetchHealth().then(h => {
       setPlatformMode(h?.platform_mode);
       setPricingLastUpdated(h?.pricing_last_updated || null);
+      setSecretWarnings(h?.secret_warnings || []);
     }).catch(() => {});
   }, [user]);
 
@@ -6584,6 +6586,21 @@ export default function App() {
         </header>
 
         {!["dashboard","home","agent_inventory","discovery","governance","relationship_map","security_intel","ecosystem","cost","pricing","budgets","security","chat","users","apikeys","settings","integrations","onboarding","welcome"].includes(page) && <FilterBar filters={filters} setFilters={setFilters} allTeams={allTeams} allAgents={allAgents} user={user} rolesMap={rolesMap}/>}
+
+        {/* Admin-only: surface missing/invalid secrets detected at startup */}
+        {user?.role === "admin" && secretWarnings.length > 0 && (
+          <div style={{ marginBottom:16 }}>
+            {secretWarnings.map((w, i) => (
+              <div key={i} style={{ display:"flex", alignItems:"flex-start", gap:10, background:"rgba(239,68,68,0.08)", border:`1px solid ${T.crit}`, borderRadius:6, padding:"10px 14px", marginBottom:8 }}>
+                <span style={{ color:T.crit, fontFamily:FONT_MONO, fontSize:13, flexShrink:0 }}>⚠</span>
+                <div>
+                  <div style={{ color:T.crit, fontFamily:FONT_MONO, fontSize:11, fontWeight:600, letterSpacing:"0.05em", textTransform:"uppercase", marginBottom:3 }}>Configuration Warning</div>
+                  <div style={{ color:T.text, fontSize:12, fontFamily:FONT_MONO, lineHeight:1.5 }}>{w}</div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
 
         <PageErrorBoundary key={`${page}-${demoMode}`}>{renderPage()}</PageErrorBoundary>
       </main>

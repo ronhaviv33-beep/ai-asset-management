@@ -240,6 +240,51 @@ except Exception as _e:
 _START_TIME = time.time()
 
 
+def _check_secrets() -> list[str]:
+    """
+    Validate required secrets at startup. Returns a list of warning strings
+    for any that are missing or invalid. Exposed in /health so monitoring can
+    catch misconfigured deployments before users hit cryptic errors.
+    """
+    import logging as _logging
+    _log = _logging.getLogger("ai_asset_mgmt")
+    warnings: list[str] = []
+
+    raw = os.getenv("CREDENTIAL_ENCRYPTION_KEY", "")
+    if not raw:
+        msg = (
+            "CREDENTIAL_ENCRYPTION_KEY is not set. "
+            "Organization AI Providers (BYOK credential storage) will not work. "
+            "Generate a key with: python -c \"from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())\""
+        )
+        _log.error("STARTUP SECRET MISSING: %s", msg)
+        warnings.append(msg)
+    else:
+        try:
+            from cryptography.fernet import Fernet as _Fernet
+            _Fernet(raw.encode())
+        except Exception as exc:
+            msg = (
+                f"CREDENTIAL_ENCRYPTION_KEY is set but is not a valid Fernet key: {exc}. "
+                "Organization AI Providers will not work. "
+                "Regenerate with: python -c \"from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())\""
+            )
+            _log.error("STARTUP SECRET INVALID: %s", msg)
+            warnings.append(msg)
+
+    if warnings and os.getenv("FAIL_FAST_ON_MISSING_SECRETS", "").lower() == "true":
+        _log.critical(
+            "FAIL_FAST_ON_MISSING_SECRETS=true — aborting startup due to missing secrets."
+        )
+        import sys as _sys
+        _sys.exit(1)
+
+    return warnings
+
+
+_SECRET_WARNINGS: list[str] = _check_secrets()
+
+
 def _check_tenancy_hardened() -> bool:
     """
     Return True if telemetry.organization_id is NOT NULL (tenancy fully enforced).
@@ -482,17 +527,8 @@ async def security_headers(request: Request, call_next):
 
 # ─── Health ───────────────────────────────────────────────────────────────────
 
-@app.get("/health", tags=["GET — Read / Monitor"])
-@app.get("/api/health", tags=["GET — Read / Monitor"])
-def root():
-    return {"status": "AI Asset Management Gateway Running", "version": "0.5.0"}
-
-
-# ─── Platform Admin ────────────────────────────────────────────────────────────
-
-# ─── Health ───────────────────────────────────────────────────────────────────
-
 @app.get("/health", response_model=HealthResponse, tags=["GET — Read / Monitor"])
+@app.get("/api/health", response_model=HealthResponse, tags=["GET — Read / Monitor"])
 def health(db: Session = Depends(get_db)):
     """Liveness + readiness. Public — customers use this for their own fallback logic."""
     db_ok = True
@@ -501,8 +537,9 @@ def health(db: Session = Depends(get_db)):
         db.execute(text("SELECT 1"))
     except Exception:
         db_ok = False
+    has_warnings = bool(_SECRET_WARNINGS)
     return HealthResponse(
-        status="ok" if db_ok else "degraded",
+        status="degraded" if (not db_ok or has_warnings) else "ok",
         db=db_ok,
         uptime_seconds=int(time.time() - _START_TIME),
         platform_mode=_PLATFORM_MODE,
@@ -513,6 +550,7 @@ def health(db: Session = Depends(get_db)):
         },
         tenancy_hardened=_TENANCY_HARDENED,
         pricing_last_updated=PRICING_LAST_UPDATED,
+        secret_warnings=_SECRET_WARNINGS,
     )
 
 # ── Serve React frontend (production combined-server mode) ─────────────────
