@@ -113,26 +113,42 @@ def get_all(db: Session, organization_id: int | None, skip: int = 0, limit: int 
 
 def get_summary(db: Session, organization_id: int | None,
                 team_scope: str | None = None, demo_mode: bool = False) -> TelemetrySummary:
-    q = db.query(Telemetry).filter(
+    _empty = TelemetrySummary(
+        total_requests=0, total_tokens=0, total_cost_usd=0.0,
+        avg_latency_ms=0.0, models_used=[], teams=[],
+    )
+    base = db.query(Telemetry).filter(
         Telemetry.blocked == False,
         Telemetry.organization_id == organization_id,
         Telemetry.is_demo == demo_mode,
     )
     if team_scope is not None:
-        q = q.filter(Telemetry.team == team_scope)
-    rows = q.all()
-    if not rows:
-        return TelemetrySummary(
-            total_requests=0, total_tokens=0, total_cost_usd=0.0,
-            avg_latency_ms=0.0, models_used=[], teams=[],
-        )
+        base = base.filter(Telemetry.team == team_scope)
+
+    agg = base.with_entities(
+        func.count(Telemetry.id),
+        func.coalesce(func.sum(Telemetry.total_tokens), 0),
+        func.coalesce(func.sum(Telemetry.cost_usd), 0.0),
+        func.coalesce(func.avg(Telemetry.latency_ms), 0.0),
+    ).first()
+
+    if not agg or (agg[0] or 0) == 0:
+        return _empty
+
+    models = sorted(
+        r[0] for r in base.with_entities(Telemetry.model).distinct().all() if r[0]
+    )
+    teams = sorted(
+        r[0] for r in base.with_entities(Telemetry.team).distinct().all() if r[0]
+    )
+
     return TelemetrySummary(
-        total_requests=len(rows),
-        total_tokens=sum(r.total_tokens for r in rows),
-        total_cost_usd=round(sum(r.cost_usd for r in rows), 8),
-        avg_latency_ms=round(sum(r.latency_ms for r in rows) / len(rows), 2),
-        models_used=sorted({r.model for r in rows}),
-        teams=sorted({r.team for r in rows}),
+        total_requests=int(agg[0] or 0),
+        total_tokens=int(agg[1] or 0),
+        total_cost_usd=round(float(agg[2] or 0.0), 8),
+        avg_latency_ms=round(float(agg[3] or 0.0), 2),
+        models_used=models,
+        teams=teams,
     )
 
 

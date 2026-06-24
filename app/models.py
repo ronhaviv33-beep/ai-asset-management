@@ -91,7 +91,13 @@ def calculate_cost(model: str, prompt_tokens: int, completion_tokens: int) -> tu
 # Generate with: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
 # Set in .env / Render dashboard (sync:false). Never commit.
 
+_fernet_instance: "Fernet | None" = None
+
+
 def _fernet() -> Fernet:
+    global _fernet_instance
+    if _fernet_instance is not None:
+        return _fernet_instance
     raw = os.getenv("CREDENTIAL_ENCRYPTION_KEY", "")
     if not raw:
         raise RuntimeError(
@@ -99,7 +105,8 @@ def _fernet() -> Fernet:
             "Generate one with: python -c \"from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())\""
         )
     try:
-        return Fernet(raw.encode())
+        _fernet_instance = Fernet(raw.encode())
+        return _fernet_instance
     except Exception as exc:
         raise RuntimeError(
             f"CREDENTIAL_ENCRYPTION_KEY is set but is not a valid Fernet key: {exc}. "

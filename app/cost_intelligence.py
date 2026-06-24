@@ -522,11 +522,19 @@ def get_billing_periods(db: Session, org_id: int) -> list[dict]:
         ProviderBilling.organization_id == org_id,
     ).order_by(ProviderBilling.billing_period_end.desc()).all()
 
+    if not records:
+        return []
+
+    # Fetch all reconciliations in one query instead of N+1.
+    billing_ids = [r.id for r in records]
+    recons = db.query(CostReconciliation).filter(
+        CostReconciliation.billing_id.in_(billing_ids),
+    ).all()
+    recon_map: dict[int, CostReconciliation] = {rc.billing_id: rc for rc in recons}
+
     result = []
     for r in records:
-        recon = db.query(CostReconciliation).filter(
-            CostReconciliation.billing_id == r.id,
-        ).first()
+        recon = recon_map.get(r.id)
         result.append({
             "id":                    r.id,
             "provider":              r.provider,

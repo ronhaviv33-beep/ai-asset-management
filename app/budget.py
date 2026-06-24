@@ -87,6 +87,23 @@ def check(db: Session, organization_id: int, team: str, agent: str) -> dict:
         BudgetRule.team.in_([team, "*"]),
     ).all()
 
+    if not rules:
+        return {"allowed": True, "blocked_by": None, "warnings": []}
+
+    # Cache spend results within this call — deduplicates identical (team, agent, period)
+    # lookups when multiple rules share the same scope (common for alert+block pairs).
+    _spend_cache: dict[tuple, float] = {}
+
+    def _spend(rule_team: str, rule_agent: str | None, period: str) -> float:
+        effective_team = team if rule_team == "*" else rule_team
+        key = (effective_team, rule_agent, period)
+        if key not in _spend_cache:
+            _spend_cache[key] = get_spend(
+                db, organization_id=organization_id,
+                team=effective_team, agent=rule_agent, period=period,
+            )
+        return _spend_cache[key]
+
     blocked_by = None
     warnings = []
 
@@ -94,9 +111,7 @@ def check(db: Session, organization_id: int, team: str, agent: str) -> dict:
         if rule.agent and rule.agent != agent:
             continue
 
-        spend = get_spend(db, organization_id=organization_id,
-                          team=rule.team if rule.team != "*" else team,
-                          agent=rule.agent, period=rule.period)
+        spend = _spend(rule.team, rule.agent, rule.period)
         pct = spend / rule.limit_usd if rule.limit_usd > 0 else 0
 
         if pct >= 1.0 and rule.action == "block":

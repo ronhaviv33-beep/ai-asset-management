@@ -196,9 +196,12 @@ def _mask(s: str) -> str:
 
 
 class EventLog:
+    _FLUSH_INTERVAL = 10  # flush to disk every N writes
+
     def __init__(self, path: Path) -> None:
         self._path = path
         self._fh = open(path, "a", encoding="utf-8")
+        self._write_count = 0
 
     def write(self, event_type: str, **kwargs: Any) -> None:
         record = {
@@ -211,9 +214,12 @@ class EventLog:
             if any(s in k.lower() for s in ("password", "secret", "token")) and isinstance(record[k], str):
                 record[k] = _mask(record[k])
         self._fh.write(json.dumps(record) + "\n")
-        self._fh.flush()
+        self._write_count += 1
+        if self._write_count % self._FLUSH_INTERVAL == 0:
+            self._fh.flush()
 
     def close(self) -> None:
+        self._fh.flush()
         self._fh.close()
 
 
