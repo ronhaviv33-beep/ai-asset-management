@@ -35,7 +35,7 @@ POST /v1/chat/completions  (OpenAI-compatible)
 POST /v1/messages          (Anthropic-compatible)
       │
       ├─ JWT or opaque Bearer auth
-      ├─ Optional runtime safety check (sensitive content, opt-in per org)
+      ├─ Optional runtime safety check (opt-in per org)
       ├─ Model policy check         (allowlist / blocklist per team)
       ├─ Budget enforcement         (daily / monthly per team + agent)
       ├─ Relationship capture       (X-MCP-* / X-Agent-* / X-Workflow-* headers)
@@ -140,7 +140,7 @@ Three-layer financial analysis:
 
 ### AI Operational Risk & Compliance
 - **Operational risk center** — monitor unmanaged assets, high-capability agents, policy violations, budget anomalies, and unusual runtime behavior
-- 8 automated detection rules (cost spike, large prompt, workflow failure spike, premium model misuse, after-hours activity, agent loop, unapproved model, sensitive content)
+- 8 automated detection rules (cost spike, large prompt, workflow failure spike, premium model misuse, after-hours activity, agent loop, unapproved model, unvetted model)
 - Each alert includes root cause analysis and recommended remediation
 - Full audit log — expandable rows with prompt, response, block reason, and findings; load-more pagination
 - Optional sensitive-content checks — can be enabled per org for customers that want additional runtime safety signals
