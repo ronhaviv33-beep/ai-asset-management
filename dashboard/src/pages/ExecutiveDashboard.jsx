@@ -5,6 +5,7 @@ import {
   fetchCostIntelligence, fetchSecurityAlerts,
   fetchRelationships,
 } from "../api.js";
+import { relationshipEvidenceLabel } from "../discoveryStatus.js";
 
 const T = {
   bg: "#0A0B0F", panel: "#0F1117", panelHi: "#141823",
@@ -223,6 +224,23 @@ export default function ExecutiveDashboard({ onNavigate }) {
         </div>
       </div>
 
+      {/* ── Empty state — no agents discovered yet ──────────────────────────────── */}
+      {total === 0 && (
+        <div style={{ display: "flex", alignItems: "center", gap: 16, padding: "22px 26px", background: `${T.accent}0D`, border: `1px solid ${T.accent}33`, borderRadius: 10 }}>
+          <div style={{ fontSize: 28 }}>🛰</div>
+          <div style={{ flex: 1 }}>
+            <div style={{ fontSize: 14, fontWeight: 600, color: T.text, marginBottom: 4 }}>No agents discovered yet.</div>
+            <div style={{ fontSize: 12, color: T.textDim, lineHeight: 1.6 }}>
+              Send your first request through the gateway and we'll discover agents automatically — no manual registration required.
+            </div>
+          </div>
+          <button onClick={() => onNavigate?.("integrations")}
+            style={{ background: T.accent, color: "#001b10", border: "none", borderRadius: 6, padding: "9px 20px", fontSize: 12, fontWeight: 600, fontFamily: FONT, cursor: "pointer", whiteSpace: "nowrap" }}>
+            Start Setup →
+          </button>
+        </div>
+      )}
+
       {/* ── KPI Row — Agent Inventory ────────────────────────────────────────────── */}
       <div>
         <div style={{ fontSize: 9, fontFamily: MONO, color: T.textMute, letterSpacing: "0.14em", textTransform: "uppercase", marginBottom: 10 }}>
@@ -231,8 +249,8 @@ export default function ExecutiveDashboard({ onNavigate }) {
         <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
           <KpiCard label="Total AI Agents"   value={total}               sub="Across all teams"                                                                   onClick={() => onNavigate?.("agent_inventory")} />
           <KpiCard label="Managed Agents"    value={managed}             sub={total ? `${Math.round(managed / total * 100)}% of total` : "—"}  color={T.accent}  onClick={() => onNavigate?.("agent_inventory")} />
-          <KpiCard label="Unassigned"        value={unassigned}          sub="Requires action"                      color={unassigned  > 0 ? T.yellow : T.accent} onClick={() => onNavigate?.("governance")} />
-          <KpiCard label="Needs Validation"  value={needsValidation}     sub="Requires review"                      color={needsValidation > 0 ? T.warn : T.accent} onClick={() => onNavigate?.("discovery")} />
+          <KpiCard label="Needs Owner"       value={unassigned}          sub="Awaiting ownership review"            color={unassigned  > 0 ? T.yellow : T.accent} onClick={() => onNavigate?.("governance")} />
+          <KpiCard label="Needs Review"      value={needsValidation}     sub="Awaiting validation"                  color={needsValidation > 0 ? T.warn : T.accent} onClick={() => onNavigate?.("discovery")} />
           <KpiCard label="Monthly AI Spend"  value={fmtUSD(monthlyCost)} sub="Runtime estimate (30d)"               color={T.info}                               onClick={() => onNavigate?.("cost")} />
           <KpiCard label="High Risk Agents"  value={highRiskCount}       sub={highRiskCount > 0 ? "Immediate review" : "No critical risks"} color={highRiskCount > 0 ? T.crit : T.accent} onClick={() => onNavigate?.("security_intel")} />
         </div>
@@ -378,13 +396,12 @@ export default function ExecutiveDashboard({ onNavigate }) {
           <div>
             {/* Column headers */}
             <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr 80px 80px", gap: 12, padding: "0 4px 10px", borderBottom: `1px solid ${T.border}`, marginBottom: 4 }}>
-              {["Source Agent → Target System", "Relationship", "Evidence", "Confidence", "Requests"].map(h => (
+              {["Source Agent → Target System", "Relationship", "Evidence", "Strength", "Requests"].map(h => (
                 <div key={h} style={{ fontSize: 9, fontFamily: MONO, color: T.textMute, letterSpacing: "0.12em", textTransform: "uppercase" }}>{h}</div>
               ))}
             </div>
             {topRels.map((r, i) => {
-              const pct   = Math.round(r.confidence_score * 100);
-              const conf  = pct >= 80 ? T.accent : pct >= 70 ? T.warn : T.crit;
+              const ev    = relationshipEvidenceLabel(r);   // qualitative — no percentage
               const REL_COLOR = {
                 calls: T.info, uses_tool: T.teal, invokes_workflow: T.warn,
                 triggers: T.warn, writes_to: T.crit, reads_from: T.accent, sends_event_to: T.purple,
@@ -421,12 +438,13 @@ export default function ExecutiveDashboard({ onNavigate }) {
                   <div style={{ fontFamily: MONO, fontSize: 10, color: T.textMute }}>
                     {r.evidence_source.replace(/_/g, " ")}
                   </div>
-                  {/* Confidence */}
-                  <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
-                    <div style={{ flex: 1, background: T.panelHi, borderRadius: 2, height: 4, overflow: "hidden" }}>
-                      <div style={{ width: `${pct}%`, height: "100%", background: conf, borderRadius: 2 }} />
-                    </div>
-                    <span style={{ fontFamily: MONO, fontSize: 10, color: T.textMute, flexShrink: 0 }}>{pct}%</span>
+                  {/* Evidence strength (qualitative, not a percentage) */}
+                  <div style={{ display: "flex", alignItems: "center" }}>
+                    <span title={ev.why}
+                      style={{ padding: "2px 8px", borderRadius: 3, fontSize: 10, fontFamily: MONO,
+                        background: ev.color + "1A", color: ev.color, border: `1px solid ${ev.color}33`, whiteSpace: "nowrap" }}>
+                      {ev.label}
+                    </span>
                   </div>
                   {/* Request count */}
                   <div style={{ fontFamily: MONO, fontSize: 12, color: T.text, textAlign: "right" }}>
@@ -544,25 +562,27 @@ export default function ExecutiveDashboard({ onNavigate }) {
 
           {/* Governance coverage */}
           <div style={{ marginTop: 20, paddingTop: 16, borderTop: `1px solid ${T.border}` }}>
-            <div style={{ fontSize: 9, color: T.textMute, fontFamily: MONO, letterSpacing: "0.14em", textTransform: "uppercase", marginBottom: 12 }}>Governance Coverage</div>
+            <div style={{ fontSize: 9, color: T.textMute, fontFamily: MONO, letterSpacing: "0.14em", textTransform: "uppercase", marginBottom: 12 }}>Governance Review</div>
             {[
-              { label: "Ownership",   pct: total > 0 ? Math.round(managed / total * 100) : 0, color: T.accent, target: 90 },
-              { label: "Validated",   pct: total > 0 ? Math.round((total - needsValidation) / total * 100) : 0, color: T.info, target: 95 },
-            ].map(({ label, pct, color, target }) => (
-              <div key={label} style={{ marginBottom: 10 }}>
-                <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, color: T.textDim, marginBottom: 5 }}>
-                  <span>{label}</span>
-                  <span style={{ fontFamily: MONO }}>
-                    <span style={{ color }}>{pct}%</span>
-                    <span style={{ color: T.textMute }}> / {target}% target</span>
-                  </span>
+              { label: "Ownership review", value: managed,                  color: T.accent },
+              { label: "Validation review", value: total - needsValidation, color: T.info },
+            ].map(({ label, value, color }) => {
+              const remaining = Math.max(0, total - value);
+              const fill = total > 0 ? (value / total) * 100 : 0;
+              return (
+                <div key={label} style={{ marginBottom: 10 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, color: T.textDim, marginBottom: 5 }}>
+                    <span>{label}</span>
+                    <span style={{ fontFamily: MONO, color: remaining > 0 ? T.warn : T.accent }}>
+                      {remaining > 0 ? `${remaining} awaiting review` : "✓ all reviewed"}
+                    </span>
+                  </div>
+                  <div style={{ background: T.panelHi, borderRadius: 2, height: 5 }}>
+                    <div style={{ width: `${fill}%`, background: color, height: 5, borderRadius: 2, transition: "width 0.5s" }} />
+                  </div>
                 </div>
-                <div style={{ background: T.panelHi, borderRadius: 2, height: 5, position: "relative" }}>
-                  <div style={{ width: `${pct}%`, background: color, height: 5, borderRadius: 2, transition: "width 0.5s" }} />
-                  <div style={{ position: "absolute", top: -1, left: `${target}%`, width: 1, height: 7, background: T.textMute, opacity: 0.5 }} />
-                </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         </Panel>
       </div>

@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { T, FONT_UI, FONT_MONO } from "../theme.js";
-import { fetchAgentsSummary, fetchRelationships, BASE } from "../api.js";
+import { fetchAgentsSummary, fetchRelationships, fetchProviderCredentials, fetchApiKeys, BASE } from "../api.js";
 
 export default function SimpleIntegrationsPage({ onNavigate }) {
   const gatewayUrl = typeof BASE !== "undefined" && BASE.startsWith("http") ? BASE : window.location.origin;
@@ -8,24 +8,44 @@ export default function SimpleIntegrationsPage({ onNavigate }) {
   const [open,   setOpen]     = useState({ sdk_openai: true, sdk_anthropic: false, sdk_env: false, manual_openai: false, manual_curl: false });
   const [section, setSection] = useState(null);
   const [metrics, setMetrics] = useState({ agents: null, dependencies: null, workflows: null, platforms: null });
+  const [progress, setProgress] = useState({ provider: false, key: false, request: false, agent: false });
 
   const copy   = (id, text) => { navigator.clipboard.writeText(text).catch(() => {}); setCopied(id); setTimeout(() => setCopied(null), 2000); };
   const toggle = (k) => setOpen(o => ({ ...o, [k]: !o[k] }));
 
   useEffect(() => {
-    Promise.allSettled([fetchAgentsSummary(), fetchRelationships()]).then(([agRes, relRes]) => {
+    Promise.allSettled([
+      fetchAgentsSummary(), fetchRelationships(),
+      fetchProviderCredentials().catch(() => []), fetchApiKeys().catch(() => []),
+    ]).then(([agRes, relRes, credRes, keyRes]) => {
       const ag   = agRes.status  === "fulfilled" ? agRes.value  : null;
       const rels = relRes.status === "fulfilled" ? relRes.value : [];
+      const creds = credRes.status === "fulfilled" && Array.isArray(credRes.value) ? credRes.value : [];
+      const keys  = keyRes.status  === "fulfilled" && Array.isArray(keyRes.value)  ? keyRes.value  : [];
       const wfRels = (rels || []).filter(r => ["triggers_workflow", "uses_workflow"].includes(r.relationship_type));
       const platformCount = ag?.discovery_coverage ? Object.keys(ag.discovery_coverage).length : null;
+      const agentCount = ag ? (ag.verified_agents?.total || 0) + (ag.potential_agents?.total || 0) : 0;
       setMetrics({
-        agents:       ag ? (ag.verified_agents?.total || 0) + (ag.potential_agents?.total || 0) : null,
+        agents:       ag ? agentCount : null,
         dependencies: Array.isArray(rels) ? rels.length : null,
         workflows:    new Set(wfRels.map(r => r.target_name)).size,
         platforms:    platformCount,
       });
+      setProgress({
+        provider: creds.length > 0,
+        key:      keys.length > 0,
+        request:  agentCount > 0,   // traffic produced at least one discovered agent
+        agent:    agentCount > 0,
+      });
     });
   }, []);
+
+  const PROGRESS_STEPS = [
+    { key: "provider", label: "Connect Provider" },
+    { key: "key",      label: "Create Gateway API Key" },
+    { key: "request",  label: "Send First Request" },
+    { key: "agent",    label: "Discover First Agent" },
+  ];
 
   const fmtMetric = (v) => v === null ? "—" : String(v);
 
@@ -223,6 +243,25 @@ client.chat.completions.create(
         <div style={{ fontSize:24, fontWeight:700, color:T.text, lineHeight:1.2 }}>Connect your AI traffic</div>
       </div>
 
+      {/* Setup progress */}
+      <div style={{ marginBottom:28, padding:"16px 24px", background:T.panel, border:`1px solid ${T.border}`, borderRadius:10 }}>
+        <div style={{ fontSize:10, fontFamily:FONT_MONO, color:T.textMute, textTransform:"uppercase", letterSpacing:"0.1em", marginBottom:14 }}>Setup progress</div>
+        <div style={{ display:"flex", gap:10, flexWrap:"wrap" }}>
+          {PROGRESS_STEPS.map((s, i) => {
+            const done = progress[s.key];
+            return (
+              <div key={s.key} style={{ display:"flex", alignItems:"center", gap:8, flex:"1 1 180px" }}>
+                <span style={{ width:20, height:20, borderRadius:"50%", flexShrink:0,
+                  border:`1px solid ${done ? T.accent : T.border}`, background: done ? `${T.accent}22` : "transparent",
+                  color: done ? T.accent : T.textMute, display:"flex", alignItems:"center", justifyContent:"center",
+                  fontSize:11, fontFamily:FONT_MONO }}>{done ? "✓" : i + 1}</span>
+                <span style={{ fontSize:12, color: done ? T.text : T.textDim }}>{s.label}</span>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
       <div style={{ marginBottom:28, padding:"20px 24px",
         background:`${T.info}0a`, border:`1px solid ${T.info}33`, borderRadius:10,
         display:"flex", alignItems:"flex-start", gap:16 }}>
@@ -298,9 +337,17 @@ client.chat.completions.create(
       {section === "gateway" && (
         <div style={{ border:`1px solid ${T.info}44`, borderRadius:10, padding:"24px 28px", marginBottom:16 }}>
           <div style={{ fontSize:13, fontWeight:600, color:T.text, marginBottom:16 }}>Route AI Traffic — Integration Guide</div>
-          <div style={{ fontSize:12, color:T.textDim, lineHeight:1.7, marginBottom:20 }}>
-            No SDK required. Change your AI client's <code style={{ fontFamily:FONT_MONO, color:T.info, fontSize:11 }}>base_url</code> to{" "}
-            <code style={{ fontFamily:FONT_MONO, color:T.accent, fontSize:11 }}>{gatewayUrl}/v1</code> and use your organisation API key.
+          <div style={{ fontSize:12, color:T.textDim, lineHeight:1.7, marginBottom:14 }}>
+            <strong style={{ color:T.text }}>No proprietary SDK required — use your existing AI stack.</strong> Change your AI client's{" "}
+            <code style={{ fontFamily:FONT_MONO, color:T.info, fontSize:11 }}>base_url</code> to{" "}
+            <code style={{ fontFamily:FONT_MONO, color:T.accent, fontSize:11 }}>{gatewayUrl}/v1</code>, replace your{" "}
+            <code style={{ fontFamily:FONT_MONO, color:T.info, fontSize:11 }}>api_key</code> with a Gateway API Key, and send traffic. No instrumentation, no code rewrite.
+          </div>
+          <div style={{ display:"flex", flexWrap:"wrap", gap:6, marginBottom:20 }}>
+            <span style={{ fontSize:10, fontFamily:FONT_MONO, color:T.textMute, alignSelf:"center", marginRight:4 }}>WORKS WITH</span>
+            {["OpenAI SDK","LangChain","CrewAI","LiteLLM","OpenAI Agents SDK","MCP Clients","Vercel AI SDK","Agno","PydanticAI"].map(s => (
+              <span key={s} style={{ fontSize:11, fontFamily:FONT_MONO, color:T.accent, background:`${T.accent}12`, border:`1px solid ${T.accent}33`, borderRadius:4, padding:"2px 8px" }}>✓ {s}</span>
+            ))}
           </div>
           <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:24, marginBottom:20 }}>
             <div>

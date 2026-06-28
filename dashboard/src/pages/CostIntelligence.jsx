@@ -45,14 +45,23 @@ const RECON_COLOR = { healthy: T.success, warning: T.warn, investigate: T.crit, 
 const RECON_ICON  = { healthy: '✓', warning: '⚠', investigate: '!', no_data: '○' }
 
 // ── Formatters ─────────────────────────────────────────────────────────────────
+// Show tiny but real runtime costs precisely instead of a discouraging "$0.00".
+const fmtTiny$ = (v) => {
+  if (v === 0) return '$0.00'
+  if (v < 0.01) return `$${(+v).toPrecision(2)}`   // e.g. $0.00012
+  return `$${(+v).toFixed(2)}`
+}
+
 const fmt$ = (v) =>
   v == null ? '—' :
   v >= 1000  ? `$${(v / 1000).toFixed(1)}k` :
   v >= 1     ? `$${v.toFixed(2)}` :
-               `$${v.toFixed(4)}`
+               fmtTiny$(v)
 
 const fmtFull$ = (v) =>
-  v == null ? '—' : `$${(+v).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+  v == null ? '—' :
+  v > 0 && v < 0.01 ? fmtTiny$(v) :
+  `$${(+v).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
 
 const fmtPct = (v) =>
   v == null ? '—' : `${v >= 0 ? '+' : ''}${v.toFixed(1)}%`
@@ -685,6 +694,27 @@ export default function CostIntelligence() {
           note="From imported provider invoices"
         />
         <ReconciliationKpi data={recon} />
+      </div>
+
+      {(rc.requests ?? 0) === 0 && (
+        <div style={{ marginBottom: 16, padding: '14px 18px', background: `${T.accent}0D`, border: `1px solid ${T.accent}33`, borderRadius: 8, fontSize: 13, color: T.textDim }}>
+          <span style={{ color: T.accent }}>●</span>&nbsp; No runtime cost yet. Send one request through the gateway to begin tracking spend — even a single call shows up here.
+        </div>
+      )}
+
+      {/* Runtime usage strip — visible immediately after the first request */}
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 0, marginBottom: 16, background: T.panel, border: `1px solid ${T.border}`, borderRadius: 8, padding: '14px 20px' }}>
+        {[
+          { label: 'Requests',      value: (rc.requests ?? 0).toLocaleString() },
+          { label: 'Input Tokens',  value: (rc.input_tokens ?? 0).toLocaleString() },
+          { label: 'Output Tokens', value: (rc.output_tokens ?? 0).toLocaleString() },
+          { label: 'Total Tokens',  value: (rc.total_tokens ?? 0).toLocaleString() },
+        ].map((m, i) => (
+          <div key={m.label} style={{ flex: '1 1 120px', paddingLeft: i ? 20 : 0, borderLeft: i ? `1px solid ${T.border}` : 'none' }}>
+            <div style={{ fontSize: 9, fontFamily: FONT_MONO, color: T.textMute, letterSpacing: '0.12em', textTransform: 'uppercase' }}>{m.label}</div>
+            <div style={{ fontSize: 20, fontWeight: 600, color: T.text, fontFamily: FONT_MONO, marginTop: 4 }}>{m.value}</div>
+          </div>
+        ))}
       </div>
 
       {/* Main content: breakdown + trend */}

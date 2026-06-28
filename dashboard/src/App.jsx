@@ -1709,16 +1709,19 @@ function ApiKeysPage() {
 
       {/* ── Page header ── */}
       <div>
-        <div style={{ fontSize: 20, fontWeight: 500, color: T.text, letterSpacing: "-0.01em" }}>API Keys</div>
-        <div style={{ fontSize: 12, color: T.textDim, marginTop: 4 }}>Keys authenticate AI agents through the runtime gateway. Each key is shown once — copy it immediately.</div>
+        <div style={{ fontSize: 20, fontWeight: 500, color: T.text, letterSpacing: "-0.01em" }}>Gateway API Keys</div>
+        <div style={{ fontSize: 12, color: T.textDim, marginTop: 4 }}>
+          Use these keys <strong style={{ color: T.text }}>inside your AI applications</strong> to route traffic through the gateway.
+          Do not use your OpenAI key when routing through the gateway. Each key is shown once — copy it immediately.
+        </div>
       </div>
 
       {/* ── Create key ── */}
-      <Card title="New Key">
+      <Card title="New Gateway API Key">
         <form onSubmit={handleCreate} style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "flex-end" }}>
           {[
-            { label: "Name *", key: "name", placeholder: "e.g. soc-agent-prod" },
-            { label: "Team",   key: "team", placeholder: "e.g. SOC" },
+            { label: "Name *", key: "name", placeholder: "e.g. customer-support-prod" },
+            { label: "Team",   key: "team", placeholder: "e.g. Customer Success" },
           ].map(({ label, key, placeholder }) => (
             <div key={key} style={{ display: "flex", flexDirection: "column", gap: 4 }}>
               <label style={{ fontSize: 9, fontFamily: FONT_MONO, letterSpacing: "0.12em", textTransform: "uppercase", color: T.textMute }}>{label}</label>
@@ -1732,6 +1735,9 @@ function ApiKeysPage() {
             {saving ? "Generating…" : "+ Generate"}
           </button>
         </form>
+        <div style={{ fontSize: 11, color: T.textMute, fontFamily: FONT_MONO, marginTop: 10 }}>
+          Create one Gateway API Key per service, workflow or AI application — e.g. customer-support-prod, sales-assistant-prod, engineering-copilot, platform-agent.
+        </div>
         {err && <div style={{ color: T.crit, fontFamily: FONT_MONO, fontSize: 12, marginTop: 10 }}>{err}</div>}
       </Card>
 
@@ -1779,10 +1785,30 @@ function ApiKeysPage() {
         </table>
       </Card>
 
-      {/* ── Show-once modal ── */}
-      {newKey && (
-        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.7)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000 }}>
-          <div style={{ background: T.panel, border: `1px solid ${T.accent}66`, borderRadius: 8, padding: 28, maxWidth: 540, width: "90%", display: "flex", flexDirection: "column", gap: 16 }}>
+      {/* ── Show-once modal + first-request onboarding ── */}
+      {newKey && (() => {
+        const gatewayUrl = (typeof BASE !== "undefined" && BASE.startsWith("http")) ? BASE : window.location.origin;
+        const snippet = `from openai import OpenAI
+
+client = OpenAI(
+    api_key="${newKey}",
+    base_url="${gatewayUrl}/v1"
+)
+
+response = client.chat.completions.create(
+    model="gpt-4o-mini",
+    messages=[{"role": "user", "content": "Hello"}]
+)`;
+        const outcomes = [
+          "Agent discovered",
+          "Runtime cost tracking enabled",
+          "Ownership suggestions enabled",
+          "Dependency mapping enabled",
+          "Governance review created",
+        ];
+        return (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.7)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000, padding: 24, overflowY: "auto" }}>
+          <div style={{ background: T.panel, border: `1px solid ${T.accent}66`, borderRadius: 8, padding: 28, maxWidth: 600, width: "100%", display: "flex", flexDirection: "column", gap: 16, margin: "auto" }}>
             <div style={{ fontFamily: FONT_MONO, fontWeight: 700, color: T.accent, fontSize: 14 }}>Copy your key — shown once only</div>
             <div style={{ fontFamily: FONT_MONO, fontSize: 11, color: T.textDim }}>
               This will not be shown again. Store it in your secrets manager now.
@@ -1790,11 +1816,37 @@ function ApiKeysPage() {
             <div style={{ background: T.panelHi, border: `1px solid ${T.border}`, borderRadius: 4, padding: "10px 14px", fontFamily: FONT_MONO, fontSize: 12, color: T.text, wordBreak: "break-all", userSelect: "all" }}>
               {newKey}
             </div>
-            <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
+            <div style={{ display: "flex", gap: 10 }}>
               <button onClick={() => navigator.clipboard.writeText(newKey).catch(() => {})}
                 style={{ background: `${T.accent}20`, border: `1px solid ${T.accent}55`, color: T.accent, padding: "7px 16px", borderRadius: 4, fontSize: 12, fontFamily: FONT_MONO, cursor: "pointer" }}>
-                Copy to clipboard
+                Copy key
               </button>
+            </div>
+
+            {/* Send your first AI request */}
+            <div style={{ borderTop: `1px solid ${T.border}`, paddingTop: 16 }}>
+              <div style={{ fontSize: 14, fontWeight: 600, color: T.text, marginBottom: 4 }}>Send your first AI request</div>
+              <div style={{ fontSize: 12, color: T.textDim, marginBottom: 12 }}>
+                Use this Gateway API Key inside your AI application — replace your OpenAI endpoint with the gateway endpoint.
+              </div>
+              <div style={{ position: "relative" }}>
+                <pre style={{ background: T.bg, border: `1px solid ${T.border}`, borderRadius: 6, padding: "14px 16px", fontFamily: FONT_MONO, fontSize: 11.5, color: T.text, margin: 0, overflowX: "auto", lineHeight: 1.6 }}>{snippet}</pre>
+                <button onClick={() => navigator.clipboard.writeText(snippet).catch(() => {})}
+                  style={{ position: "absolute", top: 8, right: 8, background: `${T.accent}20`, border: `1px solid ${T.accent}55`, color: T.accent, padding: "3px 10px", borderRadius: 4, fontSize: 10, fontFamily: FONT_MONO, cursor: "pointer" }}>
+                  Copy
+                </button>
+              </div>
+              <div style={{ marginTop: 14, display: "flex", flexDirection: "column", gap: 6 }}>
+                {outcomes.map(o => (
+                  <div key={o} style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 12, color: T.textDim }}>
+                    <span style={{ color: T.accent }}>✓</span>{o}
+                  </div>
+                ))}
+              </div>
+              <div style={{ marginTop: 12, fontSize: 11, fontFamily: FONT_MONO, color: T.textMute }}>Estimated setup time: 30 seconds</div>
+            </div>
+
+            <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
               <button onClick={() => setNewKey(null)}
                 style={{ background: T.accent, color: T.bg, border: "none", padding: "7px 18px", borderRadius: 4, fontSize: 12, fontFamily: FONT_MONO, fontWeight: 600, cursor: "pointer" }}>
                 I've saved it — close
@@ -1802,7 +1854,8 @@ function ApiKeysPage() {
             </div>
           </div>
         </div>
-      )}
+        );
+      })()}
     </div>
   );
 }

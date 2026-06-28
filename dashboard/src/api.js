@@ -453,6 +453,32 @@ export async function rejectInventoryAgent(agentId, rejectionReason) {
   return r.json()
 }
 
+// Approve the system's suggested owner/team/environment and mark the agent managed.
+// Body may override any suggestion; an empty body accepts all server-derived suggestions.
+export async function approveSuggestions(agentId, body = {}) {
+  const r = await authFetch(`${BASE}/agents/${encodeURIComponent(agentId)}/approve-suggestions`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+  if (!r || !r.ok) {
+    const err = await r.json().catch(() => ({}))
+    throw new Error(err.detail || 'Failed to approve suggestions')
+  }
+  return r.json()
+}
+
+// Dismiss an agent from the urgent review queue without retiring or deleting it.
+export async function ignoreInventoryAgent(agentId, reason = '') {
+  const r = await authFetch(`${BASE}/agents/${encodeURIComponent(agentId)}/ignore`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ reason }),
+  })
+  if (!r || !r.ok) throw new Error('Failed to ignore agent')
+  return r.json()
+}
+
 // ── Cost Intelligence ─────────────────────────────────────────────────────────
 
 export async function fetchCostIntelligence(params = {}) {

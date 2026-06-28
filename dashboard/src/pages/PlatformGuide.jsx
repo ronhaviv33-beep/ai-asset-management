@@ -24,8 +24,8 @@ export default function CustomerWelcomePage({ onNavigate }) {
     {
       n: "1", color: T.accent,
       title: "Connect your AI traffic",
-      desc: "Point your AI agent code at the gateway instead of directly at OpenAI or Anthropic. One environment variable change — no SDK required, no code changes to agents.",
-      note: "Works with OpenAI SDK, Anthropic SDK, LangChain, LlamaIndex, and any HTTP client.",
+      desc: "Point your AI agent code at the gateway instead of directly at OpenAI or Anthropic. No proprietary SDK required — use your existing AI stack. Replace base_url, replace api_key, send traffic. No instrumentation, no code rewrite.",
+      note: "Works with OpenAI SDK, LangChain, CrewAI, LiteLLM, OpenAI Agents SDK, MCP Clients, Vercel AI SDK, Agno, and any OpenAI-compatible client.",
       cta: "See Integration Guide →", page: "integrations",
     },
     {

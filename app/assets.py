@@ -13,6 +13,24 @@ from typing import Optional
 from sqlalchemy.orm import Session
 
 from app.models import Telemetry, AssetRegistry
+from app.discovery_status import (
+    derive_discovery_status,
+    build_identity_evidence,
+    derive_suggestions,
+)
+
+
+def _apply_discovery_fields(asset: dict) -> None:
+    """Attach derived customer-facing discovery fields additively (never raises)."""
+    try:
+        stage, label, reason = derive_discovery_status(asset)
+        asset["discovery_stage"] = stage
+        asset["stage_label"] = label
+        asset["stage_reason"] = reason
+        asset["identity_evidence"] = build_identity_evidence(asset)
+        asset.update(derive_suggestions(asset))
+    except Exception:
+        pass  # derivation is best-effort; never break inventory assembly
 
 
 # Status thresholds (days since last call)
@@ -267,6 +285,11 @@ def get_all_assets_derived(
     except Exception:
         pass  # registry table may be missing in very old deployments — degrade gracefully
 
+    # Attach derived customer-facing discovery status / evidence / suggestions.
+    # Done before the retired filter so STALE/ARCHIVED are derivable.
+    for asset in assets:
+        _apply_discovery_fields(asset)
+
     # Exclude retired assets from active inventory by default (rule 9).
     # Retired telemetry rows are preserved and remain queryable via include_retired=True.
     if not include_retired:
@@ -319,6 +342,7 @@ def get_asset_by_name(
     except Exception:
         pass
 
+    _apply_discovery_fields(asset)
     return asset
 
 

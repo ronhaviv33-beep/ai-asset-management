@@ -1,5 +1,6 @@
 import { useState, useEffect, useMemo } from 'react'
 import { fetchRelationships } from '../api.js'
+import { relationshipEvidenceLabel } from '../discoveryStatus.js'
 
 // ── Design tokens ──────────────────────────────────────────────────────────────
 const T = {
@@ -32,6 +33,9 @@ const TYPE_META = {
   database:   { color: T.success,  icon: '🗄',  label: 'Database' },
   crm:        { color: '#FF8C69',  icon: '📋', label: 'CRM' },
   spreadsheet:{ color: '#69FF8C',  icon: '📊', label: 'Spreadsheet' },
+  provider:   { color: T.accent,   icon: '◈',  label: 'Provider' },
+  model:      { color: T.purple,   icon: '⊞',  label: 'Model' },
+  gateway:    { color: T.success,  icon: '⊕',  label: 'Gateway' },
   unknown:    { color: T.textMute, icon: '?',  label: 'Unknown' },
 }
 
@@ -43,10 +47,16 @@ const REL_META = {
   writes_to:        { color: T.crit,    label: 'writes to' },
   reads_from:       { color: T.success, label: 'reads from' },
   sends_event_to:   { color: T.purple,  label: 'sends event to' },
+  uses_provider:    { color: T.accent,  label: 'uses provider' },
+  uses_model:       { color: T.purple,  label: 'uses model' },
+  routes_via:       { color: T.success, label: 'routes via' },
 }
 
 const TARGET_TYPE_OPTIONS = [
   { value: '',           label: 'All types' },
+  { value: 'provider',  label: 'Provider' },
+  { value: 'model',     label: 'Model' },
+  { value: 'gateway',   label: 'Gateway' },
   { value: 'mcp_tool',  label: 'MCP Tool' },
   { value: 'mcp_server',label: 'MCP Server' },
   { value: 'workflow',  label: 'Workflow' },
@@ -59,6 +69,9 @@ const TARGET_TYPE_OPTIONS = [
 
 const REL_TYPE_OPTIONS = [
   { value: '',                label: 'All relationships' },
+  { value: 'uses_provider',   label: 'uses provider' },
+  { value: 'uses_model',      label: 'uses model' },
+  { value: 'routes_via',      label: 'routes via' },
   { value: 'calls',           label: 'calls' },
   { value: 'uses_tool',       label: 'uses tool' },
   { value: 'invokes_workflow',label: 'invokes workflow' },
@@ -109,16 +122,14 @@ function RelBadge({ type }) {
   )
 }
 
-function ConfBar({ score }) {
-  const pct = Math.round(score * 100)
-  const color = pct >= 80 ? T.success : pct >= 70 ? T.warn : T.crit
+function StrengthBadge({ rel }) {
+  const ev = relationshipEvidenceLabel(rel)
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-      <div style={{ width: 56, height: 4, background: T.border, borderRadius: 2, overflow: 'hidden' }}>
-        <div style={{ width: `${pct}%`, height: '100%', background: color, borderRadius: 2 }} />
-      </div>
-      <span style={{ fontSize: 10, fontFamily: FONT_MONO, color: T.textDim }}>{pct}%</span>
-    </div>
+    <span title={ev.why}
+      style={{ padding: '2px 8px', borderRadius: 3, fontSize: 10, fontFamily: FONT_MONO,
+        background: `${ev.color}18`, color: ev.color, border: `1px solid ${ev.color}33`, whiteSpace: 'nowrap' }}>
+      {ev.label}
+    </span>
   )
 }
 
@@ -199,7 +210,7 @@ export default function RelationshipMap() {
           { label: 'Target System',    desc: 'MCP tool, server, API, database, CRM, or workflow called' },
           { label: 'Relationship Type',desc: 'How the agent interacts — calls, uses_tool, writes_to…' },
           { label: 'Evidence Source',  desc: 'What signal proved this link — gateway, mcp_headers, sdk…' },
-          { label: 'Confidence',       desc: 'How certain we are this relationship is real (70–95%)' },
+          { label: 'Strength',         desc: 'How strong the evidence is for this relationship — Strong, Likely, Observed, or Partial' },
           { label: 'Last Seen',        desc: 'When this interaction was last observed in live traffic' },
           { label: 'Request Count',    desc: 'Total times this agent-to-target link has been observed' },
         ].map(({ label, desc }) => (
@@ -279,14 +290,14 @@ function EmptyState() {
     }}>
       <div style={{ fontSize: 36, marginBottom: 16 }}>🔗</div>
       <div style={{ fontSize: 16, fontWeight: 600, color: T.text, marginBottom: 8 }}>
-        No dependencies mapped yet
+        No external tool dependencies detected yet
       </div>
       <div style={{ fontSize: 13, color: T.textDim, maxWidth: 560, margin: '0 auto 6px', lineHeight: 1.6 }}>
-        AI Agent Inventory tells you which agents exist.
-        Runtime Dependency Map tells you what they interact with.
+        Provider and model relationships appear automatically once traffic flows.
+        MCP relationships appear when tool metadata is observed.
       </div>
       <div style={{ fontSize: 13, color: T.textMute, maxWidth: 560, margin: '0 auto 24px', lineHeight: 1.6 }}>
-        Add relationship headers to your gateway requests to start building the map.
+        To capture richer tool/workflow links, add relationship headers to your gateway requests.
       </div>
       <div style={{
         background: T.bg, border: `1px solid ${T.border}`, borderRadius: 6,
@@ -313,7 +324,7 @@ function EmptyState() {
 
 // ── Table ─────────────────────────────────────────────────────────────────────
 const HEADERS = [
-  'Source Agent', 'Relationship Type', 'Target Type', 'Target System', 'Evidence Source', 'Confidence', 'Request Count', 'Last Seen',
+  'Source Agent', 'Relationship Type', 'Target Type', 'Target System', 'Evidence Source', 'Strength', 'Request Count', 'Last Seen',
 ]
 
 function RelationshipTable({ rows }) {
@@ -375,7 +386,7 @@ function RelationshipTable({ rows }) {
                   </span>
                 </td>
                 <td style={{ padding: '12px 14px' }}>
-                  <ConfBar score={r.confidence_score} />
+                  <StrengthBadge rel={r} />
                 </td>
                 <td style={{ padding: '12px 14px' }}>
                   <span style={{ fontFamily: FONT_MONO, fontSize: 12, color: T.text }}>

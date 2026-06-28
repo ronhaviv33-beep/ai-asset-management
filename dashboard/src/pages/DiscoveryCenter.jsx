@@ -1,5 +1,9 @@
 import React, { useState, useEffect, useMemo, useCallback } from "react";
-import { fetchAgents, claimInventoryAgent, validateInventoryAgent, rejectInventoryAgent, fetchOrgConfig } from "../api.js";
+import { fetchAgents, claimInventoryAgent, validateInventoryAgent, rejectInventoryAgent, approveSuggestions, ignoreInventoryAgent, fetchOrgConfig } from "../api.js";
+import { stageMeta } from "../discoveryStatus.js";
+
+// Resolve a usable agent id for action endpoints (records expose id/asset_key, not agent_id).
+const agentActionId = (a) => a?.id || a?.asset_key || a?.agent_id;
 
 const T = {
   bg: "#0A0B0F", panel: "#0F1117", panelHi: "#141823",
@@ -43,11 +47,14 @@ function SourceBadge({ source }) {
   );
 }
 
-function ConfidenceBadge({ score }) {
-  const color = score >= 80 ? T.accent : score >= 50 ? T.warn : T.crit;
+// Customer-facing discovery-status badge (replaces confidence percentages).
+function StageBadge({ agent }) {
+  const m = stageMeta(agent || {});
   return (
-    <span style={{ fontFamily: MONO, fontSize: 12, color }}>
-      {score ?? "—"}%
+    <span title={m.description}
+      style={{ display: "inline-flex", alignItems: "center", gap: 5, background: m.color + "1A", color: m.color, border: `1px solid ${m.color}44`, fontSize: 10, fontFamily: MONO, fontWeight: 600, padding: "2px 9px", borderRadius: 4, textTransform: "uppercase", letterSpacing: "0.05em", whiteSpace: "nowrap" }}>
+      <span style={{ width: 5, height: 5, borderRadius: "50%", background: m.color }} />
+      {m.label}
     </span>
   );
 }
@@ -136,36 +143,37 @@ function ModalField({ label, children, required }) {
 
 const claimInputStyle = { width: "100%", background: T.panelHi, border: `1px solid ${T.border}`, color: T.text, padding: "8px 10px", borderRadius: 5, fontSize: 13, fontFamily: FONT, outline: "none", boxSizing: "border-box" };
 
-function ClaimModal({ agent, onClose, onSave, environments = ["production", "staging", "development"] }) {
+function ClaimModal({ agent, onClose, onSave, onApprove, onIgnore, environments = ["production", "staging", "development"] }) {
+  // Default the form to the system's suggestions (Edit path starts from suggestions).
+  const sOwner = agent?.suggested_owner || "";
+  const sTeam  = agent?.suggested_team || (agent?.team && agent.team !== "Unknown" ? agent.team : "");
+  const sEnv   = agent?.suggested_environment || (agent?.environment && agent.environment !== "Unknown" ? agent.environment : "");
+  const hasSuggestions = !!(sOwner || sTeam || sEnv);
+
+  const [editing, setEditing] = useState(!hasSuggestions);  // jump straight to form if nothing to approve
   const [form, setForm] = useState({
-    owner: "",
-    team: agent?.team && agent.team !== "Unknown" ? agent.team : "",
-    environment: agent?.environment && agent.environment !== "Unknown" ? agent.environment : "",
-    criticality: "",
-    business_purpose: "",
+    owner: sOwner, team: sTeam, environment: sEnv, criticality: "", business_purpose: "",
   });
-  const [saving, setSaving] = useState(false);
+  const [busy, setBusy] = useState("");
   const [err, setErr] = useState("");
   const set = (k) => (e) => setForm(f => ({ ...f, [k]: e.target.value }));
-
   const canSubmit = form.owner.trim() || form.team.trim();
 
-  const submit = async () => {
+  const run = async (fn) => { setErr(""); try { await fn(); onClose(); } catch (e) { setErr(e.message); } };
+
+  const approve = () => run(async () => { setBusy("approve"); try { await onApprove(agent); } finally { setBusy(""); } });
+  const ignore  = () => run(async () => { setBusy("ignore");  try { await onIgnore(agent);  } finally { setBusy(""); } });
+  const save    = () => {
     if (!canSubmit) { setErr("Enter an owner or a team — at least one is required"); return; }
-    setSaving(true);
-    setErr("");
-    try {
-      await onSave(agent.agent_id, { ...form, agent_name: agent.agent_name });
-      onClose();
-    } catch (e) { setErr(e.message); }
-    finally { setSaving(false); }
+    run(async () => { setBusy("save"); try { await onSave(agentActionId(agent), { ...form, agent_name: agent.agent_name }); } finally { setBusy(""); } });
   };
 
   return (
     <ModalOverlay onClose={onClose}>
-      <div style={{ fontSize: 17, fontWeight: 500, marginBottom: 4, color: T.text }}>Claim Agent</div>
-      <div style={{ fontSize: 12, color: T.textMute, fontFamily: MONO, marginBottom: 20 }}>
-        Assign ownership to <strong style={{ color: T.text }}>{agent?.agent_name}</strong>
+      <div style={{ fontSize: 17, fontWeight: 500, marginBottom: 4, color: T.text }}>Review Agent</div>
+      <div style={{ fontSize: 12, color: T.textMute, fontFamily: MONO, marginBottom: 16, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+        <StageBadge agent={agent} />
+        <span><strong style={{ color: T.text }}>{agent?.agent_name}</strong></span>
       </div>
 
       {err && (
@@ -174,45 +182,71 @@ function ClaimModal({ agent, onClose, onSave, environments = ["production", "sta
         </div>
       )}
 
-      <div style={{ background: T.panelHi, border: `1px solid ${T.border}`, borderRadius: 6, padding: "10px 14px", marginBottom: 20, fontSize: 11, color: T.textMute, fontFamily: MONO }}>
-        <div><span style={{ color: T.accent }}>●</span> Source: {(agent?.discovery_source || "gateway").replace(/_/g, " ")}</div>
-        <div><span style={{ color: T.accent }}>●</span> Confidence: {(agent?.confidence_score || 95).toFixed(0)}%</div>
-        <div style={{ marginTop: 6, fontSize: 10, color: T.textMute }}>Claiming only writes to the registry. Historical telemetry is never modified.</div>
-      </div>
-
-      <ModalField label="Owner">
-        <input style={claimInputStyle} value={form.owner} onChange={set("owner")} placeholder="owner@company.com" />
-        <div style={{ fontSize: 10, color: T.textMute, fontFamily: MONO, marginTop: 4 }}>
-          Unknown individual? Leave blank and assign to the team below.
+      {/* Suggestions summary (Approve path) */}
+      {!editing && (
+        <div style={{ background: T.panelHi, border: `1px solid ${T.border}`, borderRadius: 6, padding: "12px 14px", marginBottom: 18, fontSize: 12, fontFamily: MONO }}>
+          <div style={{ color: T.textMute, fontSize: 10, letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 8 }}>Suggested</div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+            <div><span style={{ color: T.textMute }}>Owner: </span><span style={{ color: T.text }}>{sOwner || "—"}</span></div>
+            <div><span style={{ color: T.textMute }}>Team: </span><span style={{ color: T.text }}>{sTeam || "—"}</span></div>
+            <div><span style={{ color: T.textMute }}>Environment: </span><span style={{ color: T.text }}>{sEnv || "—"}</span></div>
+          </div>
+          {agent?.suggestion_reason && (
+            <div style={{ marginTop: 8, fontSize: 10, color: T.textMute }}>Why: {agent.suggestion_reason}</div>
+          )}
+          <div style={{ marginTop: 8, fontSize: 10, color: T.textMute }}>Approving only writes to the registry. Historical telemetry is never modified.</div>
         </div>
-      </ModalField>
-      <ModalField label="Team">
-        <input style={claimInputStyle} value={form.team} onChange={set("team")} placeholder={agent?.team && agent.team !== "Unknown" ? agent.team : "engineering"} />
-      </ModalField>
-      <ModalField label="Environment">
-        <select style={{ ...claimInputStyle, appearance: "none" }} value={form.environment} onChange={set("environment")}>
-          <option value="">Select…</option>
-          {environments.map(e => <option key={e} value={e}>{e.charAt(0).toUpperCase() + e.slice(1)}</option>)}
-        </select>
-      </ModalField>
-      <ModalField label="Criticality">
-        <select style={{ ...claimInputStyle, appearance: "none" }} value={form.criticality} onChange={set("criticality")}>
-          <option value="">Select…</option>
-          <option value="critical">Critical</option>
-          <option value="high">High</option>
-          <option value="medium">Medium</option>
-          <option value="low">Low</option>
-        </select>
-      </ModalField>
-      <ModalField label="Business Purpose">
-        <textarea style={{ ...claimInputStyle, minHeight: 72, resize: "vertical" }} value={form.business_purpose} onChange={set("business_purpose")} placeholder="What does this agent do?" />
-      </ModalField>
+      )}
 
-      <div style={{ display: "flex", gap: 10, justifyContent: "flex-end", marginTop: 8 }}>
-        <button onClick={onClose} style={{ background: "transparent", border: `1px solid ${T.border}`, color: T.textDim, padding: "8px 16px", borderRadius: 5, fontSize: 13, cursor: "pointer", fontFamily: FONT }}>Cancel</button>
-        <button onClick={submit} disabled={!canSubmit || saving} style={{ background: T.accent, color: T.bg, border: "none", padding: "8px 20px", borderRadius: 5, fontSize: 13, fontWeight: 600, cursor: canSubmit && !saving ? "pointer" : "not-allowed", opacity: !canSubmit || saving ? 0.6 : 1, fontFamily: FONT }}>
-          {saving ? "Claiming…" : "Claim Agent →"}
+      {/* Edit form */}
+      {editing && (
+        <>
+          <ModalField label="Owner">
+            <input style={claimInputStyle} value={form.owner} onChange={set("owner")} placeholder="owner@company.com" />
+            <div style={{ fontSize: 10, color: T.textMute, fontFamily: MONO, marginTop: 4 }}>
+              Unknown individual? Leave blank and assign to the team below.
+            </div>
+          </ModalField>
+          <ModalField label="Team">
+            <input style={claimInputStyle} value={form.team} onChange={set("team")} placeholder={sTeam || "engineering"} />
+          </ModalField>
+          <ModalField label="Environment">
+            <select style={{ ...claimInputStyle, appearance: "none" }} value={form.environment} onChange={set("environment")}>
+              <option value="">Select…</option>
+              {environments.map(e => <option key={e} value={e}>{e.charAt(0).toUpperCase() + e.slice(1)}</option>)}
+            </select>
+          </ModalField>
+          <ModalField label="Criticality">
+            <select style={{ ...claimInputStyle, appearance: "none" }} value={form.criticality} onChange={set("criticality")}>
+              <option value="">Select…</option>
+              <option value="critical">Critical</option>
+              <option value="high">High</option>
+              <option value="medium">Medium</option>
+              <option value="low">Low</option>
+            </select>
+          </ModalField>
+          <ModalField label="Business Purpose">
+            <textarea style={{ ...claimInputStyle, minHeight: 72, resize: "vertical" }} value={form.business_purpose} onChange={set("business_purpose")} placeholder="What does this agent do?" />
+          </ModalField>
+        </>
+      )}
+
+      <div style={{ display: "flex", gap: 10, justifyContent: "flex-end", marginTop: 8, flexWrap: "wrap" }}>
+        <button onClick={ignore} disabled={!!busy} style={{ background: "transparent", border: `1px solid ${T.border}`, color: T.textDim, padding: "8px 16px", borderRadius: 5, fontSize: 13, cursor: busy ? "not-allowed" : "pointer", fontFamily: FONT, marginRight: "auto" }}>
+          {busy === "ignore" ? "Ignoring…" : "Ignore"}
         </button>
+        {editing ? (
+          <button onClick={save} disabled={!canSubmit || !!busy} style={{ background: T.accent, color: T.bg, border: "none", padding: "8px 20px", borderRadius: 5, fontSize: 13, fontWeight: 600, cursor: canSubmit && !busy ? "pointer" : "not-allowed", opacity: !canSubmit || busy ? 0.6 : 1, fontFamily: FONT }}>
+            {busy === "save" ? "Saving…" : "Save & Claim →"}
+          </button>
+        ) : (
+          <>
+            <button onClick={() => setEditing(true)} disabled={!!busy} style={{ background: "transparent", border: `1px solid ${T.border}`, color: T.text, padding: "8px 16px", borderRadius: 5, fontSize: 13, cursor: busy ? "not-allowed" : "pointer", fontFamily: FONT }}>Edit</button>
+            <button onClick={approve} disabled={!!busy} style={{ background: T.accent, color: T.bg, border: "none", padding: "8px 20px", borderRadius: 5, fontSize: 13, fontWeight: 600, cursor: busy ? "not-allowed" : "pointer", opacity: busy ? 0.6 : 1, fontFamily: FONT }}>
+              {busy === "approve" ? "Approving…" : "Approve →"}
+            </button>
+          </>
+        )}
       </div>
     </ModalOverlay>
   );
@@ -231,7 +265,7 @@ function ValidateConfirmModal({ agent, onConfirm, onClose, busy }) {
           <div style={{ fontSize: 13, fontFamily: MONO, color: T.text, fontWeight: 500, marginBottom: 8 }}>{agent?.agent_name}</div>
           <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
             <SourceBadge source={agent?.discovery_source} />
-            <ConfidenceBadge score={agent?.confidence_score} />
+            <StageBadge agent={agent} />
           </div>
         </div>
 
@@ -274,7 +308,7 @@ function RejectConfirmModal({ agent, onConfirm, onClose, busy }) {
           <div style={{ fontSize: 13, fontFamily: MONO, color: T.text, fontWeight: 500, marginBottom: 8 }}>{agent?.agent_name}</div>
           <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
             <SourceBadge source={agent?.discovery_source} />
-            <ConfidenceBadge score={agent?.confidence_score} />
+            <StageBadge agent={agent} />
           </div>
         </div>
 
@@ -307,32 +341,63 @@ function RejectConfirmModal({ agent, onConfirm, onClose, busy }) {
   );
 }
 
+function EvidenceRow({ label, value }) {
+  if (value == null || value === "" || (Array.isArray(value) && value.length === 0)) return null;
+  return (
+    <div style={{ display: "flex", gap: 12, fontSize: 12, lineHeight: 1.6 }}>
+      <span style={{ color: T.textMute, fontFamily: MONO, minWidth: 120, flexShrink: 0 }}>{label}</span>
+      <span style={{ color: T.text, wordBreak: "break-word" }}>{Array.isArray(value) ? value.join(", ") : String(value)}</span>
+    </div>
+  );
+}
+
 function EvidenceDrawer({ agent, onClose }) {
   if (!agent) return null;
-  const evidence = typeof agent.evidence === "string" ? JSON.parse(agent.evidence || "{}") : (agent.evidence || {});
+  const m = stageMeta(agent);
+  const ev = agent.identity_evidence || {};
+  const signals = Array.isArray(ev.signals) ? ev.signals : [];
   return (
     <div style={{ position: "fixed", inset: 0, background: "#000A", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000 }}>
-      <div style={{ background: T.panel, border: `1px solid ${T.border}`, borderRadius: 8, padding: 28, minWidth: 420, maxWidth: 560, fontFamily: FONT }}>
-        <div style={{ fontSize: 16, fontWeight: 600, color: T.text, marginBottom: 6 }}>Discovery Evidence</div>
-        <div style={{ fontSize: 13, color: T.textDim, marginBottom: 20, fontFamily: MONO }}>{agent.agent_name}</div>
-        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+      <div style={{ background: T.panel, border: `1px solid ${T.border}`, borderRadius: 8, padding: 28, minWidth: 440, maxWidth: 580, fontFamily: FONT }}>
+        <div style={{ fontSize: 16, fontWeight: 600, color: T.text, marginBottom: 6 }}>Identity Evidence</div>
+        <div style={{ fontSize: 13, color: T.textDim, marginBottom: 18, fontFamily: MONO }}>{agent.agent_name}</div>
+
+        <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
           <div>
-            <div style={{ fontSize: 10, color: T.textMute, fontFamily: MONO, letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 8 }}>Discovery Source</div>
-            <SourceBadge source={agent.discovery_source} />
+            <div style={{ fontSize: 10, color: T.textMute, fontFamily: MONO, letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 8 }}>Discovery Status</div>
+            <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+              <StageBadge agent={agent} />
+              <span style={{ fontSize: 12, color: T.textDim }}>{agent.stage_reason || m.description}</span>
+            </div>
           </div>
+
           <div>
-            <div style={{ fontSize: 10, color: T.textMute, fontFamily: MONO, letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 8 }}>Confidence Score</div>
-            <ConfidenceBadge score={agent.confidence_score} />
+            <div style={{ fontSize: 10, color: T.textMute, fontFamily: MONO, letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 8 }}>Why we identified this agent</div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 6, background: T.panelHi, border: `1px solid ${T.border}`, borderRadius: 6, padding: "12px 14px" }}>
+              <EvidenceRow label="Seen via" value={(ev.source || agent.discovery_source || "gateway").replace(/_/g, " ")} />
+              <EvidenceRow label="Provider" value={ev.provider} />
+              <EvidenceRow label="Models" value={ev.models} />
+              <EvidenceRow label="Requests" value={typeof ev.request_count === "number" ? ev.request_count.toLocaleString() : ev.request_count} />
+              <EvidenceRow label="First seen" value={ev.first_seen_at ? relativeTime(ev.first_seen_at) : null} />
+              <EvidenceRow label="Last seen" value={ev.last_seen_at ? relativeTime(ev.last_seen_at) : null} />
+              <EvidenceRow label="Agent version" value={ev.agent_version} />
+            </div>
           </div>
-          {Object.keys(evidence).length > 0 && (
+
+          {signals.length > 0 && (
             <div>
-              <div style={{ fontSize: 10, color: T.textMute, fontFamily: MONO, letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 8 }}>Evidence Signals</div>
-              <pre style={{ background: T.panelHi, border: `1px solid ${T.border}`, borderRadius: 4, padding: "12px 14px", fontSize: 11, fontFamily: MONO, color: T.text, margin: 0, overflowX: "auto" }}>
-                {JSON.stringify(evidence, null, 2)}
-              </pre>
+              <div style={{ fontSize: 10, color: T.textMute, fontFamily: MONO, letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 8 }}>Signals</div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                {signals.map((s, i) => (
+                  <div key={i} style={{ display: "flex", gap: 8, alignItems: "flex-start", fontSize: 11, fontFamily: MONO, color: T.textDim }}>
+                    <span style={{ color: T.accent, flexShrink: 0 }}>●</span>{s}
+                  </div>
+                ))}
+              </div>
             </div>
           )}
         </div>
+
         <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 20 }}>
           <button onClick={onClose} style={{ background: "transparent", border: `1px solid ${T.border}`, color: T.textDim, padding: "8px 16px", borderRadius: 4, fontSize: 13, cursor: "pointer" }}>Close</button>
         </div>
@@ -436,6 +501,18 @@ export default function DiscoveryCenter({ initialTab = "verified" }) {
     await load();
   };
 
+  const handleApprove = async (agent) => {
+    await approveSuggestions(agentActionId(agent), {});
+    toast("Suggestions approved — agent is now managed");
+    await load();
+  };
+
+  const handleIgnore = async (agent) => {
+    await ignoreInventoryAgent(agentActionId(agent));
+    toast("Agent dismissed from review");
+    await load();
+  };
+
   const handleValidate = async () => {
     if (!validateConfirm) return;
     const agentId = validateConfirm.agent_id || validateConfirm.id;
@@ -470,7 +547,7 @@ export default function DiscoveryCenter({ initialTab = "verified" }) {
           {toastMsg}
         </div>
       )}
-      {claimAgent && <ClaimModal agent={claimAgent} onClose={() => setClaimAgent(null)} onSave={handleClaim} environments={environments} />}
+      {claimAgent && <ClaimModal agent={claimAgent} onClose={() => setClaimAgent(null)} onSave={handleClaim} onApprove={handleApprove} onIgnore={handleIgnore} environments={environments} />}
       {evidenceAgent && <EvidenceDrawer agent={evidenceAgent} onClose={() => setEvidenceAgent(null)} />}
       {validateConfirm && (
         <ValidateConfirmModal
@@ -493,10 +570,10 @@ export default function DiscoveryCenter({ initialTab = "verified" }) {
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 20 }}>
         <div style={{ display: "flex", gap: 0, background: T.panelHi, border: `1px solid ${T.border}`, borderRadius: 6, padding: 3 }}>
           {[
-            { id: "verified",   label: `Verified (${verified.length})` },
+            { id: "verified",   label: `Active (${verified.length})` },
             { id: "likely",     label: `Likely (${likely.length})` },
-            { id: "potential",  label: `Potential (${potential.length})` },
-            { id: "historical", label: `Historical (${historical.length})` },
+            { id: "potential",  label: `Needs Review (${potential.length})` },
+            { id: "historical", label: `Inactive (${historical.length})` },
           ].map(t => (
             <button key={t.id} onClick={() => setTab(t.id)}
               style={{ background: tab === t.id ? T.panel : "transparent", border: tab === t.id ? `1px solid ${T.border}` : "1px solid transparent", color: tab === t.id ? T.text : T.textDim, padding: "7px 16px", borderRadius: 4, fontSize: 12, fontFamily: MONO, cursor: "pointer", transition: "all 0.12s" }}>
@@ -511,7 +588,7 @@ export default function DiscoveryCenter({ initialTab = "verified" }) {
       {/* Context info */}
       {tab === "likely" && (
         <div style={{ marginBottom: 16, padding: "10px 14px", background: "#2DD4BF0D", border: "1px solid #2DD4BF33", borderRadius: 6, fontSize: 12, color: T.textDim }}>
-          <span style={{ color: "#2DD4BF" }}>●</span>&nbsp; Likely agents have multiple evidence sources or high confidence scores (≥70%) from platform signals. Strong candidates for validation.
+          <span style={{ color: "#2DD4BF" }}>●</span>&nbsp; Likely agents have multiple independent evidence sources from platform signals. Strong candidates for validation.
         </div>
       )}
       {tab === "potential" && (
@@ -521,7 +598,7 @@ export default function DiscoveryCenter({ initialTab = "verified" }) {
       )}
       {tab === "historical" && (
         <div style={{ marginBottom: 16, padding: "10px 14px", background: T.textDim + "0D", border: `1px solid ${T.border}`, borderRadius: 6, fontSize: 12, color: T.textDim }}>
-          <span style={{ color: T.textDim }}>●</span>&nbsp; Historical agents were previously verified but have had no runtime activity for over 90 days. They may be decommissioned or hibernating.
+          <span style={{ color: T.textDim }}>●</span>&nbsp; Inactive agents were active before but have had no runtime activity for over 90 days. They may be decommissioned or hibernating.
         </div>
       )}
 
@@ -552,7 +629,7 @@ export default function DiscoveryCenter({ initialTab = "verified" }) {
                     <STH sortKey="asset_type" sort={pSort} onSort={toggleP}>Type</STH>
                     <STH sortKey="discovery_status" sort={pSort} onSort={toggleP}>Discovery</STH>
                     <STH sortKey="discovery_source" sort={pSort} onSort={toggleP}>Source</STH>
-                    <STH sortKey="confidence_score" sort={pSort} onSort={toggleP}>Confidence</STH>
+                    <STH sortKey="confidence_score" sort={pSort} onSort={toggleP}>Status</STH>
                     <STH sortKey="first_seen_at" sort={pSort} onSort={toggleP}>First Detected</STH>
                     <STH sort={pSort} onSort={toggleP} style={{ textAlign: "right" }}>Actions</STH>
                   </>
@@ -563,7 +640,7 @@ export default function DiscoveryCenter({ initialTab = "verified" }) {
               {filtered.length === 0 ? (
                 <tr>
                   <td colSpan={8} style={{ textAlign: "center", padding: 32, color: T.textMute, fontFamily: MONO, fontSize: 13 }}>
-                    {search ? "No agents match your search" : tab === "verified" ? "No verified agents yet" : tab === "historical" ? "No historical agents" : tab === "likely" ? "No likely agents" : "No potential agents to review"}
+                    {search ? "No agents match your search" : tab === "verified" ? "No agents discovered. Create a Gateway API Key and send your first request." : tab === "historical" ? "No inactive agents" : tab === "likely" ? "No likely agents" : "No agents to review"}
                   </td>
                 </tr>
               ) : filtered.map(agent => {
@@ -598,7 +675,7 @@ export default function DiscoveryCenter({ initialTab = "verified" }) {
                     <TD><AssetTypeBadge assetType={agent.asset_type} /></TD>
                     <TD><DiscoveryStatusBadge status={agent.discovery_status} /></TD>
                     <TD><SourceBadge source={agent.discovery_source} /></TD>
-                    <TD><ConfidenceBadge score={agent.confidence_score} /></TD>
+                    <TD><StageBadge agent={agent} /></TD>
                     <TD><span style={{ fontFamily: MONO, color: T.textDim, fontSize: 12 }}>{relativeTime(agent.first_seen_at || agent.created_at)}</span></TD>
                     <TD style={{ textAlign: "right" }}>
                       <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>

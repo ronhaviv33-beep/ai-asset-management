@@ -201,7 +201,7 @@ function ProviderCredentialsSection() {
   };
 
   return (
-    <Card title="Organization AI Providers" subtitle="Encrypted BYOK credentials used by this organization for AI runtime calls. Keys are write-only — only the last 4 characters are shown.">
+    <Card title="Provider Credentials" subtitle="Stored securely and used internally by the gateway to reach providers (OpenAI, Anthropic, Gemini, Azure). Write-only — only the last 4 characters are shown. Never expose provider keys in your application code; use a Gateway API Key there instead.">
       {err && <div style={{ color:T.crit, fontFamily:FONT_MONO, fontSize:12, marginBottom:12 }}>{err}</div>}
       {loading ? (
         <div style={{ color:T.textDim, fontFamily:FONT_MONO, fontSize:12, padding:12 }}>Loading…</div>
@@ -661,14 +661,14 @@ export default function SettingsPage() {
       <div style={{ background:T.panel, border:`1px solid ${T.border}`, borderRadius:8, padding:"16px 20px" }}>
         <div style={{ fontSize:12, fontWeight:600, color:T.text, marginBottom:8 }}>Which keys should I configure?</div>
         <div style={{ fontSize:12, color:T.textMute, lineHeight:1.7, marginBottom:10 }}>
-          Use <strong style={{ color:T.text }}>Organization AI Providers</strong> for your agents' model access.
-          Use <strong style={{ color:T.text }}>Platform Configuration</strong> only for deployment-level infrastructure settings.
+          <strong style={{ color:T.text }}>Provider Credentials</strong> are used internally by the gateway and never appear in your code.
+          <strong style={{ color:T.text }}> Gateway API Keys</strong> are what you put in your AI applications.
         </div>
         <div style={{ display:"flex", flexDirection:"column", gap:5 }}>
           {[
-            { label:"Organization AI Providers", desc:"Encrypted BYOK keys used by this organization's agents and gateway traffic to call AI models." },
-            { label:"Platform Configuration",    desc:"Runtime environment settings used by the platform deployment itself (API keys, JWT secret)." },
-            { label:"Gateway API Keys",          desc:"Keys issued to applications and agents to authenticate calls through the gateway." },
+            { label:"Provider Credentials",   desc:"Stored securely; used internally by the gateway to reach OpenAI, Anthropic, Gemini, Azure. Never expose in code." },
+            { label:"Gateway API Keys",       desc:"Used inside your applications, agents and SDK clients to authenticate calls through the gateway." },
+            { label:"Platform Configuration", desc:"Runtime environment settings used by the platform deployment itself (JWT secret, etc.)." },
           ].map(({ label, desc }) => (
             <div key={label} style={{ display:"flex", gap:8, fontSize:11, color:T.textMute, fontFamily:FONT_MONO }}>
               <span style={{ color:T.accent, flexShrink:0 }}>▸</span>

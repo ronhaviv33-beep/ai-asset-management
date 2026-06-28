@@ -1,5 +1,8 @@
 import React, { useState, useEffect, useMemo, useCallback } from "react";
-import { fetchAgents, claimInventoryAgent } from "../api.js";
+import { fetchAgents, claimInventoryAgent, approveSuggestions, ignoreInventoryAgent } from "../api.js";
+import { stageMeta } from "../discoveryStatus.js";
+
+const agentActionId = (a) => a?.id || a?.asset_key || a?.agent_id;
 
 const T = {
   bg: "#0A0B0F", panel: "#0F1117", panelHi: "#141823",
@@ -19,63 +22,126 @@ function relativeTime(iso) {
   return `${d}d ago`;
 }
 
-function CoverageBar({ label, value, total, color = T.accent, target }) {
-  const pct = total > 0 ? Math.round((value / total) * 100) : 0;
+function CoverageBar({ label, value, total, color = T.accent }) {
+  const pct = total > 0 ? (value / total) * 100 : 0;   // visual fill only — not shown as a number
+  const remaining = Math.max(0, total - value);
   return (
     <div style={{ marginBottom: 14 }}>
       <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, color: T.text, marginBottom: 6 }}>
         <span>{label}</span>
         <span style={{ fontFamily: MONO }}>
           <span style={{ color }}>{value}</span>
-          <span style={{ color: T.textMute }}>/{total} ({pct}%)</span>
-          {target && <span style={{ color: pct >= target ? T.accent : T.warn, marginLeft: 8, fontSize: 11 }}>{pct >= target ? "✓" : `${target}% target`}</span>}
+          <span style={{ color: T.textMute }}> of {total} done</span>
+          <span style={{ color: remaining > 0 ? T.warn : T.accent, marginLeft: 8, fontSize: 11 }}>
+            {remaining > 0 ? `${remaining} to review` : "✓ complete"}
+          </span>
         </span>
       </div>
-      <div style={{ background: T.panelHi, borderRadius: 2, height: 6, position: "relative" }}>
+      <div style={{ background: T.panelHi, borderRadius: 2, height: 6 }}>
         <div style={{ width: `${pct}%`, background: color, height: 6, borderRadius: 2, transition: "width 0.5s" }} />
-        {target && <div style={{ position: "absolute", top: -1, left: `${target}%`, width: 1, height: 8, background: T.textMute, opacity: 0.4 }} />}
       </div>
     </div>
   );
 }
 
-function ClaimModal({ agent, onClose, onSave }) {
-  const [owner, setOwner]   = useState("");
-  const [team, setTeam]     = useState(agent?.team || "");
-  const [saving, setSaving] = useState(false);
-  const [err, setErr]       = useState("");
+function StageBadge({ agent }) {
+  const m = stageMeta(agent || {});
+  return (
+    <span title={m.description}
+      style={{ display: "inline-flex", alignItems: "center", gap: 5, background: m.color + "1A", color: m.color, border: `1px solid ${m.color}44`, fontSize: 10, fontFamily: MONO, fontWeight: 600, padding: "2px 9px", borderRadius: 4, textTransform: "uppercase", letterSpacing: "0.05em", whiteSpace: "nowrap" }}>
+      <span style={{ width: 5, height: 5, borderRadius: "50%", background: m.color }} />
+      {m.label}
+    </span>
+  );
+}
 
-  const submit = async () => {
-    if (!owner.trim()) { setErr("Owner is required"); return; }
-    setSaving(true);
-    try { await onSave(agent.agent_id, { owner_name: owner, team }); onClose(); }
-    catch (e) { setErr(e.message); }
-    finally { setSaving(false); }
+// Review modal — suggestions-first Approve / Edit / Ignore (mirrors Discovery Center).
+function ReviewModal({ agent, onClose, onSave, onApprove, onIgnore }) {
+  const sOwner = agent?.suggested_owner || "";
+  const sTeam  = agent?.suggested_team || (agent?.team && agent.team !== "Unknown" ? agent.team : "");
+  const sEnv   = agent?.suggested_environment || (agent?.environment && agent.environment !== "Unknown" ? agent.environment : "");
+  const hasSuggestions = !!(sOwner || sTeam || sEnv);
+
+  const [editing, setEditing] = useState(!hasSuggestions);
+  const [owner, setOwner] = useState(sOwner);
+  const [team, setTeam]   = useState(sTeam);
+  const [busy, setBusy]   = useState("");
+  const [err, setErr]     = useState("");
+  const ev = agent?.identity_evidence || {};
+
+  const run = async (fn) => { setErr(""); try { await fn(); onClose(); } catch (e) { setErr(e.message); } };
+  const approve = () => run(async () => { setBusy("approve"); try { await onApprove(agent); } finally { setBusy(""); } });
+  const ignore  = () => run(async () => { setBusy("ignore");  try { await onIgnore(agent);  } finally { setBusy(""); } });
+  const save    = () => {
+    if (!owner.trim() && !team.trim()) { setErr("Enter an owner or a team"); return; }
+    run(async () => { setBusy("save"); try { await onSave(agentActionId(agent), { owner: owner.trim(), team: team.trim(), agent_name: agent.agent_name }); } finally { setBusy(""); } });
   };
 
+  const row = (label, value) => value ? (
+    <div style={{ display: "flex", gap: 10, fontSize: 12 }}>
+      <span style={{ color: T.textMute, fontFamily: MONO, minWidth: 90 }}>{label}</span>
+      <span style={{ color: T.text }}>{value}</span>
+    </div>
+  ) : null;
+
   return (
-    <div style={{ position: "fixed", inset: 0, background: "#000A", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000 }}>
-      <div style={{ background: T.panel, border: `1px solid ${T.border}`, borderRadius: 8, padding: 28, minWidth: 360, fontFamily: FONT }}>
-        <div style={{ fontSize: 16, fontWeight: 600, color: T.text, marginBottom: 6 }}>Assign Owner</div>
-        <div style={{ fontSize: 13, color: T.textDim, marginBottom: 20 }}>
-          Claiming <strong style={{ color: T.text, fontFamily: MONO }}>{agent?.agent_name}</strong>
+    <div style={{ position: "fixed", inset: 0, background: "#000A", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000, padding: 24 }}>
+      <div style={{ background: T.panel, border: `1px solid ${T.border}`, borderRadius: 8, padding: 28, width: "100%", maxWidth: 460, fontFamily: FONT }}>
+        <div style={{ fontSize: 16, fontWeight: 600, color: T.text, marginBottom: 6 }}>New Agent Discovered</div>
+        <div style={{ fontSize: 13, color: T.textDim, marginBottom: 16, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+          <StageBadge agent={agent} />
+          <strong style={{ color: T.text, fontFamily: MONO }}>{agent?.agent_name}</strong>
         </div>
-        {[
-          { label: "Owner", value: owner, set: setOwner, placeholder: "Email or display name" },
-          { label: "Team",  value: team,  set: setTeam,  placeholder: "Team name" },
-        ].map(({ label, value, set, placeholder }) => (
-          <div key={label} style={{ marginBottom: 14 }}>
-            <div style={{ fontSize: 10, color: T.textMute, fontFamily: MONO, letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 6 }}>{label}</div>
-            <input value={value} onChange={e => set(e.target.value)} placeholder={placeholder}
-              style={{ width: "100%", background: T.panelHi, border: `1px solid ${T.border}`, color: T.text, padding: "8px 12px", borderRadius: 4, fontSize: 13, fontFamily: FONT }} />
+
+        {err && <div style={{ color: T.crit, fontSize: 12, fontFamily: MONO, marginBottom: 12 }}>{err}</div>}
+
+        {/* Evidence */}
+        <div style={{ background: T.panelHi, border: `1px solid ${T.border}`, borderRadius: 6, padding: "12px 14px", marginBottom: 16, display: "flex", flexDirection: "column", gap: 5 }}>
+          <div style={{ fontSize: 10, color: T.textMute, fontFamily: MONO, letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 4 }}>Evidence</div>
+          {row("Seen via", (ev.source || agent?.discovery_source || "gateway").replace(/_/g, " "))}
+          {row("Provider", ev.provider)}
+          {row("Models", Array.isArray(ev.models) ? ev.models.join(", ") : ev.models)}
+          {row("Last seen", agent?.last_seen ? relativeTime(agent.last_seen) : null)}
+        </div>
+
+        {!editing ? (
+          <div style={{ marginBottom: 16, display: "flex", flexDirection: "column", gap: 5 }}>
+            <div style={{ fontSize: 10, color: T.textMute, fontFamily: MONO, letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 4 }}>Suggested</div>
+            {row("Owner", sOwner || "—")}
+            {row("Team", sTeam || "—")}
+            {row("Environment", sEnv || "—")}
           </div>
-        ))}
-        {err && <div style={{ color: T.crit, fontSize: 12, fontFamily: MONO, marginBottom: 10 }}>{err}</div>}
-        <div style={{ display: "flex", gap: 10, justifyContent: "flex-end", marginTop: 20 }}>
-          <button onClick={onClose} style={{ background: "transparent", border: `1px solid ${T.border}`, color: T.textDim, padding: "8px 16px", borderRadius: 4, fontSize: 13, cursor: "pointer" }}>Cancel</button>
-          <button onClick={submit} disabled={saving} style={{ background: T.accent, color: T.bg, border: "none", padding: "8px 16px", borderRadius: 4, fontSize: 13, fontWeight: 600, cursor: "pointer" }}>
-            {saving ? "Assigning…" : "Assign"}
+        ) : (
+          <>
+            {[
+              { label: "Owner", value: owner, set: setOwner, placeholder: "Email or display name" },
+              { label: "Team",  value: team,  set: setTeam,  placeholder: "Team name" },
+            ].map(({ label, value, set, placeholder }) => (
+              <div key={label} style={{ marginBottom: 14 }}>
+                <div style={{ fontSize: 10, color: T.textMute, fontFamily: MONO, letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 6 }}>{label}</div>
+                <input value={value} onChange={e => set(e.target.value)} placeholder={placeholder}
+                  style={{ width: "100%", background: T.panelHi, border: `1px solid ${T.border}`, color: T.text, padding: "8px 12px", borderRadius: 4, fontSize: 13, fontFamily: FONT, boxSizing: "border-box" }} />
+              </div>
+            ))}
+          </>
+        )}
+
+        <div style={{ display: "flex", gap: 10, justifyContent: "flex-end", marginTop: 16, flexWrap: "wrap" }}>
+          <button onClick={ignore} disabled={!!busy} style={{ background: "transparent", border: `1px solid ${T.border}`, color: T.textDim, padding: "8px 14px", borderRadius: 4, fontSize: 13, cursor: busy ? "not-allowed" : "pointer", marginRight: "auto" }}>
+            {busy === "ignore" ? "Ignoring…" : "Ignore"}
           </button>
+          {editing ? (
+            <button onClick={save} disabled={!!busy} style={{ background: T.accent, color: T.bg, border: "none", padding: "8px 16px", borderRadius: 4, fontSize: 13, fontWeight: 600, cursor: busy ? "not-allowed" : "pointer" }}>
+              {busy === "save" ? "Saving…" : "Save & Claim"}
+            </button>
+          ) : (
+            <>
+              <button onClick={() => setEditing(true)} disabled={!!busy} style={{ background: "transparent", border: `1px solid ${T.border}`, color: T.text, padding: "8px 14px", borderRadius: 4, fontSize: 13, cursor: busy ? "not-allowed" : "pointer" }}>Edit</button>
+              <button onClick={approve} disabled={!!busy} style={{ background: T.accent, color: T.bg, border: "none", padding: "8px 16px", borderRadius: 4, fontSize: 13, fontWeight: 600, cursor: busy ? "not-allowed" : "pointer" }}>
+                {busy === "approve" ? "Approving…" : "Approve"}
+              </button>
+            </>
+          )}
         </div>
       </div>
     </div>
@@ -155,7 +221,6 @@ export default function GovernanceCenter() {
   const withPurpose      = agents.filter(a => a.business_purpose || a.description).length;
 
   const pendingApprovals = [...needsValidation, ...unassigned];
-  const ownershipGap     = Math.max(0, Math.ceil(total * 0.9) - withOwner);
 
   const handleClaim = async (agentId, body) => {
     await claimInventoryAgent(agentId, body);
@@ -163,9 +228,21 @@ export default function GovernanceCenter() {
     await load();
   };
 
+  const handleApprove = async (agent) => {
+    await approveSuggestions(agentActionId(agent), {});
+    toast("Suggestions approved — agent is now managed");
+    await load();
+  };
+
+  const handleIgnore = async (agent) => {
+    await ignoreInventoryAgent(agentActionId(agent));
+    toast("Agent dismissed from review");
+    await load();
+  };
+
   const tabs = [
-    { id: "approvals", label: `Approvals (${pendingApprovals.length})` },
-    { id: "ownership", label: `Ownership (${Math.round(withOwner / Math.max(1, total) * 100)}% covered)` },
+    { id: "approvals", label: `Review Queue (${pendingApprovals.length})` },
+    { id: "ownership", label: `Ownership Review (${total - withOwner} need owner)` },
     { id: "policy",    label: "Policy Coverage" },
   ];
 
@@ -176,7 +253,7 @@ export default function GovernanceCenter() {
           {toastMsg}
         </div>
       )}
-      {claimTarget && <ClaimModal agent={claimTarget} onClose={() => setClaimTarget(null)} onSave={handleClaim} />}
+      {claimTarget && <ReviewModal agent={claimTarget} onClose={() => setClaimTarget(null)} onSave={handleClaim} onApprove={handleApprove} onIgnore={handleIgnore} />}
 
       {/* Tab bar */}
       <div style={{ display: "flex", gap: 0, background: T.panelHi, border: `1px solid ${T.border}`, borderRadius: 6, padding: 3, marginBottom: 24, alignSelf: "flex-start", width: "fit-content" }}>
@@ -196,8 +273,8 @@ export default function GovernanceCenter() {
         <div>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 24 }}>
             {[
-              { label: "Pending Validation", count: needsValidation.length, color: T.warn,   desc: "Potential agents requiring confirmation" },
-              { label: "Pending Ownership",  count: unassigned.length,      color: T.yellow, desc: "Verified agents without an assigned owner" },
+              { label: "Needs Validation",    count: needsValidation.length, color: T.warn,   desc: "Discovered agents to confirm" },
+              { label: "Agents Needing Owner", count: unassigned.length,     color: T.yellow, desc: "Discovered agents without an owner yet" },
             ].map(({ label, count, color, desc }) => (
               <div key={label} style={{ background: T.panel, border: `1px solid ${T.border}`, borderRadius: 8, padding: "20px 24px" }}>
                 <div style={{ fontSize: 9, fontFamily: MONO, color: T.textMute, letterSpacing: "0.14em", textTransform: "uppercase", marginBottom: 10 }}>{label}</div>
@@ -209,7 +286,7 @@ export default function GovernanceCenter() {
 
           {pendingApprovals.length === 0 ? (
             <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "28px", background: T.panel, border: `1px solid ${T.accent}33`, borderRadius: 8, color: T.accent, fontFamily: MONO, fontSize: 14 }}>
-              <span style={{ fontSize: 22 }}>✓</span> All agents are validated and assigned. Governance is up to date.
+              <span style={{ fontSize: 22 }}>✓</span> Nothing to review — every discovered agent has an owner.
             </div>
           ) : (
             <div style={{ background: T.panel, border: `1px solid ${T.border}`, borderRadius: 8, overflow: "hidden" }}>
@@ -234,7 +311,7 @@ export default function GovernanceCenter() {
                         </TD>
                         <TD>
                           <span style={{ display: "inline-block", background: isPending ? T.warn + "1A" : T.yellow + "1A", color: isPending ? T.warn : T.yellow, border: `1px solid ${isPending ? T.warn : T.yellow}33`, fontSize: 11, fontFamily: MONO, padding: "2px 9px", borderRadius: 4 }}>
-                            {isPending ? "Validate Agent" : "Assign Owner"}
+                            {isPending ? "Validate Agent" : "Needs Owner"}
                           </span>
                         </TD>
                         <TD><span style={{ color: T.textDim }}>{agent.team || "—"}</span></TD>
@@ -242,7 +319,7 @@ export default function GovernanceCenter() {
                         <TD>
                           {!isPending && (
                             <button onClick={() => setClaimTarget(agent)} style={{ background: "transparent", border: `1px solid ${T.border}`, color: T.textDim, padding: "4px 12px", borderRadius: 4, fontSize: 11, fontFamily: MONO, cursor: "pointer" }}>
-                              Assign Owner
+                              Review
                             </button>
                           )}
                         </TD>
@@ -259,12 +336,11 @@ export default function GovernanceCenter() {
 
         /* ── Ownership ─────────────────────────────────────────────────────── */
         <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 12 }}>
             {[
-              { label: "Owned",    count: withOwner,         color: T.accent },
-              { label: "Unowned",  count: total - withOwner, color: T.yellow },
-              { label: "Coverage", count: `${total > 0 ? Math.round(withOwner / total * 100) : 0}%`, color: T.info },
-              { label: "Gap to 90%", count: ownershipGap,   color: ownershipGap > 0 ? T.warn : T.accent },
+              { label: "Owned",         count: withOwner,         color: T.accent },
+              { label: "Needs Owner",   count: total - withOwner, color: T.yellow },
+              { label: "Total Agents",  count: total,             color: T.info },
             ].map(({ label, count, color }) => (
               <div key={label} style={{ background: T.panel, border: `1px solid ${T.border}`, borderRadius: 8, padding: "18px 20px" }}>
                 <div style={{ fontSize: 9, fontFamily: MONO, color: T.textMute, letterSpacing: "0.14em", textTransform: "uppercase", marginBottom: 10 }}>{label}</div>
@@ -274,22 +350,20 @@ export default function GovernanceCenter() {
           </div>
 
           <div style={{ background: T.panel, border: `1px solid ${T.border}`, borderRadius: 8, padding: "20px 24px" }}>
-            <div style={{ fontSize: 14, fontWeight: 600, color: T.text, marginBottom: 16 }}>Ownership Coverage</div>
-            <div style={{ marginBottom: 10, background: T.panelHi, borderRadius: 2, height: 8, position: "relative" }}>
+            <div style={{ fontSize: 14, fontWeight: 600, color: T.text, marginBottom: 16 }}>Ownership Review</div>
+            <div style={{ marginBottom: 10, background: T.panelHi, borderRadius: 2, height: 8 }}>
               <div style={{ width: `${total > 0 ? (withOwner / total) * 100 : 0}%`, background: T.accent, height: 8, borderRadius: 2 }} />
-              <div style={{ position: "absolute", top: -2, left: "90%", width: 2, height: 12, background: T.textMute, opacity: 0.5 }} />
             </div>
             <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, fontFamily: MONO, color: T.textMute, marginTop: 6 }}>
               <span><span style={{ color: T.accent }}>{withOwner}</span> owned</span>
-              <span>90% target</span>
-              <span><span style={{ color: T.yellow }}>{total - withOwner}</span> unassigned</span>
+              <span><span style={{ color: T.yellow }}>{total - withOwner}</span> awaiting ownership review</span>
             </div>
           </div>
 
           {unassigned.length > 0 && (
             <div style={{ background: T.panel, border: `1px solid ${T.border}`, borderRadius: 8, overflow: "hidden" }}>
               <div style={{ padding: "16px 20px", borderBottom: `1px solid ${T.border}`, fontSize: 14, fontWeight: 600, color: T.text }}>
-                Unassigned Agents ({unassigned.length})
+                Agents Needing Owner ({unassigned.length})
               </div>
               <table style={{ width: "100%", borderCollapse: "collapse" }}>
                 <thead>
@@ -298,7 +372,7 @@ export default function GovernanceCenter() {
                     <STH sortKey="team" sort={unaSort} onSort={toggleUna}>Team</STH>
                     <STH sortKey="environment" sort={unaSort} onSort={toggleUna}>Environment</STH>
                     <STH sortKey="first_seen_at" sort={unaSort} onSort={toggleUna}>First Seen</STH>
-                    <STH>Assign</STH>
+                    <STH>Review</STH>
                   </tr>
                 </thead>
                 <tbody>
@@ -310,7 +384,7 @@ export default function GovernanceCenter() {
                       <TD><span style={{ fontFamily: MONO, color: T.textDim, fontSize: 12 }}>{relativeTime(agent.first_seen_at || agent.created_at)}</span></TD>
                       <TD>
                         <button onClick={() => setClaimTarget(agent)} style={{ background: "transparent", border: `1px solid ${T.border}`, color: T.textDim, padding: "4px 12px", borderRadius: 4, fontSize: 11, fontFamily: MONO, cursor: "pointer" }}>
-                          Assign Owner
+                          Review
                         </button>
                       </TD>
                     </tr>
@@ -327,10 +401,10 @@ export default function GovernanceCenter() {
         <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
           <div style={{ background: T.panel, border: `1px solid ${T.border}`, borderRadius: 8, padding: "24px 28px" }}>
             <div style={{ fontSize: 14, fontWeight: 600, color: T.text, marginBottom: 20 }}>Classification Completeness</div>
-            <CoverageBar label="Owner Assigned"            value={withOwner}  total={total} color={T.accent}  target={90} />
-            <CoverageBar label="Environment Classified"    value={withEnv}    total={total} color={T.info}    target={95} />
-            <CoverageBar label="Criticality Assessed"      value={withCrit}   total={total} color={T.warn}    target={85} />
-            <CoverageBar label="Business Purpose Documented" value={withPurpose} total={total} color={T.purple} target={70} />
+            <CoverageBar label="Owner Assigned"            value={withOwner}  total={total} color={T.accent} />
+            <CoverageBar label="Environment Classified"    value={withEnv}    total={total} color={T.info} />
+            <CoverageBar label="Criticality Assessed"      value={withCrit}   total={total} color={T.warn} />
+            <CoverageBar label="Business Purpose Documented" value={withPurpose} total={total} color={T.purple} />
           </div>
 
           <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 12 }}>

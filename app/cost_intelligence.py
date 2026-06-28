@@ -96,6 +96,38 @@ def _runtime_cost_query(
     return round(float(q.scalar() or 0.0), 6)
 
 
+def _runtime_usage_query(
+    db: Session,
+    org_id: int,
+    start: datetime,
+    end: datetime,
+    team_scope: Optional[str] = None,
+    demo_mode: bool = False,
+) -> dict:
+    """Aggregate request count and token totals for the period (additive — feeds
+    the 'tiny but visible' first-request experience in Cost Intelligence)."""
+    q = db.query(
+        func.count(Telemetry.id),
+        func.coalesce(func.sum(Telemetry.prompt_tokens), 0),
+        func.coalesce(func.sum(Telemetry.completion_tokens), 0),
+        func.coalesce(func.sum(Telemetry.total_tokens), 0),
+    ).filter(
+        Telemetry.organization_id == org_id,
+        Telemetry.timestamp >= start,
+        Telemetry.timestamp <= end,
+        Telemetry.is_demo == demo_mode,
+    )
+    if team_scope:
+        q = q.filter(Telemetry.team == team_scope)
+    requests, input_tokens, output_tokens, total_tokens = q.one()
+    return {
+        "requests":      int(requests or 0),
+        "input_tokens":  int(input_tokens or 0),
+        "output_tokens": int(output_tokens or 0),
+        "total_tokens":  int(total_tokens or 0),
+    }
+
+
 # ── Public API ────────────────────────────────────────────────────────────────
 
 def get_cost_overview(
@@ -115,6 +147,7 @@ def get_cost_overview(
 
     # Layer 1 — runtime (telemetry)
     runtime_total = _runtime_cost_query(db, org_id, start, end, team_scope, demo_mode=demo_mode)
+    usage = _runtime_usage_query(db, org_id, start, end, team_scope, demo_mode=demo_mode)
 
     # Trend vs previous same-length period
     prev_start = start - timedelta(days=period_days)
@@ -183,6 +216,10 @@ def get_cost_overview(
             "prev_period_usd": prev_total,
             "trend_percent":  trend_pct,
             "trend_direction": trend_dir,
+            "requests":       usage["requests"],
+            "input_tokens":   usage["input_tokens"],
+            "output_tokens":  usage["output_tokens"],
+            "total_tokens":   usage["total_tokens"],
         },
         "provider_billing": provider_billing,
         "total_billed_usd":  total_billed,
