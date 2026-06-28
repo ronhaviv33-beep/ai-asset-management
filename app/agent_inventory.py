@@ -18,6 +18,25 @@ from sqlalchemy.orm import Session
 
 from app import assets as _assets
 from app.models import AssetRegistry
+from app.discovery_status import (
+    derive_discovery_status,
+    build_identity_evidence,
+    derive_suggestions,
+)
+
+
+def _attach_discovery_fields(rec: dict) -> dict:
+    """Attach derived customer-facing discovery fields to a record (never raises)."""
+    try:
+        stage, label, reason = derive_discovery_status(rec)
+        rec["discovery_stage"] = stage
+        rec["stage_label"] = label
+        rec["stage_reason"] = reason
+        rec["identity_evidence"] = build_identity_evidence(rec)
+        rec.update(derive_suggestions(rec))
+    except Exception:
+        pass
+    return rec
 
 
 # ── Record builders ───────────────────────────────────────────────────────────
@@ -59,7 +78,7 @@ def _to_inventory_record(asset: dict) -> dict:
         except Exception:
             pass
 
-    return {
+    return _attach_discovery_fields({
         "id":               asset.get("asset_key") or asset["agent_name"],
         "name":             asset["agent_name"],
         "agent_name":       asset["agent_name"],   # alias for frontend compatibility
@@ -90,7 +109,7 @@ def _to_inventory_record(asset: dict) -> dict:
         "claimed_at":       asset.get("claimed_at"),
         "asset_type":       asset.get("asset_type", "agent"),
         "capabilities":     _parse_capabilities(asset.get("capabilities")),
-    }
+    })
 
 
 def _registry_to_potential_record(reg: AssetRegistry) -> dict:
@@ -105,7 +124,7 @@ def _registry_to_potential_record(reg: AssetRegistry) -> dict:
     _ds = "potential"
     if _conf >= 70.0 or len(_ev) >= 2:
         _ds = "likely"
-    return {
+    return _attach_discovery_fields({
         "id":               reg.asset_key,
         "name":             _name,
         "agent_name":       _name,
@@ -136,7 +155,7 @@ def _registry_to_potential_record(reg: AssetRegistry) -> dict:
         "claimed_at":       reg.claimed_at.isoformat() if reg.claimed_at else None,
         "asset_type":       getattr(reg, "asset_type", None) or "agent",
         "capabilities":     _parse_capabilities(getattr(reg, "capabilities", None)),
-    }
+    })
 
 
 # ── Public API ────────────────────────────────────────────────────────────────

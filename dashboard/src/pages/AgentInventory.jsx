@@ -3,8 +3,12 @@ import { createPortal } from "react-dom";
 import {
   fetchAgents, fetchAgentsSummary,
   claimInventoryAgent, validateInventoryAgent, rejectInventoryAgent,
-  updateInventoryAgent, fetchOrgConfig,
+  updateInventoryAgent, approveSuggestions, ignoreInventoryAgent, fetchOrgConfig,
 } from "../api.js";
+import { stageMeta } from "../discoveryStatus.js";
+
+// Resolve a usable agent id for action endpoints (records expose id/asset_key, not agent_id).
+const agentActionId = (a) => a?.id || a?.asset_key || a?.agent_id;
 
 // ─── Design tokens — mirror App.jsx T ────────────────────────────────────────
 const T = {
@@ -257,16 +261,15 @@ const AssetTypeBadge = ({ assetType }) => {
   );
 };
 
-function ConfidenceBar({ score }) {
-  const pct = Math.min(100, Math.max(0, score || 0));
-  const color = pct >= 80 ? T.accent : pct >= 50 ? T.warn : T.crit;
+// Customer-facing discovery-status badge (replaces the confidence percentage bar).
+function StageBadge({ agent }) {
+  const m = stageMeta(agent || {});
   return (
-    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-      <div style={{ flex: 1, height: 4, background: T.panelHi, borderRadius: 2, overflow: "hidden" }}>
-        <div style={{ width: `${pct}%`, height: "100%", background: color, borderRadius: 2 }} />
-      </div>
-      <span style={{ fontSize: 11, fontFamily: FONT_MONO, color, minWidth: 32 }}>{pct.toFixed(0)}%</span>
-    </div>
+    <span title={m.description}
+      style={{ display: "inline-flex", alignItems: "center", gap: 5, background: m.color + "1A", color: m.color, border: `1px solid ${m.color}44`, fontSize: 10, fontFamily: FONT_MONO, fontWeight: 600, padding: "2px 9px", borderRadius: 4, textTransform: "uppercase", letterSpacing: "0.05em", whiteSpace: "nowrap" }}>
+      <span style={{ width: 5, height: 5, borderRadius: "50%", background: m.color }} />
+      {m.label}
+    </span>
   );
 }
 
@@ -496,7 +499,7 @@ function PotentialTable({ agents, onValidate, onReject, onEdit }) {
         <thead><tr>
           <Th label="Detected Agent"  sortKey="name"             {...sp} style={{ paddingLeft: 20 }} />
           <Th label="Source"          sortKey="discovery_source" {...sp} />
-          <Th label="Confidence"      sortKey="confidence_score" {...sp} style={{ minWidth: 140 }} />
+          <Th label="Status"          sortKey="confidence_score" {...sp} style={{ minWidth: 140 }} />
           <Th label="Evidence" />
           <Th label="First Detected"  sortKey="first_seen"       {...sp} />
           <Th label="" style={{ minWidth: 160 }} />
@@ -513,7 +516,7 @@ function PotentialTable({ agents, onValidate, onReject, onEdit }) {
                 )}
               </Td>
               <Td><DiscoveryBadge source={a.discovery_source} /></Td>
-              <Td><ConfidenceBar score={a.confidence_score} /></Td>
+              <Td><StageBadge agent={a} /></Td>
               <Td><EvidenceChips evidence={a.evidence} /></Td>
               <Td><span style={{ fontSize: 11, fontFamily: FONT_MONO, color: T.textDim }}>{relativeTime(a.first_seen)}</span></Td>
               <Td>
@@ -672,7 +675,7 @@ function ClaimModal({ agent, onSave, onClose, saving, environments = ["productio
 
       <div style={{ background: T.panelHi, border: `1px solid ${T.border}`, borderRadius: 6, padding: "10px 14px", marginBottom: 20, fontSize: 11, color: T.textMute, fontFamily: FONT_MONO }}>
         <div><span style={{ color: T.accent }}>●</span> Source: {agent?.discovery_source?.replace(/_/g, " ") || "gateway"}</div>
-        <div><span style={{ color: T.accent }}>●</span> Confidence: {(agent?.confidence_score || 95).toFixed(0)}%</div>
+        <div style={{ marginTop: 4 }}><span style={{ color: T.accent }}>●</span> Status: {stageMeta(agent).label}{agent?.stage_reason ? ` — ${agent.stage_reason}` : ""}</div>
         <div style={{ marginTop: 6, fontSize: 10, color: T.textMute }}>Claiming only writes to the registry. Historical telemetry is never modified.</div>
       </div>
 

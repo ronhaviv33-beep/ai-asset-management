@@ -5,6 +5,7 @@ import {
   fetchCostIntelligence, fetchSecurityAlerts,
   fetchRelationships,
 } from "../api.js";
+import { relationshipEvidenceLabel } from "../discoveryStatus.js";
 
 const T = {
   bg: "#0A0B0F", panel: "#0F1117", panelHi: "#141823",
@@ -378,13 +379,12 @@ export default function ExecutiveDashboard({ onNavigate }) {
           <div>
             {/* Column headers */}
             <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr 80px 80px", gap: 12, padding: "0 4px 10px", borderBottom: `1px solid ${T.border}`, marginBottom: 4 }}>
-              {["Source Agent → Target System", "Relationship", "Evidence", "Confidence", "Requests"].map(h => (
+              {["Source Agent → Target System", "Relationship", "Evidence", "Strength", "Requests"].map(h => (
                 <div key={h} style={{ fontSize: 9, fontFamily: MONO, color: T.textMute, letterSpacing: "0.12em", textTransform: "uppercase" }}>{h}</div>
               ))}
             </div>
             {topRels.map((r, i) => {
-              const pct   = Math.round(r.confidence_score * 100);
-              const conf  = pct >= 80 ? T.accent : pct >= 70 ? T.warn : T.crit;
+              const ev    = relationshipEvidenceLabel(r);   // qualitative — no percentage
               const REL_COLOR = {
                 calls: T.info, uses_tool: T.teal, invokes_workflow: T.warn,
                 triggers: T.warn, writes_to: T.crit, reads_from: T.accent, sends_event_to: T.purple,
@@ -421,12 +421,13 @@ export default function ExecutiveDashboard({ onNavigate }) {
                   <div style={{ fontFamily: MONO, fontSize: 10, color: T.textMute }}>
                     {r.evidence_source.replace(/_/g, " ")}
                   </div>
-                  {/* Confidence */}
-                  <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
-                    <div style={{ flex: 1, background: T.panelHi, borderRadius: 2, height: 4, overflow: "hidden" }}>
-                      <div style={{ width: `${pct}%`, height: "100%", background: conf, borderRadius: 2 }} />
-                    </div>
-                    <span style={{ fontFamily: MONO, fontSize: 10, color: T.textMute, flexShrink: 0 }}>{pct}%</span>
+                  {/* Evidence strength (qualitative, not a percentage) */}
+                  <div style={{ display: "flex", alignItems: "center" }}>
+                    <span title={ev.why}
+                      style={{ padding: "2px 8px", borderRadius: 3, fontSize: 10, fontFamily: MONO,
+                        background: ev.color + "1A", color: ev.color, border: `1px solid ${ev.color}33`, whiteSpace: "nowrap" }}>
+                      {ev.label}
+                    </span>
                   </div>
                   {/* Request count */}
                   <div style={{ fontFamily: MONO, fontSize: 12, color: T.text, textAlign: "right" }}>

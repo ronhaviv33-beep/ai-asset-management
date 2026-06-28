@@ -52,6 +52,39 @@ def _caller_email(user) -> str | None:
     return user.get("email") if isinstance(user, dict) else getattr(user, "email", None)
 
 
+def _append_evidence_event(reg: AssetRegistry, action: str, user, **extra) -> None:
+    """Append an event to the registry's evidence trail (same pattern as validate/reject)."""
+    evidence = {}
+    try:
+        evidence = json.loads(reg.evidence or "{}")
+    except Exception:
+        pass
+    events = evidence.get("validation_events", [])
+    events.append({
+        "action": action,
+        "by": _caller_email(user),
+        "at": datetime.now(timezone.utc).isoformat(),
+        **extra,
+    })
+    evidence["validation_events"] = events
+    reg.evidence = json.dumps(evidence)
+
+
+def _apply_claim(reg: AssetRegistry, body: dict, user) -> None:
+    """Shared claim mutation — used by /claim and /approve-suggestions so both
+    behave identically. Preserves existing values when a field is not provided."""
+    reg.owner            = body.get("owner") or reg.owner
+    reg.team             = body.get("team") or reg.team
+    reg.environment      = body.get("environment") or reg.environment
+    reg.criticality      = body.get("criticality") or reg.criticality
+    reg.business_purpose = body.get("business_purpose") or reg.business_purpose
+    reg.agent_name       = body.get("agent_name") or reg.agent_name
+    reg.status           = "managed"
+    reg.source           = "claimed"
+    reg.claimed_by       = _caller_email(user)
+    reg.claimed_at       = datetime.now(timezone.utc)
+
+
 # ── List & Summary ────────────────────────────────────────────────────────────
 
 @router.get("/agents")
@@ -171,20 +204,119 @@ async def claim_agent(
         db.add(reg)
         db.flush()
 
-    reg.owner            = body.get("owner") or reg.owner
-    reg.team             = body.get("team") or reg.team
-    reg.environment      = body.get("environment") or reg.environment
-    reg.criticality      = body.get("criticality") or reg.criticality
-    reg.business_purpose = body.get("business_purpose") or reg.business_purpose
-    reg.agent_name       = body.get("agent_name") or reg.agent_name
-    reg.status           = "managed"
-    reg.source           = "claimed"
-    reg.claimed_by       = _caller_email(user)
-    reg.claimed_at       = datetime.now(timezone.utc)
+    _apply_claim(reg, body, user)
 
     db.commit()
     return inv.get_agent_by_id(db, org_id, reg.asset_key) or {
         "status": "managed", "asset_key": reg.asset_key, "lifecycle_status": "managed",
+    }
+
+
+@router.post("/agents/{agent_id}/approve-suggestions")
+async def approve_suggestions(
+    agent_id: str,
+    body: dict | None = None,
+    user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Approve the system's suggested owner/team/environment for a discovered agent
+    and mark it managed — the one-click alternative to filling in the claim form.
+    Any field present in the request body overrides the corresponding suggestion.
+    Reuses the same mutation as /claim, so the resulting record is identical.
+    """
+    org_id, team_scope = _org_and_scope(user, db)
+    if is_deny_sentinel(team_scope):
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    body = body or {}
+    reg = _lookup_registry(db, org_id, agent_id)
+
+    if reg and getattr(reg, "discovery_status", "verified") == "potential":
+        raise HTTPException(
+            status_code=400,
+            detail="This is a potential agent. Use POST /agents/{id}/validate to confirm and claim it.",
+        )
+
+    # Server-derived suggestions come from the inventory record (read-time only).
+    agent = inv.get_agent_by_id(db, org_id, agent_id) or {}
+    merged = {
+        "owner":            body.get("owner")            or agent.get("suggested_owner"),
+        "team":             body.get("team")             or agent.get("suggested_team"),
+        "environment":      body.get("environment")      or agent.get("suggested_environment"),
+        "criticality":      body.get("criticality"),
+        "business_purpose": body.get("business_purpose"),
+        "agent_name":       body.get("agent_name"),
+    }
+
+    # Auto-create the registry row on first approval (mirrors /claim).
+    if not reg:
+        asset_key = agent_id if len(agent_id) == 64 else hashlib.sha256(f"{org_id}:{agent_id}".encode()).hexdigest()
+        reg = AssetRegistry(
+            organization_id  = org_id,
+            asset_key        = asset_key,
+            agent_id_raw     = agent_id,
+            agent_name       = agent_id,
+            discovery_status = "verified",
+            discovery_source = "gateway_telemetry",
+            confidence_score = 95.0,
+            first_seen_at    = datetime.now(timezone.utc),
+        )
+        db.add(reg)
+        db.flush()
+
+    _apply_claim(reg, merged, user)
+    _append_evidence_event(reg, "approved_suggestions", user)
+
+    db.commit()
+    return inv.get_agent_by_id(db, org_id, reg.asset_key) or {
+        "status": "managed", "asset_key": reg.asset_key, "lifecycle_status": "managed",
+    }
+
+
+@router.post("/agents/{agent_id}/ignore")
+async def ignore_agent(
+    agent_id: str,
+    body: dict | None = None,
+    user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Dismiss a discovered agent from the urgent review queue WITHOUT retiring or
+    deleting it. Records an 'ignored' event in the evidence trail; the agent
+    stays discovered and continues accumulating telemetry. Reversible by claiming.
+    """
+    org_id, team_scope = _org_and_scope(user, db)
+    if is_deny_sentinel(team_scope):
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    body = body or {}
+    reg = _lookup_registry(db, org_id, agent_id)
+
+    # Auto-create a minimal registry row so the dismissal persists for telemetry-only agents.
+    if not reg:
+        asset_key = agent_id if len(agent_id) == 64 else hashlib.sha256(f"{org_id}:{agent_id}".encode()).hexdigest()
+        reg = AssetRegistry(
+            organization_id  = org_id,
+            asset_key        = asset_key,
+            agent_id_raw     = agent_id,
+            agent_name       = agent_id,
+            discovery_status = "verified",
+            discovery_source = "gateway_telemetry",
+            confidence_score = 95.0,
+            first_seen_at    = datetime.now(timezone.utc),
+        )
+        db.add(reg)
+        db.flush()
+
+    _append_evidence_event(reg, "ignored", user, reason=body.get("reason", ""))
+
+    db.commit()
+    return {
+        "asset_key":        reg.asset_key,
+        "lifecycle_status": reg.status or "unassigned",
+        "ignored_by":       _caller_email(user),
+        "ignored_at":       datetime.now(timezone.utc).isoformat(),
     }
 
 

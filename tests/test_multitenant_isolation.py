@@ -287,6 +287,54 @@ class TestAssetRegistryIsolation:
             db.close()
 
 
+class TestDiscoveryStatusIsolation:
+    """Derived discovery-status fields are present and org-scoped (Pass 1)."""
+
+    def test_agents_carry_derived_fields(self):
+        r = _client.get("/agents", headers=AH)
+        assert r.status_code == 200
+        for rec in r.json():
+            assert "discovery_stage" in rec
+            assert "stage_label" in rec
+            assert "identity_evidence" in rec
+            # internal confidence_score must remain available (not removed)
+            assert "confidence_score" in rec
+
+    def test_identity_evidence_never_leaks_secrets(self):
+        """No agent's evidence may contain raw key/token material."""
+        import json as _json
+        r = _client.get("/agents", headers=AH)
+        assert r.status_code == 200
+        for rec in r.json():
+            blob = _json.dumps(rec.get("identity_evidence", {}))
+            assert "Bearer " not in blob
+            assert "gk-" not in blob
+            assert "sk-ant-" not in blob
+
+    def test_approve_suggestions_is_org_scoped(self):
+        """Approving in Acme must not affect Beta's same-named asset."""
+        r = _client.post(f"/agents/{SHARED_AGENT}/approve-suggestions", json={}, headers=AH)
+        assert r.status_code == 200, r.text
+
+        db = SessionLocal()
+        try:
+            beta_reg = db.query(AssetRegistry).filter(
+                AssetRegistry.organization_id == BETA_ID,
+                AssetRegistry.agent_id_raw == SHARED_AGENT,
+            ).first()
+            assert beta_reg is not None
+            assert beta_reg.status == "unassigned", (
+                "Beta's shared agent must remain unassigned after Acme approved theirs"
+            )
+        finally:
+            db.close()
+
+    def test_ignore_does_not_retire_or_cross_orgs(self):
+        r = _client.post(f"/agents/{SHARED_AGENT}/ignore", json={}, headers=BH)
+        assert r.status_code == 200, r.text
+        assert r.json()["lifecycle_status"] != "retired"
+
+
 class TestBudgetIsolation:
     """Budget rules and spend are scoped per org."""
 
