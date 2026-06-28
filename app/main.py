@@ -511,14 +511,15 @@ app.include_router(proxy_routes.router)
 from app.routes import relationships as relationships_routes  # noqa: E402
 app.include_router(relationships_routes.router)
 
-_ALLOWED_ORIGINS = (
-    [o.strip() for o in _FRONTEND_ORIGIN.split(",") if o.strip()]
-    if _FRONTEND_ORIGIN
-    else ["http://localhost:5173", "http://127.0.0.1:5173"]
-)
-# When no explicit FRONTEND_ORIGIN is set, also permit any *.onrender.com origin
-# so the app works on Render without requiring manual env-var configuration.
-_CORS_ORIGIN_REGEX = None if _FRONTEND_ORIGIN else r"https://[a-z0-9-]+\.onrender\.com"
+# Always allow the canonical ObserveAgents public origins, the Render fallback,
+# and local dev — plus any explicit FRONTEND_ORIGIN entries. Deduped, order-stable.
+from app.config import PUBLIC_ORIGINS as _PUBLIC_ORIGINS, LOCAL_ORIGINS as _LOCAL_ORIGINS  # noqa: E402
+
+_EXPLICIT_ORIGINS = [o.strip() for o in _FRONTEND_ORIGIN.split(",") if o.strip()]
+_ALLOWED_ORIGINS = list(dict.fromkeys(_EXPLICIT_ORIGINS + _PUBLIC_ORIGINS + _LOCAL_ORIGINS))
+# Always permit any *.onrender.com origin so the Render fallback URL keeps
+# working regardless of whether FRONTEND_ORIGIN is set.
+_CORS_ORIGIN_REGEX = r"https://[a-z0-9-]+\.onrender\.com"
 
 app.add_middleware(
     CORSMiddleware,

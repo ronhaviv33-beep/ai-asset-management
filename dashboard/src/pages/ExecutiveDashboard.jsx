@@ -212,10 +212,10 @@ export default function ExecutiveDashboard({ onNavigate }) {
       <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between" }}>
         <div>
           <h2 style={{ margin: 0, fontSize: 24, fontWeight: 700, color: T.text, letterSpacing: "-0.025em" }}>
-            AI Agent System of Record
+            ObserveAgents
           </h2>
           <div style={{ fontSize: 12, color: T.textMute, fontFamily: MONO, marginTop: 5 }}>
-            Discover every AI agent · Map every dependency · Govern every AI interaction
+            Observe every agent · Map every dependency · Govern every interaction
           </div>
         </div>
         <div style={{ fontSize: 11, color: T.textMute, fontFamily: MONO, textAlign: "right" }}>

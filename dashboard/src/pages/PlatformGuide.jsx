@@ -62,7 +62,7 @@ export default function CustomerWelcomePage({ onNavigate }) {
           background:`${T.teal}05`, pointerEvents:"none" }} />
 
         <div style={{ fontSize:11, fontFamily:FONT_MONO, color:T.accent, letterSpacing:"0.15em",
-          textTransform:"uppercase", marginBottom:12 }}>AI Agent System of Record</div>
+          textTransform:"uppercase", marginBottom:12 }}>ObserveAgents · AI Runtime Intelligence Platform</div>
 
         <div style={{ fontSize:32, fontWeight:700, color:T.text, marginBottom:14, lineHeight:1.15 }}>
           Connect traffic once.<br/>

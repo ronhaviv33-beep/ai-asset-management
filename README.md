@@ -1,10 +1,15 @@
-# AI Asset Management
+# ObserveAgents
 
-**The AI Agent System of Record — discover every agent, map every dependency, assign ownership, understand risk, and govern AI operations.**
+**AI Runtime Intelligence Platform — Observe every agent. Map every dependency. Govern every interaction.**
 
 > We don't only discover AI agents. We map what they touch.
 
-AI Agent Inventory tells you which agents exist, who owns them, and what risk they carry. Runtime Dependency Map tells you what they interact with at runtime. Together, they become the system of record for enterprise AI operations. Optional sensitive-content checks can be enabled for customers that want additional runtime safety signals.
+ObserveAgents discovers which agents exist, who owns them, and what risk they carry, and maps what they interact with at runtime — the AI Runtime Intelligence Platform for enterprise AI operations. Connect your AI gateway and agents are discovered automatically. Optional sensitive-content checks can be enabled for customers that want additional runtime safety signals.
+
+- Dashboard: https://observeagents.ai
+- Gateway: https://gateway.observeagents.ai
+
+> Hosting note: the platform is also reachable at the Render fallback URL (`https://ai-asset-app.onrender.com`); the custom domains above are canonical.
 
 ---
 
@@ -16,12 +21,12 @@ client = openai.OpenAI(api_key="sk-...")
 
 # After — one line change, full governance
 client = openai.OpenAI(
-    base_url="https://your-guard-instance/v1",
-    api_key="<jwt>",
+    base_url="https://gateway.observeagents.ai/v1",
+    api_key="YOUR_GATEWAY_KEY",
 )
 ```
 
-Works with OpenAI SDK, Anthropic SDK, LangChain, Node.js, and any HTTP client. No agent code changes beyond `base_url`.
+**No proprietary SDK required — use your existing AI stack.** Works with OpenAI SDK, LangChain, CrewAI, LiteLLM, OpenAI Agents SDK, MCP Clients, Agno, PydanticAI, Vercel AI SDK, and any OpenAI-compatible client. Replace `base_url`, replace `api_key`, send traffic — agents are discovered automatically.
 
 ---
 
@@ -29,7 +34,7 @@ Works with OpenAI SDK, Anthropic SDK, LangChain, Node.js, and any HTTP client. N
 
 ```
 Agent / SDK  (OpenAI · Anthropic · LangChain · curl)
-      │  base_url = https://your-guard/v1
+      │  base_url = https://gateway.observeagents.ai/v1
       ▼
 POST /v1/chat/completions  (OpenAI-compatible)
 POST /v1/messages          (Anthropic-compatible)

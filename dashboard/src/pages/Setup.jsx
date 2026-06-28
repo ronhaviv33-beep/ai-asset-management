@@ -1,9 +1,10 @@
 import React, { useState, useEffect } from "react";
 import { T, FONT_UI, FONT_MONO } from "../theme.js";
-import { fetchAgentsSummary, fetchRelationships, fetchProviderCredentials, fetchApiKeys, BASE } from "../api.js";
+import { fetchAgentsSummary, fetchRelationships, fetchProviderCredentials, fetchApiKeys } from "../api.js";
+import { gatewayBaseUrl } from "../config.js";
 
 export default function SimpleIntegrationsPage({ onNavigate }) {
-  const gatewayUrl = typeof BASE !== "undefined" && BASE.startsWith("http") ? BASE : window.location.origin;
+  const gatewayUrl = gatewayBaseUrl();
   const [copied, setCopied]   = useState(null);
   const [open,   setOpen]     = useState({ sdk_openai: true, sdk_anthropic: false, sdk_env: false, manual_openai: false, manual_curl: false });
   const [section, setSection] = useState(null);
@@ -118,39 +119,26 @@ export default function SimpleIntegrationsPage({ onNavigate }) {
 
   const snippets = {
     sdk_openai:
-`pip install ai-agent-inventory-sdk
+`# No proprietary SDK required — use the standard OpenAI SDK.
+from openai import OpenAI
 
-from ai_agent_inventory import OpenAI
-
-# Option A: explicit params
 client = OpenAI(
-    api_key="org_gateway_key",
-    gateway_url="GATEWAY_URL/v1",
-    agent_name="soc-investigation-agent",
-    team="Security",
-    environment="prod",
-    debug=True,
+    api_key="YOUR_GATEWAY_KEY",
+    base_url="GATEWAY_URL/v1",
 )
-
-# Option B: zero-code env-var setup
-client = OpenAI(api_key="org_gateway_key", gateway_url="GATEWAY_URL/v1")
 
 response = client.chat.completions.create(
     model="gpt-4o-mini",
-    messages=[{"role": "user", "content": "Analyze this alert"}],
+    messages=[{"role": "user", "content": "Hello"}],
 )`,
 
     sdk_anthropic:
-`pip install ai-agent-inventory-sdk anthropic
-
-from ai_agent_inventory import Anthropic
+`# Use the standard Anthropic SDK — only base_url changes.
+from anthropic import Anthropic
 
 client = Anthropic(
-    api_key="org_gateway_key",
-    gateway_url="GATEWAY_URL",
-    agent_name="document-summariser",
-    team="Legal",
-    environment="prod",
+    api_key="YOUR_GATEWAY_KEY",
+    base_url="GATEWAY_URL",
 )
 
 response = client.messages.create(
@@ -160,35 +148,32 @@ response = client.messages.create(
 )`,
 
     sdk_env:
-`# Zero-code setup: set these env vars before starting your service.
-SERVICE_NAME=soc-investigation-agent
-TEAM=Security
-ENVIRONMENT=prod
-APP_VERSION=1.2.0
+`# Zero-code setup: point the standard OpenAI SDK at the gateway via env vars.
+export OPENAI_API_KEY=YOUR_GATEWAY_KEY
+export OPENAI_BASE_URL=GATEWAY_URL/v1
 
-pip install ai-agent-inventory-sdk
-from ai_agent_inventory import OpenAI
-client = OpenAI(api_key="org_gateway_key", gateway_url="GATEWAY_URL/v1")`,
+# Optional — enrich identity attribution (any OpenAI-compatible client):
+export OPENAI_DEFAULT_HEADERS='{"X-Agent-Name":"customer-support-prod","X-Agent-Team":"Customer Success"}'`,
 
     manual_openai:
-`import openai
+`from openai import OpenAI
 
-client = openai.OpenAI(base_url="GATEWAY_URL/v1", api_key="gk-...")
+client = OpenAI(base_url="GATEWAY_URL/v1", api_key="YOUR_GATEWAY_KEY")
 
 client.chat.completions.create(
     model="gpt-4o-mini",
     messages=[{"role": "user", "content": "Hello"}],
     extra_headers={
-        "X-Agent-Name":        "soc-investigation-agent",
-        "X-Agent-Team":        "Security",
+        "X-Agent-Name":        "customer-support-prod",
+        "X-Agent-Team":        "Customer Success",
         "X-Agent-Environment": "prod",
     },
 )`,
 
     manual_curl:
 `curl GATEWAY_URL/v1/chat/completions \\
-  -H "Authorization: Bearer gk-..." \\
-  -H "X-Agent-Name: soc-investigation-agent" \\
+  -H "Authorization: Bearer YOUR_GATEWAY_KEY" \\
+  -H "X-Agent-Name: customer-support-prod" \\
   -H "Content-Type: application/json" \\
   -d '{"model":"gpt-4o-mini","messages":[{"role":"user","content":"Hello"}]}'`,
   };

@@ -189,7 +189,7 @@ export default function RelationshipMap() {
       {/* Header */}
       <div style={{ marginBottom: 24 }}>
         <div style={{ fontSize: 11, fontFamily: FONT_MONO, letterSpacing: '0.14em', textTransform: 'uppercase', color: T.textMute, marginBottom: 6 }}>
-          System of Record · Runtime Dependency Map
+          ObserveAgents · Runtime Dependency Map
         </div>
         <h1 style={{ margin: 0, fontSize: 22, fontWeight: 600, color: T.text }}>
           Runtime Dependency Map

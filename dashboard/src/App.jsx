@@ -33,6 +33,7 @@ import {
 } from "recharts";
 
 import { T, FONT_UI, FONT_MONO } from "./theme.js";
+import { BRAND, gatewayBaseUrl } from "./config.js";
 import { ORGS, TEAMS, AGENTS, MODELS, providerFromModel, tierFromModel, approvedModel, parseUTC, apiRecordToEvent, buildLiveMetadata, genDemoEvents } from "./data/demoData.js";
 import { ALERT_META, applyFilters, runDetections, agg, estimateSavings, computeRiskScore, execSummary } from "./data/alertMeta.js";
 import { useLiveData } from "./hooks/useLiveData.js";
@@ -207,7 +208,7 @@ function Home({ onNavigate }) {
       {/* Header */}
       <div style={{ display:"flex", alignItems:"flex-start", justifyContent:"space-between", marginBottom:24 }}>
         <div>
-          <div style={{ fontSize:22, fontWeight:600, letterSpacing:"-0.02em", color:T.text }}>AI Agent System of Record</div>
+          <div style={{ fontSize:22, fontWeight:600, letterSpacing:"-0.02em", color:T.text }}>{BRAND.name}</div>
           <div style={{ fontSize:12, color:T.textDim, marginTop:4, fontFamily:FONT_MONO }}>
             {s.total_agents ?? 0} agents discovered · runtime dependencies mapped · last 90 days
             {lastRefresh && <span style={{ color:T.textMute, marginLeft:12 }}>· {lastRefresh.toLocaleTimeString()}</span>}
@@ -1542,8 +1543,9 @@ function LoginPage({ onLogin }) {
         <div>
           <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:8 }}>
             <div style={{ width:22, height:22, background:T.accent, borderRadius:4, display:"flex", alignItems:"center", justifyContent:"center", fontFamily:FONT_MONO, fontWeight:600, fontSize:12, color:T.bg }}>◆</div>
-            <span style={{ fontSize:15, fontWeight:500, letterSpacing:"-0.01em" }}>AI Asset Management</span>
+            <span style={{ fontSize:15, fontWeight:500, letterSpacing:"-0.01em" }}>{BRAND.name}</span>
           </div>
+          <div style={{ fontSize:12, color:T.textMute, fontFamily:FONT_MONO, marginBottom:4 }}>{BRAND.subtitle}</div>
           <div style={{ fontSize:13, color:T.textDim }}>Sign in to your account</div>
         </div>
         <div style={{ display:"flex", flexDirection:"column", gap:14 }}>
@@ -1787,7 +1789,7 @@ function ApiKeysPage() {
 
       {/* ── Show-once modal + first-request onboarding ── */}
       {newKey && (() => {
-        const gatewayUrl = (typeof BASE !== "undefined" && BASE.startsWith("http")) ? BASE : window.location.origin;
+        const gatewayUrl = gatewayBaseUrl();
         const snippet = `from openai import OpenAI
 
 client = OpenAI(
@@ -1801,10 +1803,10 @@ response = client.chat.completions.create(
 )`;
         const outcomes = [
           "Agent discovered",
-          "Runtime cost tracking enabled",
-          "Ownership suggestions enabled",
+          "Cost tracking enabled",
           "Dependency mapping enabled",
-          "Governance review created",
+          "Governance enabled",
+          "Ownership suggestions enabled",
         ];
         return (
         <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.7)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000, padding: 24, overflowY: "auto" }}>
@@ -1823,9 +1825,10 @@ response = client.chat.completions.create(
               </button>
             </div>
 
-            {/* Send your first AI request */}
+            {/* Next step: send your first AI request */}
             <div style={{ borderTop: `1px solid ${T.border}`, paddingTop: 16 }}>
-              <div style={{ fontSize: 14, fontWeight: 600, color: T.text, marginBottom: 4 }}>Send your first AI request</div>
+              <div style={{ fontSize: 9, fontFamily: FONT_MONO, color: T.textMute, letterSpacing: "0.14em", textTransform: "uppercase", marginBottom: 4 }}>Next Step</div>
+              <div style={{ fontSize: 14, fontWeight: 600, color: T.text, marginBottom: 4 }}>Send your first AI request.</div>
               <div style={{ fontSize: 12, color: T.textDim, marginBottom: 12 }}>
                 Use this Gateway API Key inside your AI application — replace your OpenAI endpoint with the gateway endpoint.
               </div>
@@ -1844,6 +1847,18 @@ response = client.chat.completions.create(
                 ))}
               </div>
               <div style={{ marginTop: 12, fontSize: 11, fontFamily: FONT_MONO, color: T.textMute }}>Estimated setup time: 30 seconds</div>
+            </div>
+
+            {/* Key vs credential clarity */}
+            <div style={{ borderTop: `1px solid ${T.border}`, paddingTop: 16, display: "flex", flexDirection: "column", gap: 10 }}>
+              <div>
+                <div style={{ fontSize: 12, fontWeight: 600, color: T.text }}>Gateway API Key</div>
+                <div style={{ fontSize: 12, color: T.textDim }}>Used by your applications to route traffic through the gateway.</div>
+              </div>
+              <div>
+                <div style={{ fontSize: 12, fontWeight: 600, color: T.text }}>Provider Credentials</div>
+                <div style={{ fontSize: 12, color: T.textDim }}>Stored securely by ObserveAgents. Never place OpenAI keys in customer code.</div>
+              </div>
             </div>
 
             <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
@@ -2798,7 +2813,7 @@ function IntegrationsPage({ onNavigate }) {
   const [agentName, setAgentName] = useState("my-agent");
   const [codeTab,   setCodeTab]   = useState("python");
 
-  const gatewayUrl = BASE.startsWith("http") ? BASE : window.location.origin;
+  const gatewayUrl = gatewayBaseUrl();
   const cred       = apiKey || "gk-...";
 
   const copy = (id, text) => {
@@ -3355,7 +3370,7 @@ function OrganizationsPage() {
 // ─── Onboarding page ──────────────────────────────────────────────────────────
 function OnboardingPage({ onNavigate }) {
   const currentUser = useUser();
-  const gatewayUrl  = BASE.startsWith("http") ? BASE : window.location.origin;
+  const gatewayUrl  = gatewayBaseUrl();
   const [copied, setCopied] = useState(null);
 
   const copy = (id, text) => {
@@ -4709,8 +4724,8 @@ export default function App() {
         <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:32, padding:"0 6px" }}>
           <div style={{ width:22, height:22, background:T.accent, borderRadius:4, display:"flex", alignItems:"center", justifyContent:"center", fontFamily:FONT_MONO, fontWeight:600, fontSize:12, color:T.bg }}>◆</div>
           <div>
-            <div style={{ fontSize:13, fontWeight:600, letterSpacing:"-0.01em" }}>AI Agent Inventory</div>
-            <div style={{ fontSize:9, color:T.textMute, fontFamily:FONT_MONO, letterSpacing:"0.08em", textTransform:"uppercase", marginTop:1 }}>Runtime Intelligence</div>
+            <div style={{ fontSize:13, fontWeight:600, letterSpacing:"-0.01em" }}>{BRAND.name}</div>
+            <div style={{ fontSize:9, color:T.textMute, fontFamily:FONT_MONO, letterSpacing:"0.08em", textTransform:"uppercase", marginTop:1 }}>{BRAND.subtitle}</div>
           </div>
         </div>
 
