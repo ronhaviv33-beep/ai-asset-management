@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo } from "react";
 import { fetchAgents, fetchCostIntelligence, fetchRelationships } from "../api.js";
 import { relationshipEvidenceLabel } from "../discoveryStatus.js";
+import CollapsiblePanel, { PanelGroupControls } from "../components/CollapsiblePanel.jsx";
 
 const T = {
   bg: "#0A0B0F", panel: "#0F1117", panelHi: "#141823",
@@ -460,25 +461,24 @@ export default function EcosystemDiscovery() {
         ))}
       </div>
 
+      {/* Expand/Collapse all */}
+      <PanelGroupControls group="ecosystem" style={{ justifyContent: "flex-end" }} />
+
       {/* ── Connected Platforms ────────────────────────────────────────────── */}
-      <div>
-        <div style={{ fontSize: 16, fontWeight: 600, color: T.text, marginBottom: 4 }}>Connected Platforms</div>
-        <div style={{ fontSize: 12, color: T.textMute, fontFamily: MONO, marginBottom: 16 }}>
-          Sources where AI agents have been detected across your organization
-        </div>
+      <CollapsiblePanel group="ecosystem" storageKey="oa-panel-ecosystem-platforms"
+        title="Connected Platforms" badge={activePlatforms}
+        subtitle="Sources where AI agents have been detected across your organization">
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 14 }}>
           {platformData.map(p => (
             <PlatformCard key={p.key} meta={p.meta} count={p.count} agentNames={p.agentNames} maxCount={maxPlatformCount} />
           ))}
         </div>
-      </div>
+      </CollapsiblePanel>
 
       {/* ── External Systems & Dependencies (relationship-derived) ─────────── */}
-      <div>
-        <div style={{ fontSize: 16, fontWeight: 600, color: T.text, marginBottom: 4 }}>External Systems &amp; Dependencies</div>
-        <div style={{ fontSize: 12, color: T.textMute, fontFamily: MONO, marginBottom: 16 }}>
-          Runtime systems agents interact with — derived from the same dependency data as the Dependency Map. Click a card for details.
-        </div>
+      <CollapsiblePanel group="ecosystem" storageKey="oa-panel-ecosystem-dependencies"
+        title="External Systems & Dependencies" badge={externalSystems}
+        subtitle="Runtime systems agents interact with — derived from the same dependency data as the Dependency Map. Click a card for details.">
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 14 }}>
           {ecosystemData.map(e => {
             const pct = maxEcosystemCount > 0 ? (e.count / maxEcosystemCount) * 100 : 0;
@@ -509,14 +509,12 @@ export default function EcosystemDiscovery() {
             );
           })}
         </div>
-      </div>
+      </CollapsiblePanel>
 
       {/* ── Connected Providers ────────────────────────────────────────────── */}
-      <div>
-        <div style={{ fontSize: 16, fontWeight: 600, color: T.text, marginBottom: 4 }}>Connected AI Providers</div>
-        <div style={{ fontSize: 12, color: T.textMute, fontFamily: MONO, marginBottom: 16 }}>
-          LLM providers in use across all discovered agents (last 30 days)
-        </div>
+      <CollapsiblePanel group="ecosystem" storageKey="oa-panel-ecosystem-providers"
+        title="Connected AI Providers" badge={providerData.length}
+        subtitle="LLM providers in use across all discovered agents (last 30 days)">
         {providerData.length > 0 ? (
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))", gap: 14 }}>
             {providerData.map(p => (
@@ -528,7 +526,7 @@ export default function EcosystemDiscovery() {
             No provider usage detected. Ensure agents are routing through the gateway with correct attribution headers.
           </div>
         )}
-      </div>
+      </CollapsiblePanel>
 
       {selectedProvider && (
         <ProviderAgentsModal

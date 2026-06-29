@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo } from 'react'
 import { fetchRelationships } from '../api.js'
 import { relationshipEvidenceLabel } from '../discoveryStatus.js'
+import CollapsiblePanel from '../components/CollapsiblePanel.jsx'
 
 // ── Design tokens ──────────────────────────────────────────────────────────────
 const T = {
@@ -259,25 +260,26 @@ export default function RelationshipMap() {
       </div>
 
       {/* Field legend */}
-      <div style={{
-        display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: 10,
-        marginBottom: 20, padding: '14px 16px',
-        background: T.panel, border: `1px solid ${T.border}`, borderRadius: 6,
-      }}>
-        {[
-          { label: 'Source Agent',     desc: 'The AI agent that initiated the interaction' },
-          { label: 'Target System',    desc: 'MCP tool, server, API, database, CRM, or workflow called' },
-          { label: 'Relationship Type',desc: 'How the agent interacts — calls, uses_tool, writes_to…' },
-          { label: 'Evidence Source',  desc: 'What signal proved this link — gateway, mcp_headers, sdk…' },
-          { label: 'Strength',         desc: 'How strong the evidence is for this relationship — Strong, Likely, Observed, or Partial' },
-          { label: 'Last Seen',        desc: 'When this interaction was last observed in live traffic' },
-          { label: 'Request Count',    desc: 'Total times this agent-to-target link has been observed' },
-        ].map(({ label, desc }) => (
-          <div key={label} style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-            <span style={{ fontSize: 10, fontFamily: FONT_MONO, letterSpacing: '0.08em', textTransform: 'uppercase', color: T.accent, fontWeight: 600 }}>{label}</span>
-            <span style={{ fontSize: 11, color: T.textDim, lineHeight: 1.5 }}>{desc}</span>
+      <div style={{ marginBottom: 20 }}>
+        <CollapsiblePanel title="How to read this map" defaultExpanded={false}
+          storageKey="oa-panel-deps-legend" subtitle="What each field in the dependency data means">
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: 10 }}>
+            {[
+              { label: 'Source Agent',     desc: 'The AI agent that initiated the interaction' },
+              { label: 'Target System',    desc: 'MCP tool, server, API, database, CRM, or workflow called' },
+              { label: 'Relationship Type',desc: 'How the agent interacts — calls, uses_tool, writes_to…' },
+              { label: 'Evidence Source',  desc: 'What signal proved this link — gateway, mcp_headers, sdk…' },
+              { label: 'Strength',         desc: 'How strong the evidence is for this relationship — Strong, Likely, Observed, or Partial' },
+              { label: 'Last Seen',        desc: 'When this interaction was last observed in live traffic' },
+              { label: 'Request Count',    desc: 'Total times this agent-to-target link has been observed' },
+            ].map(({ label, desc }) => (
+              <div key={label} style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                <span style={{ fontSize: 10, fontFamily: FONT_MONO, letterSpacing: '0.08em', textTransform: 'uppercase', color: T.accent, fontWeight: 600 }}>{label}</span>
+                <span style={{ fontSize: 11, color: T.textDim, lineHeight: 1.5 }}>{desc}</span>
+              </div>
+            ))}
           </div>
-        ))}
+        </CollapsiblePanel>
       </div>
 
       {/* Filters */}

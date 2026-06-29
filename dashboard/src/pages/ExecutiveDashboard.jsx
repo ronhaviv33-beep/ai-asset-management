@@ -6,6 +6,7 @@ import {
   fetchRelationships,
 } from "../api.js";
 import { relationshipEvidenceLabel } from "../discoveryStatus.js";
+import CollapsiblePanel, { PanelGroupControls } from "../components/CollapsiblePanel.jsx";
 
 const T = {
   bg: "#0A0B0F", panel: "#0F1117", panelHi: "#141823",
@@ -73,6 +74,9 @@ function KpiCard({ label, value, sub, color, onClick }) {
     </div>
   );
 }
+
+// Small header action button reused inside CollapsiblePanel headers on the dashboard.
+const DASH_ACTION_BTN = { background: "transparent", border: `1px solid ${T.border}`, color: T.textDim, padding: "4px 12px", borderRadius: 4, fontSize: 11, fontFamily: MONO, cursor: "pointer", letterSpacing: "0.04em" };
 
 function SectionTitle({ title, sub, action, onAction }) {
   return (
@@ -221,6 +225,7 @@ export default function ExecutiveDashboard({ onNavigate }) {
         <div style={{ fontSize: 11, color: T.textMute, fontFamily: MONO, textAlign: "right" }}>
           <div style={{ marginBottom: 3 }}>Executive Overview</div>
           <div>{new Date().toLocaleString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}</div>
+          <PanelGroupControls group="dashboard" style={{ marginTop: 8, justifyContent: "flex-end" }} />
         </div>
       </div>
 
@@ -341,8 +346,9 @@ export default function ExecutiveDashboard({ onNavigate }) {
       </div>
 
       {/* ── Top Cost Drivers ──────────────────────────────────────────────────── */}
-      <Panel>
-        <SectionTitle title="Top Cost Drivers" sub="Last 30 days · runtime estimate" action="View Cost Intelligence →" onAction={() => onNavigate?.("cost")} />
+      <CollapsiblePanel group="dashboard" storageKey="oa-panel-dash-cost-drivers"
+        title="Top Cost Drivers" subtitle="Last 30 days · runtime estimate"
+        actions={<button onClick={() => onNavigate?.("cost")} style={DASH_ACTION_BTN}>View Cost Intelligence →</button>}>
         {topCosts.length > 0 ? (
           <div>
             {topCosts.map((item, i) => {
@@ -382,16 +388,13 @@ export default function ExecutiveDashboard({ onNavigate }) {
         ) : (
           <div style={{ color: T.textMute, fontFamily: MONO, fontSize: 12 }}>No cost data for the last 30 days</div>
         )}
-      </Panel>
+      </CollapsiblePanel>
 
       {/* ── Runtime Dependency Map ───────────────────────────────────────────────── */}
-      <Panel>
-        <SectionTitle
-          title="Runtime Dependency Map"
-          sub="Top agent dependencies by traffic volume · real-time gateway data"
-          action="View Dependency Map →"
-          onAction={() => onNavigate?.("relationship_map")}
-        />
+      <CollapsiblePanel group="dashboard" storageKey="oa-panel-dash-deps"
+        title="Runtime Dependency Map"
+        subtitle="Top agent dependencies by traffic volume · real-time gateway data"
+        actions={<button onClick={() => onNavigate?.("relationship_map")} style={DASH_ACTION_BTN}>View Dependency Map →</button>}>
         {topRels.length > 0 ? (
           <div>
             {/* Column headers */}
@@ -487,7 +490,7 @@ export default function ExecutiveDashboard({ onNavigate }) {
             </div>
           </div>
         )}
-      </Panel>
+      </CollapsiblePanel>
 
       {/* ── High Risk + Action Items ───────────────────────────────────────────── */}
       <div style={{ display: "grid", gridTemplateColumns: "3fr 2fr", gap: 16 }}>
