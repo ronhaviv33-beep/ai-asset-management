@@ -403,8 +403,8 @@ function ImportModal({ onClose, onSubmit, saving }) {
   const labelStyle = { fontSize: 11, color: T.textDim, marginBottom: 4, display: 'block', fontFamily: FONT_MONO }
 
   return (
-    <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.65)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }}>
-      <div style={{ background: T.panel, border: `1px solid ${T.borderHi}`, borderRadius: 8, padding: 24, width: 460, maxHeight: '90vh', overflowY: 'auto' }}>
+    <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.65)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: 16 }}>
+      <div style={{ background: T.panel, border: `1px solid ${T.borderHi}`, borderRadius: 8, padding: 24, width: 'min(460px, calc(100vw - 32px))', maxHeight: '90vh', overflowY: 'auto' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
           <div style={{ fontSize: 14, fontWeight: 600, color: T.text }}>Import Provider Billing</div>
           <button onClick={onClose} style={{ background: 'none', border: 'none', color: T.textMute, cursor: 'pointer', fontSize: 16 }}>✕</button>
@@ -498,8 +498,8 @@ function EditBillingModal({ record, onClose, onSubmit, saving }) {
   const labelStyle = { fontSize: 11, color: T.textDim, marginBottom: 4, display: 'block', fontFamily: FONT_MONO }
 
   return (
-    <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.65)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }}>
-      <div style={{ background: T.panel, border: `1px solid ${T.borderHi}`, borderRadius: 8, padding: 24, width: 460, maxHeight: '90vh', overflowY: 'auto' }}>
+    <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.65)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: 16 }}>
+      <div style={{ background: T.panel, border: `1px solid ${T.borderHi}`, borderRadius: 8, padding: 24, width: 'min(460px, calc(100vw - 32px))', maxHeight: '90vh', overflowY: 'auto' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
           <div style={{ fontSize: 14, fontWeight: 600, color: T.text }}>
             Edit Billing — <span style={{ color: PROVIDER_COLORS[record.provider] || T.accent, textTransform: 'capitalize' }}>{record.provider}</span>

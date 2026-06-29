@@ -357,8 +357,8 @@ function EvidenceDrawer({ agent, onClose }) {
   const ev = agent.identity_evidence || {};
   const signals = Array.isArray(ev.signals) ? ev.signals : [];
   return (
-    <div style={{ position: "fixed", inset: 0, background: "#000A", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000 }}>
-      <div style={{ background: T.panel, border: `1px solid ${T.border}`, borderRadius: 8, padding: 28, minWidth: 440, maxWidth: 580, fontFamily: FONT }}>
+    <div style={{ position: "fixed", inset: 0, background: "#000A", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000, padding: 16 }}>
+      <div style={{ background: T.panel, border: `1px solid ${T.border}`, borderRadius: 8, padding: 28, width: "min(580px, calc(100vw - 32px))", maxHeight: "90vh", overflowY: "auto", fontFamily: FONT }}>
         <div style={{ fontSize: 16, fontWeight: 600, color: T.text, marginBottom: 6 }}>Identity Evidence</div>
         <div style={{ fontSize: 13, color: T.textDim, marginBottom: 18, fontFamily: MONO }}>{agent.agent_name}</div>
 

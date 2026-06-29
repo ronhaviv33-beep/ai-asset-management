@@ -112,6 +112,16 @@ const SortableTh = ({ label, sortKey, active, dir, onToggle, style: extraStyle =
   </th>
 );
 
+function useBreakpoint() {
+  const [w, setW] = useState(() => typeof window !== 'undefined' ? window.innerWidth : 1280);
+  useEffect(() => {
+    const h = () => setW(window.innerWidth);
+    window.addEventListener('resize', h, { passive: true });
+    return () => window.removeEventListener('resize', h);
+  }, []);
+  return { isMobile: w < 640, isTablet: w >= 640 && w < 1024, isDesktop: w >= 1024 };
+}
+
 function useSearch(rows, getSearchString) {
   const [query, setQuery] = useState("");
   const filtered = query.trim()
@@ -152,6 +162,7 @@ function Home({ onNavigate }) {
   const [assets,    setAssets]    = useState(null);
   const [loading,   setLoading]   = useState(true);
   const [lastRefresh, setLastRefresh] = useState(null);
+  const bp = useBreakpoint();
 
   const load = useCallback(async () => {
     try {
@@ -208,9 +219,9 @@ function Home({ onNavigate }) {
     <div style={{ padding:"0 0 32px" }}>
 
       {/* Header */}
-      <div style={{ display:"flex", alignItems:"flex-start", justifyContent:"space-between", marginBottom:24 }}>
+      <div style={{ display:"flex", alignItems:"flex-start", justifyContent:"space-between", marginBottom:24, gap:12, flexWrap:"wrap" }}>
         <div>
-          <div style={{ fontSize:22, fontWeight:600, letterSpacing:"-0.02em", color:T.text }}>{BRAND.name}</div>
+          <div style={{ fontSize: bp.isMobile ? 18 : 22, fontWeight:600, letterSpacing:"-0.02em", color:T.text }}>{BRAND.name}</div>
           <div style={{ fontSize:12, color:T.textDim, marginTop:4, fontFamily:FONT_MONO }}>
             {s.total_agents ?? 0} agents discovered · runtime dependencies mapped · last 90 days
             {lastRefresh && <span style={{ color:T.textMute, marginLeft:12 }}>· {lastRefresh.toLocaleTimeString()}</span>}
@@ -225,7 +236,7 @@ function Home({ onNavigate }) {
       </div>
 
       {/* KPI strip */}
-      <div style={{ display:"grid", gridTemplateColumns:"repeat(7,1fr)", gap:10, marginBottom:24 }}>
+      <div style={{ display:"grid", gridTemplateColumns: bp.isMobile ? "repeat(2,1fr)" : bp.isTablet ? "repeat(4,1fr)" : "repeat(7,1fr)", gap: bp.isMobile ? 8 : 10, marginBottom:24 }}>
         {[
           { label:"Total Agents",   value: s.total_agents   ?? 0, color:T.text,    sub:"discovered" },
           { label:"Active",         value: s.active_agents  ?? 0, color:T.accent,  sub:"seen ≤ 7 days" },
@@ -244,7 +255,7 @@ function Home({ onNavigate }) {
       </div>
 
       {/* Main two-column layout */}
-      <div style={{ display:"grid", gridTemplateColumns:"1.1fr 0.9fr", gap:16, marginBottom:16 }}>
+      <div style={{ display:"grid", gridTemplateColumns: bp.isMobile || bp.isTablet ? "1fr" : "1.1fr 0.9fr", gap:16, marginBottom:16 }}>
 
         {/* Agents requiring attention */}
         <div style={{ background:T.panel, border:`1px solid ${T.border}`, borderRadius:8, overflow:"hidden" }}>
@@ -338,7 +349,7 @@ function Home({ onNavigate }) {
       {/* Ownership gap banner */}
       {unowned.length > 0 && (
         <div style={{ background:`${T.warn}0D`, border:`1px solid ${T.warn}33`, borderRadius:8, padding:"16px 20px", marginBottom:16,
-          display:"flex", alignItems:"center", justifyContent:"space-between" }}>
+          display:"flex", alignItems:"center", justifyContent:"space-between", gap:12, flexWrap:"wrap" }}>
           <div>
             <div style={{ fontSize:13, fontWeight:500, color:T.warn }}>Ownership Gap</div>
             <div style={{ fontSize:12, color:T.textDim, fontFamily:FONT_MONO, marginTop:2 }}>
@@ -357,7 +368,7 @@ function Home({ onNavigate }) {
       {/* Inactive agents banner */}
       {noActivity.length > 0 && (
         <div style={{ background:`${T.textMute}0A`, border:`1px solid ${T.border}`, borderRadius:8, padding:"16px 20px",
-          display:"flex", alignItems:"center", justifyContent:"space-between" }}>
+          display:"flex", alignItems:"center", justifyContent:"space-between", gap:12, flexWrap:"wrap" }}>
           <div>
             <div style={{ fontSize:13, fontWeight:500, color:T.textDim }}>Inactive Agents</div>
             <div style={{ fontSize:12, color:T.textMute, fontFamily:FONT_MONO, marginTop:2 }}>
@@ -2024,7 +2035,7 @@ function UsersPage() {
       {/* ── Change Password Modal ── */}
       {pwModal && (
         <div style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.6)", display:"flex", alignItems:"center", justifyContent:"center", zIndex:1000 }}>
-          <div style={{ background:T.panel, border:`1px solid ${T.border}`, borderRadius:8, padding:28, minWidth:340, display:"flex", flexDirection:"column", gap:16 }}>
+          <div style={{ background:T.panel, border:`1px solid ${T.border}`, borderRadius:8, padding:28, width:"min(440px, calc(100vw - 32px))", maxHeight:"90vh", display:"flex", flexDirection:"column", gap:16, overflowY:"auto" }}>
             <div style={{ fontFamily:FONT_MONO, fontWeight:700, color:T.text, fontSize:14 }}>Change Password — {pwModal.name}</div>
             {[
               { label:"Current Password", val:pwOld,     set:setPwOld },
@@ -2054,7 +2065,7 @@ function UsersPage() {
       {/* ── Disable Confirmation Modal ── */}
       {disableConfirm && (
         <div style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.65)", display:"flex", alignItems:"center", justifyContent:"center", zIndex:1000 }}>
-          <div style={{ background:T.panel, border:`1px solid ${T.warn}55`, borderRadius:10, padding:28, minWidth:340, maxWidth:420, display:"flex", flexDirection:"column", gap:18 }}>
+          <div style={{ background:T.panel, border:`1px solid ${T.warn}55`, borderRadius:10, padding:28, width:"min(420px, calc(100vw - 32px))", maxHeight:"90vh", display:"flex", flexDirection:"column", gap:18, overflowY:"auto" }}>
             <div style={{ display:"flex", alignItems:"center", gap:10 }}>
               <span style={{ fontSize:20, color:T.warn }}>⚠</span>
               <div style={{ fontWeight:700, color:T.text, fontSize:15 }}>Disable user?</div>
@@ -4453,6 +4464,8 @@ const NAV_GROUPS = [
 // ─── Root ─────────────────────────────────────────────────────────────────────
 export default function App() {
   const [page, setPage]       = useState("dashboard");
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const bp = useBreakpoint();
   const [discoveryInitialTab, setDiscoveryInitialTab] = useState("verified");
   const [filters, setFilters] = useState({ team:"all", model:"all", agent:"all", sev:"all", range:30 });
 
@@ -4728,20 +4741,57 @@ export default function App() {
   return (
     <UserContext.Provider value={user}>
     <RolesContext.Provider value={rolesMap}>
-    <div style={{ minHeight:"100vh", background:T.bg, color:T.text, fontFamily:FONT_UI, fontSize:14, display:"flex" }}>
+    <div style={{ minHeight:"100vh", background:T.bg, color:T.text, fontFamily:FONT_UI, fontSize:14, display:"flex", overflowX:"hidden", position:"relative" }}>
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=Geist:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap');
         * { box-sizing:border-box; }
+        html, body { overflow-x:hidden; max-width:100vw; }
         ::-webkit-scrollbar { width:8px; height:8px; }
         ::-webkit-scrollbar-track { background:${T.bg}; }
         ::-webkit-scrollbar-thumb { background:${T.border}; border-radius:4px; }
         ::-webkit-scrollbar-thumb:hover { background:${T.borderHi}; }
         select { appearance:none; background-image:url("data:image/svg+xml;utf8,<svg fill='%237A8499' xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 24 24'><polygon points='6,9 18,9 12,16'/></svg>"); background-repeat:no-repeat; background-position:right 8px center; padding-right:22px !important; }
         button:focus { outline:none; }
+        @media (max-width:639px) {
+          ::-webkit-scrollbar { width:4px; height:4px; }
+        }
       `}</style>
 
+      {/* Mobile/Tablet: fixed top bar */}
+      {!bp.isDesktop && (
+        <div style={{ position:"fixed", top:0, left:0, right:0, height:52, background:T.panel, borderBottom:`1px solid ${T.border}`, display:"flex", alignItems:"center", padding:"0 16px", gap:12, zIndex:150, flexShrink:0 }}>
+          <button
+            onClick={() => setSidebarOpen(o => !o)}
+            aria-label="Toggle navigation"
+            style={{ background:"none", border:"none", color:T.text, cursor:"pointer", padding:0, display:"flex", flexDirection:"column", gap:4, minWidth:44, minHeight:44, justifyContent:"center", alignItems:"center" }}>
+            <span style={{ display:"block", width:18, height:2, background:T.text, borderRadius:1 }}/>
+            <span style={{ display:"block", width:18, height:2, background:T.text, borderRadius:1 }}/>
+            <span style={{ display:"block", width:18, height:2, background:T.text, borderRadius:1 }}/>
+          </button>
+          <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+            <div style={{ width:20, height:20, background:T.accent, borderRadius:3, display:"flex", alignItems:"center", justifyContent:"center", fontFamily:FONT_MONO, fontWeight:600, fontSize:11, color:T.bg }}>◆</div>
+            <div style={{ fontSize:13, fontWeight:600, letterSpacing:"-0.01em" }}>{BRAND.name}</div>
+          </div>
+          <div style={{ marginLeft:"auto", fontSize:10, color:T.textDim, fontFamily:FONT_MONO, textTransform:"uppercase", letterSpacing:"0.1em", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap", maxWidth:160 }}>
+            {PAGES.find(p => p.id === page)?.label}
+          </div>
+        </div>
+      )}
+
+      {/* Mobile/Tablet: sidebar backdrop */}
+      {!bp.isDesktop && sidebarOpen && (
+        <div
+          onClick={() => setSidebarOpen(false)}
+          style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.55)", zIndex:190 }}
+        />
+      )}
+
       {/* Sidebar */}
-      <aside style={{ width:230, background:T.panel, borderRight:`1px solid ${T.border}`, padding:"22px 16px", display:"flex", flexDirection:"column", flexShrink:0 }}>
+      <aside style={
+        bp.isDesktop
+          ? { width:230, background:T.panel, borderRight:`1px solid ${T.border}`, padding:"22px 16px", display:"flex", flexDirection:"column", flexShrink:0 }
+          : { position:"fixed", top:0, left: sidebarOpen ? 0 : -280, bottom:0, width:260, background:T.panel, borderRight:`1px solid ${T.border}`, padding:"22px 16px", display:"flex", flexDirection:"column", zIndex:200, transition:"left 0.25s ease", overflowY:"auto" }
+      }>
         <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:32, padding:"0 6px" }}>
           <div style={{ width:22, height:22, background:T.accent, borderRadius:4, display:"flex", alignItems:"center", justifyContent:"center", fontFamily:FONT_MONO, fontWeight:600, fontSize:12, color:T.bg }}>◆</div>
           <div>
@@ -4764,8 +4814,8 @@ export default function App() {
                   </div>
                 )}
                 {visibleItems.map(item => (
-                  <button key={item.id} onClick={()=>setPage(item.id)}
-                    style={{ background:page===item.id?T.panelHi:"transparent", border:"none", color:page===item.id?T.text:T.textDim, textAlign:"left", padding:"8px 10px", fontSize:12, borderRadius:4, cursor:"pointer", fontFamily:FONT_UI, display:"flex", alignItems:"center", gap:10, borderLeft:page===item.id?`2px solid ${T.accent}`:"2px solid transparent", transition:"all 0.1s", width:"100%" }}>
+                  <button key={item.id} onClick={()=>{ setPage(item.id); if(!bp.isDesktop) setSidebarOpen(false); }}
+                    style={{ background:page===item.id?T.panelHi:"transparent", border:"none", color:page===item.id?T.text:T.textDim, textAlign:"left", padding:"8px 10px", fontSize:12, borderRadius:4, cursor:"pointer", fontFamily:FONT_UI, display:"flex", alignItems:"center", gap:10, borderLeft:page===item.id?`2px solid ${T.accent}`:"2px solid transparent", transition:"all 0.1s", width:"100%", minHeight:44 }}>
                     {item.label}
                     {item.id==="alerts" && critCount>0 && (
                       <span style={{ marginLeft:"auto", background:T.crit, color:T.bg, fontSize:10, fontFamily:FONT_MONO, padding:"1px 6px", borderRadius:8, fontWeight:600 }}>{critCount}</span>
@@ -4866,13 +4916,13 @@ export default function App() {
       </aside>
 
       {/* Main */}
-      <main style={{ flex:1, padding:"20px 28px", overflow:"auto" }}>
-        <header style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:18 }}>
+      <main style={{ flex:1, padding: bp.isMobile ? "68px 16px 24px" : bp.isTablet ? "72px 20px 24px" : "20px 28px", overflow:"auto", minWidth:0 }}>
+        <header style={{ display: bp.isMobile ? "none" : "flex", alignItems:"center", justifyContent:"space-between", marginBottom:18, flexWrap:"wrap", gap:8 }}>
           <div>
             <div style={{ fontSize:11, color:T.textMute, fontFamily:FONT_MONO, letterSpacing:"0.12em", textTransform:"uppercase" }}>{page}</div>
-            <h1 style={{ fontSize:22, fontWeight:500, margin:"4px 0 0", letterSpacing:"-0.015em" }}>{PAGES.find((p)=>p.id===page)?.label}</h1>
+            <h1 style={{ fontSize: bp.isTablet ? 18 : 22, fontWeight:500, margin:"4px 0 0", letterSpacing:"-0.015em" }}>{PAGES.find((p)=>p.id===page)?.label}</h1>
           </div>
-          <div style={{ display:"flex", gap:10, alignItems:"center", fontFamily:FONT_MONO, fontSize:11, color:T.textDim }}>
+          <div style={{ display:"flex", gap:10, alignItems:"center", fontFamily:FONT_MONO, fontSize:11, color:T.textDim, flexWrap:"wrap" }}>
             {user?.is_platform_admin && viewOrgId && (() => {
               const org = allOrgs.find(o => String(o.id) === String(viewOrgId));
               return org ? (

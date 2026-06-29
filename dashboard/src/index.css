@@ -1,13 +1,19 @@
 @import "tailwindcss";
 
+html {
+  overflow-x: hidden;
+}
+
 body {
   margin: 0;
   font-family: system-ui, 'Segoe UI', Roboto, sans-serif;
   background: #0f1117;
   color: #e2e8f0;
+  overflow-x: hidden;
 }
 
 #root {
   width: 100%;
   min-height: 100svh;
+  overflow-x: hidden;
 }

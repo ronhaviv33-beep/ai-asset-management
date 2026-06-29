@@ -5,6 +5,7 @@ import {
   fetchCostIntelligence, fetchSecurityAlerts,
   fetchRelationships,
 } from "../api.js";
+import { useBreakpoint } from "../hooks/useBreakpoint.js";
 import { relationshipEvidenceLabel } from "../discoveryStatus.js";
 
 const T = {
@@ -105,6 +106,7 @@ export default function ExecutiveDashboard({ onNavigate }) {
   const [alerts, setAlerts]           = useState([]);
   const [relationships, setRels]      = useState([]);
   const [loading, setLoading]         = useState(true);
+  const bp = useBreakpoint();
 
   useEffect(() => {
     (async () => {
@@ -209,9 +211,9 @@ export default function ExecutiveDashboard({ onNavigate }) {
     <div style={{ display: "flex", flexDirection: "column", gap: 24, fontFamily: FONT }}>
 
       {/* ── Brand ──────────────────────────────────────────────────────────────── */}
-      <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between" }}>
+      <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", flexWrap: "wrap", gap: 8 }}>
         <div>
-          <h2 style={{ margin: 0, fontSize: 24, fontWeight: 700, color: T.text, letterSpacing: "-0.025em" }}>
+          <h2 style={{ margin: 0, fontSize: bp.isMobile ? 20 : 24, fontWeight: 700, color: T.text, letterSpacing: "-0.025em" }}>
             ObserveAgents
           </h2>
           <div style={{ fontSize: 12, color: T.textMute, fontFamily: MONO, marginTop: 5 }}>
@@ -270,7 +272,7 @@ export default function ExecutiveDashboard({ onNavigate }) {
       </div>
 
       {/* ── Lifecycle + Discovery ─────────────────────────────────────────────── */}
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
+      <div style={{ display: "grid", gridTemplateColumns: bp.isMobile ? "1fr" : "1fr 1fr", gap: 16 }}>
 
         {/* Lifecycle donut */}
         <Panel>
@@ -393,9 +395,9 @@ export default function ExecutiveDashboard({ onNavigate }) {
           onAction={() => onNavigate?.("relationship_map")}
         />
         {topRels.length > 0 ? (
-          <div>
+          <div style={{ overflowX: "auto", WebkitOverflowScrolling: "touch" }}>
             {/* Column headers */}
-            <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr 80px 80px", gap: 12, padding: "0 4px 10px", borderBottom: `1px solid ${T.border}`, marginBottom: 4 }}>
+            <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr 80px 80px", gap: 12, padding: "0 4px 10px", borderBottom: `1px solid ${T.border}`, marginBottom: 4, minWidth: 560 }}>
               {["Source Agent → Target System", "Relationship", "Evidence", "Strength", "Requests"].map(h => (
                 <div key={h} style={{ fontSize: 9, fontFamily: MONO, color: T.textMute, letterSpacing: "0.12em", textTransform: "uppercase" }}>{h}</div>
               ))}
@@ -413,7 +415,7 @@ export default function ExecutiveDashboard({ onNavigate }) {
                 <div key={r.id} style={{
                   display: "grid", gridTemplateColumns: "2fr 1fr 1fr 80px 80px", gap: 12,
                   padding: "10px 4px", borderBottom: i < topRels.length - 1 ? `1px solid ${T.border}` : "none",
-                  alignItems: "center",
+                  alignItems: "center", minWidth: 560,
                 }}>
                   {/* Source → Target */}
                   <div style={{ minWidth: 0 }}>
@@ -490,7 +492,7 @@ export default function ExecutiveDashboard({ onNavigate }) {
       </Panel>
 
       {/* ── High Risk + Action Items ───────────────────────────────────────────── */}
-      <div style={{ display: "grid", gridTemplateColumns: "3fr 2fr", gap: 16 }}>
+      <div style={{ display: "grid", gridTemplateColumns: bp.isMobile ? "1fr" : "3fr 2fr", gap: 16 }}>
 
         {/* High Risk Agents */}
         <Panel>
