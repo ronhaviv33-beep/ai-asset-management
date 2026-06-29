@@ -9,6 +9,7 @@ import {
   fetchBillingPeriods,
   updateBillingPeriod,
 } from '../api.js'
+import CollapsiblePanel, { PanelGroupControls } from '../components/CollapsiblePanel.jsx'
 
 // ── Design tokens ──────────────────────────────────────────────────────────────
 const T = {
@@ -717,14 +718,21 @@ export default function CostIntelligence() {
         ))}
       </div>
 
+      {/* Expand/Collapse all */}
+      <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 12 }}>
+        <PanelGroupControls group="cost" />
+      </div>
+
       {/* Main content: breakdown + trend */}
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 12 }}>
-        <Card title="Cost Breakdown" subtitle={`Period: last 30 days · ${breakdown.length} entries`}>
+        <CollapsiblePanel group="cost" storageKey="oa-panel-cost-breakdown"
+          title="Cost Breakdown" subtitle={`Period: last 30 days · ${breakdown.length} entries`}>
           <TabBar tabs={BREAKDOWN_TABS} active={breakdownBy} onChange={handleBreakdownChange} />
           <BreakdownList items={breakdown} breakdownBy={breakdownBy} />
-        </Card>
+        </CollapsiblePanel>
 
-        <Card title="30-Day Cost Trend" subtitle="Daily runtime cost estimate">
+        <CollapsiblePanel group="cost" storageKey="oa-panel-cost-trend"
+          title="30-Day Cost Trend" subtitle="Daily runtime cost estimate">
           <TrendChart data={trends} />
           <div style={{ display: 'flex', gap: 16, marginTop: 12, flexWrap: 'wrap' }}>
             <div style={{ fontSize: 11, color: T.textMute }}>
@@ -734,7 +742,7 @@ export default function CostIntelligence() {
               Peak: <span style={{ color: T.text, fontFamily: FONT_MONO }}>{fmtFull$(Math.max(...trends.map(d => d.cost_usd), 0))}</span>
             </div>
           </div>
-        </Card>
+        </CollapsiblePanel>
       </div>
 
       {/* Reconciliation detail */}
