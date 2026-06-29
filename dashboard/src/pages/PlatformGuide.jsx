@@ -1,7 +1,9 @@
 import React from "react";
 import { T, FONT_UI, FONT_MONO } from "../theme.js";
+import { useBreakpoint } from "../hooks/useBreakpoint.js";
 
 export default function CustomerWelcomePage({ onNavigate }) {
+  const bp = useBreakpoint();
   const discoveredItems = [
     { icon: "◈", color: T.accent,  label: "AI Agents",         detail: "Every agent making LLM calls — named, fingerprinted, attributed to a team" },
     { icon: "🔗", color: T.teal,   label: "Dependencies",      detail: "MCP servers, tools, APIs, databases, and CRMs each agent touches at runtime" },
@@ -25,7 +27,8 @@ export default function CustomerWelcomePage({ onNavigate }) {
       n: "1", color: T.accent,
       title: "Connect your AI traffic",
       desc: "Point your AI agent code at the gateway instead of directly at OpenAI or Anthropic. No proprietary SDK required — use your existing AI stack. Replace base_url, replace api_key, send traffic. No instrumentation, no code rewrite.",
-      note: "Works with OpenAI SDK, LangChain, CrewAI, LiteLLM, OpenAI Agents SDK, MCP Clients, Vercel AI SDK, Agno, and any OpenAI-compatible client.",
+      note: null,
+      sdks: ["OpenAI SDK", "LangChain", "CrewAI", "LiteLLM", "OpenAI Agents SDK", "MCP Clients", "Vercel AI SDK", "Agno", "any OpenAI-compatible client"],
       cta: "See Integration Guide →", page: "integrations",
     },
     {
@@ -51,10 +54,10 @@ export default function CustomerWelcomePage({ onNavigate }) {
   ];
 
   return (
-    <div style={{ maxWidth:900, margin:"0 auto", padding:"32px 24px", fontFamily:FONT_UI }}>
+    <div style={{ maxWidth:900, margin:"0 auto", padding: bp.isMobile ? "16px" : "32px 24px", fontFamily:FONT_UI }}>
 
       {/* Hero */}
-      <div style={{ marginBottom:32, padding:"40px 44px", background:T.panel,
+      <div style={{ marginBottom:32, padding: bp.isMobile ? "24px 20px" : "40px 44px", background:T.panel,
         border:`1px solid ${T.border}`, borderRadius:12, position:"relative", overflow:"hidden" }}>
         <div style={{ position:"absolute", top:-60, right:-60, width:280, height:280, borderRadius:"50%",
           background:`${T.accent}06`, pointerEvents:"none" }} />
@@ -64,7 +67,7 @@ export default function CustomerWelcomePage({ onNavigate }) {
         <div style={{ fontSize:11, fontFamily:FONT_MONO, color:T.accent, letterSpacing:"0.15em",
           textTransform:"uppercase", marginBottom:12 }}>ObserveAgents · AI Runtime Intelligence Platform</div>
 
-        <div style={{ fontSize:32, fontWeight:700, color:T.text, marginBottom:14, lineHeight:1.15 }}>
+        <div style={{ fontSize: bp.isMobile ? 22 : 32, fontWeight:700, color:T.text, marginBottom:14, lineHeight:1.15 }}>
           Connect traffic once.<br/>
           <span style={{ color:T.accent }}>Your inventory builds itself.</span>
         </div>
@@ -133,15 +136,34 @@ export default function CustomerWelcomePage({ onNavigate }) {
                 {s.n}
               </div>
             </div>
-            <div style={{ flex:1, padding:"18px 22px 18px 22px" }}>
+            <div style={{ flex:1, minWidth:0, padding: bp.isMobile ? "14px 14px" : "18px 22px" }}>
               <div style={{ fontSize:14, fontWeight:600, color:T.text, marginBottom:6 }}>{s.title}</div>
-              <div style={{ fontSize:12, color:T.textDim, lineHeight:1.65, marginBottom: s.note ? 8 : 0 }}>{s.desc}</div>
+              <div style={{ fontSize:12, color:T.textDim, lineHeight:1.65, marginBottom: (s.sdks || s.note) ? 8 : 0 }}>{s.desc}</div>
+              {s.sdks && (
+                <div style={{ display:"flex", flexWrap:"wrap", gap:4, marginBottom:4 }}>
+                  {s.sdks.map(sdk => (
+                    <span key={sdk} style={{ fontSize:10, fontFamily:FONT_MONO, color:s.color,
+                      background:`${s.color}12`, border:`1px solid ${s.color}33`,
+                      borderRadius:4, padding:"2px 7px" }}>✓ {sdk}</span>
+                  ))}
+                </div>
+              )}
               {s.note && (
                 <div style={{ fontSize:11, color:T.textMute, lineHeight:1.55,
                   borderLeft:`2px solid ${s.color}33`, paddingLeft:10 }}>{s.note}</div>
               )}
+              {s.cta && bp.isMobile && (
+                <div style={{ marginTop:12 }}>
+                  <button onClick={() => onNavigate(s.page)}
+                    style={{ background:"transparent", border:`1px solid ${T.border}`, color:s.color,
+                      borderRadius:5, padding:"9px 14px", fontSize:11, fontFamily:FONT_MONO,
+                      cursor:"pointer", minHeight:44 }}>
+                    {s.cta}
+                  </button>
+                </div>
+              )}
             </div>
-            {s.cta && (
+            {s.cta && !bp.isMobile && (
               <div style={{ display:"flex", alignItems:"center", paddingRight:20, flexShrink:0 }}>
                 <button onClick={() => onNavigate(s.page)}
                   style={{ background:"transparent", border:`1px solid ${T.border}`, color:s.color,

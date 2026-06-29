@@ -2,8 +2,10 @@ import React, { useState, useEffect } from "react";
 import { T, FONT_UI, FONT_MONO } from "../theme.js";
 import { fetchAgentsSummary, fetchRelationships, fetchProviderCredentials, fetchApiKeys } from "../api.js";
 import { gatewayBaseUrl } from "../config.js";
+import { useBreakpoint } from "../hooks/useBreakpoint.js";
 
 export default function SimpleIntegrationsPage({ onNavigate, demoMode = false }) {
+  const bp = useBreakpoint();
   const gatewayUrl = gatewayBaseUrl(demoMode);
   const [copied, setCopied]   = useState(null);
   const [open,   setOpen]     = useState({ sdk_openai: true, sdk_anthropic: false, sdk_env: false, manual_openai: false, manual_curl: false });
@@ -221,7 +223,7 @@ client.chat.completions.create(
   );
 
   return (
-    <div style={{ maxWidth:900, margin:"0 auto", padding:"32px 24px", fontFamily:FONT_UI }}>
+    <div style={{ maxWidth:900, margin:"0 auto", padding: bp.isMobile ? "16px" : "32px 24px", fontFamily:FONT_UI }}>
 
       <div style={{ marginBottom:24 }}>
         <div style={{ fontSize:11, fontFamily:FONT_MONO, color:T.textMute, letterSpacing:"0.12em", textTransform:"uppercase", marginBottom:6 }}>Administration · Setup</div>
@@ -249,7 +251,7 @@ client.chat.completions.create(
 
       <div style={{ marginBottom:28, padding:"20px 24px",
         background:`${T.info}0a`, border:`1px solid ${T.info}33`, borderRadius:10,
-        display:"flex", alignItems:"flex-start", gap:16 }}>
+        display:"flex", alignItems:"flex-start", gap:16, flexWrap:"wrap" }}>
         <div style={{ width:8, height:8, borderRadius:"50%", background:T.info, flexShrink:0, marginTop:5 }} />
         <div style={{ flex:1 }}>
           <div style={{ fontSize:13, fontWeight:600, color:T.text, marginBottom:6 }}>
@@ -271,14 +273,14 @@ client.chat.completions.create(
 
       <div style={{ background:T.panel, border:`1px solid ${T.border}`, borderRadius:10, padding:"16px 24px", marginBottom:28 }}>
         <div style={{ fontSize:10, fontFamily:FONT_MONO, color:T.textMute, textTransform:"uppercase", letterSpacing:"0.1em", marginBottom:12 }}>Currently discovered</div>
-        <div style={{ display:"grid", gridTemplateColumns:"repeat(4,1fr)", gap:0 }}>
+        <div style={{ display:"grid", gridTemplateColumns: bp.isMobile ? "repeat(2,1fr)" : "repeat(4,1fr)", gap: bp.isMobile ? 16 : 0 }}>
           {[
             { label:"AI Assets",        value:fmtMetric(metrics.agents),       color:T.accent },
             { label:"Dependencies",      value:fmtMetric(metrics.dependencies), color:"#5BD9C5" },
             { label:"Workflows",         value:fmtMetric(metrics.workflows),    color:T.warn },
             { label:"Discovery Sources", value:fmtMetric(metrics.platforms),    color:T.info },
           ].map((m, i) => (
-            <div key={m.label} style={{ padding:"0 20px 0 0", borderRight: i < 3 ? `1px solid ${T.border}` : "none", marginRight: i < 3 ? 20 : 0 }}>
+            <div key={m.label} style={{ padding: bp.isMobile ? 0 : "0 20px 0 0", borderRight: !bp.isMobile && i < 3 ? `1px solid ${T.border}` : "none", marginRight: !bp.isMobile && i < 3 ? 20 : 0 }}>
               <div style={{ fontSize:26, fontWeight:700, color:m.color, fontFamily:FONT_MONO, letterSpacing:"-0.02em", lineHeight:1 }}>{m.value}</div>
               <div style={{ fontSize:11, color:T.textMute, marginTop:5 }}>{m.label}</div>
             </div>
@@ -287,7 +289,7 @@ client.chat.completions.create(
       </div>
 
       <div style={{ fontSize:10, fontFamily:FONT_MONO, color:T.textMute, letterSpacing:"0.12em", textTransform:"uppercase", marginBottom:14 }}>Setup options</div>
-      <div style={{ display:"grid", gridTemplateColumns:"repeat(3,1fr)", gap:14, marginBottom: section ? 20 : 0 }}>
+      <div style={{ display:"grid", gridTemplateColumns: bp.isMobile ? "1fr" : bp.isTablet ? "repeat(2,1fr)" : "repeat(3,1fr)", gap:14, marginBottom: section ? 20 : 0 }}>
         {OPTIONS.map(opt => (
           <div key={opt.id}
             style={{ background:T.panel,
@@ -334,7 +336,7 @@ client.chat.completions.create(
               <span key={s} style={{ fontSize:11, fontFamily:FONT_MONO, color:T.accent, background:`${T.accent}12`, border:`1px solid ${T.accent}33`, borderRadius:4, padding:"2px 8px" }}>✓ {s}</span>
             ))}
           </div>
-          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:24, marginBottom:20 }}>
+          <div style={{ display:"grid", gridTemplateColumns: bp.isMobile ? "1fr" : "1fr 1fr", gap:24, marginBottom:20 }}>
             <div>
               <div style={{ fontSize:10, fontFamily:FONT_MONO, color:T.textMute, textTransform:"uppercase", letterSpacing:"0.1em", marginBottom:10 }}>Setup flow</div>
               <FlowColumn steps={GW_FLOW} />
@@ -364,7 +366,7 @@ client.chat.completions.create(
       {section === "sdk" && (
         <div style={{ border:`1px solid ${"#34d399"}44`, borderRadius:10, padding:"24px 28px", marginBottom:16 }}>
           <div style={{ fontSize:13, fontWeight:600, color:T.text, marginBottom:16 }}>Connect AI Applications — Integration Guide</div>
-          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:24, marginBottom:20 }}>
+          <div style={{ display:"grid", gridTemplateColumns: bp.isMobile ? "1fr" : "1fr 1fr", gap:24, marginBottom:20 }}>
             <div>
               <div style={{ fontSize:12, color:T.textDim, lineHeight:1.7, marginBottom:16 }}>
                 The SDK automatically collects runtime context and attaches it to every request.
@@ -380,7 +382,7 @@ client.chat.completions.create(
                 ["APP_VERSION",              "Version tag"],
               ].map(([k, v]) => (
                 <div key={k} style={{ display:"flex", gap:8, padding:"5px 0", borderBottom:`1px solid ${T.border}`, fontSize:12 }}>
-                  <code style={{ fontFamily:FONT_MONO, color:"#34d399", fontSize:11, minWidth:180, flexShrink:0 }}>{k}</code>
+                  <code style={{ fontFamily:FONT_MONO, color:"#34d399", fontSize:11, minWidth: bp.isMobile ? 0 : 180, flexShrink: bp.isMobile ? 1 : 0 }}>{k}</code>
                   <span style={{ color:T.textDim }}>{v}</span>
                 </div>
               ))}
@@ -398,8 +400,8 @@ client.chat.completions.create(
               <CodeBlock id="manual_openai" label="Manual headers · OpenAI" snippet={resolvedSnippets.manual_openai} accentColor={T.warn} />
               <CodeBlock id="manual_curl"   label="Manual headers · cURL"   snippet={resolvedSnippets.manual_curl}   accentColor={T.warn} />
             </div>
-            <div style={{ background:T.panel, border:`1px solid ${T.border}`, borderRadius:6, overflow:"hidden" }}>
-              <table style={{ width:"100%", borderCollapse:"collapse" }}>
+            <div style={{ background:T.panel, border:`1px solid ${T.border}`, borderRadius:6, overflowX:"auto", WebkitOverflowScrolling:"touch" }}>
+              <table style={{ width:"100%", borderCollapse:"collapse", minWidth:460 }}>
                 <thead>
                   <tr style={{ background:T.panelHi }}>
                     {["Header","Description","Example"].map(h => (
@@ -432,7 +434,7 @@ client.chat.completions.create(
           <div style={{ fontSize:12, color:T.textDim, lineHeight:1.7, marginBottom:20 }}>
             Platform discovery identifies AI-related signals outside the gateway — across GitHub, Slack, Jira, ServiceNow, and MCP servers.
           </div>
-          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:24, marginBottom:20 }}>
+          <div style={{ display:"grid", gridTemplateColumns: bp.isMobile ? "1fr" : "1fr 1fr", gap:24, marginBottom:20 }}>
             <div>
               <div style={{ fontSize:10, fontFamily:FONT_MONO, color:T.textMute, textTransform:"uppercase", letterSpacing:"0.1em", marginBottom:10 }}>Discovery flow</div>
               <FlowColumn steps={PLATFORM_FLOW} />

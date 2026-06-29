@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from "react";
 import { T, FONT_UI, FONT_MONO } from "../theme.js";
 import { useRoles } from "../auth.jsx";
+import { useBreakpoint } from "../hooks/useBreakpoint.js";
 import {
   fetchGuardModes, setGuardMode, fetchHealth,
   fetchProviderCredentials, upsertProviderCredential, deleteProviderCredential,
@@ -89,7 +90,8 @@ function GuardModesSection() {
       {loading ? (
         <div style={{ color:T.textDim, fontFamily:FONT_MONO, fontSize:12, padding:12 }}>Loading…</div>
       ) : (
-        <table style={{ width:"100%", borderCollapse:"collapse" }}>
+        <div style={{ overflowX:"auto", WebkitOverflowScrolling:"touch" }}>
+        <table style={{ width:"100%", borderCollapse:"collapse", minWidth:460 }}>
           <thead>
             <tr style={{ borderBottom:`1px solid ${T.border}` }}>
               {["Team","Effective Mode","Would block (30d)","Set mode"].map(h => (
@@ -135,6 +137,7 @@ function GuardModesSection() {
             })}
           </tbody>
         </table>
+        </div>
       )}
       <div style={{ marginTop:14, fontSize:11, fontFamily:FONT_MONO, color:T.textMute, lineHeight:1.7 }}>
         <strong style={{ color:T.textDim }}>Would block (30d)</strong> shows how many requests <em>would</em> have been blocked in enforce mode — watch this before graduating a team. Every mode change is written to the audit log.
@@ -206,7 +209,8 @@ function ProviderCredentialsSection() {
       {loading ? (
         <div style={{ color:T.textDim, fontFamily:FONT_MONO, fontSize:12, padding:12 }}>Loading…</div>
       ) : (
-        <table style={{ width:"100%", borderCollapse:"collapse" }}>
+        <div style={{ overflowX:"auto", WebkitOverflowScrolling:"touch" }}>
+        <table style={{ width:"100%", borderCollapse:"collapse", minWidth:420 }}>
           <thead>
             <tr style={{ borderBottom:`1px solid ${T.border}` }}>
               {["Provider","Status","Key (last 4)",""].map(h => (
@@ -314,6 +318,7 @@ function ProviderCredentialsSection() {
             })}
           </tbody>
         </table>
+        </div>
       )}
     </Card>
   );
@@ -529,6 +534,7 @@ function RolesManagementSection() {
 
 // ── Settings Page ─────────────────────────────────────────────────────────────
 export default function SettingsPage() {
+  const bp = useBreakpoint();
   const [keys,      setKeys]      = useState([]);
   const [loading,   setLoading]   = useState(true);
   const [editing,   setEditing]   = useState(null);
@@ -632,7 +638,7 @@ export default function SettingsPage() {
   return (
     <div style={{ display:"flex", flexDirection:"column", gap:14, maxWidth:860 }}>
 
-      <div style={{ display:"flex", alignItems:"flex-start", justifyContent:"space-between", gap:16 }}>
+      <div style={{ display:"flex", alignItems:"flex-start", justifyContent:"space-between", gap:16, flexWrap:"wrap" }}>
         <div>
           <div style={{ fontSize:20, fontWeight:500, color:T.text, letterSpacing:"-0.01em" }}>Settings</div>
           <div style={{ fontSize:12, color:T.textDim, marginTop:4 }}>Configure your organization's AI providers, guard modes, and platform settings.</div>
@@ -682,7 +688,8 @@ export default function SettingsPage() {
 
       <Card title="Platform Configuration" subtitle="Infrastructure-level settings used by the AI Operations platform. Stored in the server environment.">
         {err && <div style={{ color:T.crit, fontFamily:FONT_MONO, fontSize:12, marginBottom:12 }}>{err}</div>}
-        <table style={{ width:"100%", borderCollapse:"collapse" }}>
+        <div style={{ overflowX:"auto", WebkitOverflowScrolling:"touch" }}>
+        <table style={{ width:"100%", borderCollapse:"collapse", minWidth:560 }}>
           <thead>
             <tr style={{ borderBottom:`1px solid ${T.border}` }}>
               {["Service","Env Variable","Purpose","Status",""].map(h => (
@@ -748,6 +755,7 @@ export default function SettingsPage() {
             })}
           </tbody>
         </table>
+        </div>
       </Card>
 
       <Card title="Environments" subtitle="Shown in the Environment dropdown when claiming or validating agents">
@@ -760,7 +768,7 @@ export default function SettingsPage() {
             </div>
           ))}
         </div>
-        <div style={{ display:"flex", gap:8, alignItems:"center" }}>
+        <div style={{ display:"flex", gap:8, alignItems:"center", flexWrap:"wrap" }}>
           <input value={envInput} onChange={e => setEnvInput(e.target.value)} onKeyDown={e => e.key === "Enter" && addEnv()}
             placeholder="New environment name…"
             style={{ background:T.panelHi, border:`1px solid ${T.border}`, color:T.text, padding:"7px 10px", borderRadius:4, fontSize:12, fontFamily:FONT_MONO, width:200 }}
