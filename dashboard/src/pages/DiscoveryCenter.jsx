@@ -159,7 +159,7 @@ function ClaimModal({ agent, onClose, onSave, onApprove, onIgnore, environments 
   const set = (k) => (e) => setForm(f => ({ ...f, [k]: e.target.value }));
   const canSubmit = form.owner.trim() || form.team.trim();
 
-  const run = async (fn) => { setErr(""); try { await fn(); onClose(); } catch (e) { setErr(e.message); } };
+  const run = async (fn) => { setErr(""); try { await fn(); onClose(); } catch (e) { setErr(typeof e?.message === "string" && e.message ? e.message : "Something went wrong"); } };
 
   const approve = () => run(async () => { setBusy("approve"); try { await onApprove(agent); } finally { setBusy(""); } });
   const ignore  = () => run(async () => { setBusy("ignore");  try { await onIgnore(agent);  } finally { setBusy(""); } });

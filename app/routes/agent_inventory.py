@@ -59,7 +59,13 @@ def _append_evidence_event(reg: AssetRegistry, action: str, user, **extra) -> No
         evidence = json.loads(reg.evidence or "{}")
     except Exception:
         pass
+    # Tolerate legacy/demo rows whose evidence isn't a JSON object (e.g. a list or
+    # string) — never let evidence shape crash approve/ignore.
+    if not isinstance(evidence, dict):
+        evidence = {}
     events = evidence.get("validation_events", [])
+    if not isinstance(events, list):
+        events = []
     events.append({
         "action": action,
         "by": _caller_email(user),
@@ -230,6 +236,7 @@ async def approve_suggestions(
         raise HTTPException(status_code=403, detail="Access denied")
 
     body = body or {}
+    demo_mode = bool(get_org_config(db, org_id, "demo_mode"))
     reg = _lookup_registry(db, org_id, agent_id)
 
     if reg and getattr(reg, "discovery_status", "verified") == "potential":
@@ -239,7 +246,7 @@ async def approve_suggestions(
         )
 
     # Server-derived suggestions come from the inventory record (read-time only).
-    agent = inv.get_agent_by_id(db, org_id, agent_id) or {}
+    agent = inv.get_agent_by_id(db, org_id, agent_id, demo_mode=demo_mode) or {}
     merged = {
         "owner":            body.get("owner")            or agent.get("suggested_owner"),
         "team":             body.get("team")             or agent.get("suggested_team"),
@@ -269,7 +276,7 @@ async def approve_suggestions(
     _append_evidence_event(reg, "approved_suggestions", user)
 
     db.commit()
-    return inv.get_agent_by_id(db, org_id, reg.asset_key) or {
+    return inv.get_agent_by_id(db, org_id, reg.asset_key, demo_mode=demo_mode) or {
         "status": "managed", "asset_key": reg.asset_key, "lifecycle_status": "managed",
     }
 

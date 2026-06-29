@@ -420,16 +420,38 @@ export async function updateInventoryAgent(agentId, data) {
   return r.json()
 }
 
+// Normalize any backend error payload into a readable string. Handles FastAPI
+// detail-as-string, this app's 500 shape ({detail:{error:{message,trace_id}}}),
+// 422 validation arrays ([{msg}]), {message}, and generic objects. Never returns
+// an object, so callers can safely render the resulting Error.message.
+export function parseApiError(payload, fallback = 'Something went wrong') {
+  const d = payload?.detail
+  if (typeof d === 'string' && d) return d
+  if (d?.error?.message) return d.error.message + (d.error.trace_id ? ` (trace: ${d.error.trace_id})` : '')
+  if (Array.isArray(d)) {
+    const msgs = d.map(e => e?.msg).filter(Boolean)
+    if (msgs.length) return msgs.join('; ')
+  }
+  if (typeof payload?.message === 'string' && payload.message) return payload.message
+  if (d && typeof d === 'object' && typeof d.message === 'string') return d.message
+  return fallback
+}
+
+// Build a clean Error from a non-ok (or null) response. authFetch returns null
+// on 401/no-token — surface a readable session message instead of null.json().
+async function apiError(resp, fallback) {
+  if (!resp) return new Error('Your session has expired — please sign in again.')
+  const payload = await resp.json().catch(() => ({}))
+  return new Error(parseApiError(payload, fallback))
+}
+
 export async function claimInventoryAgent(agentId, body) {
   const r = await authFetch(`${BASE}/agents/${encodeURIComponent(agentId)}/claim`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   })
-  if (!r || !r.ok) {
-    const err = await r.json().catch(() => ({}))
-    throw new Error(err.detail || 'Failed to claim agent')
-  }
+  if (!r || !r.ok) throw await apiError(r, 'Failed to claim agent')
   return r.json()
 }
 
@@ -439,7 +461,7 @@ export async function validateInventoryAgent(agentId, body) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   })
-  if (!r || !r.ok) throw new Error('Failed to validate agent')
+  if (!r || !r.ok) throw await apiError(r, 'Failed to validate agent')
   return r.json()
 }
 
@@ -449,7 +471,7 @@ export async function rejectInventoryAgent(agentId, rejectionReason) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ rejection_reason: rejectionReason }),
   })
-  if (!r || !r.ok) throw new Error('Failed to reject agent')
+  if (!r || !r.ok) throw await apiError(r, 'Failed to reject agent')
   return r.json()
 }
 
@@ -461,10 +483,7 @@ export async function approveSuggestions(agentId, body = {}) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   })
-  if (!r || !r.ok) {
-    const err = await r.json().catch(() => ({}))
-    throw new Error(err.detail || 'Failed to approve suggestions')
-  }
+  if (!r || !r.ok) throw await apiError(r, 'Failed to approve suggestions')
   return r.json()
 }
 
@@ -475,7 +494,7 @@ export async function ignoreInventoryAgent(agentId, reason = '') {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ reason }),
   })
-  if (!r || !r.ok) throw new Error('Failed to ignore agent')
+  if (!r || !r.ok) throw await apiError(r, 'Failed to ignore agent')
   return r.json()
 }
 

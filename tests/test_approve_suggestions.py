@@ -216,3 +216,60 @@ class TestClaimRegression:
         assert "stage_label" in rec
         assert "identity_evidence" in rec
         assert "confidence_score" in rec  # internal field preserved
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Partial / missing suggestions must not crash the approve/ignore flow
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class TestPartialSuggestions:
+    def test_approve_team_only_when_owner_missing(self):
+        """Owner missing but team present → managed with team-only ownership."""
+        agent = f"teamonly-{uuid.uuid4().hex[:6]}"
+        _seed_agent(agent, team="trading-research")
+        r = _client.post(f"/agents/{agent}/approve-suggestions", json={}, headers=AH)
+        assert r.status_code == 200, r.text
+        reg = _reg(agent)
+        assert reg.status == "managed"
+        assert reg.team == "trading-research"
+        assert reg.claimed_by == "admin@approve.test"
+        assert not reg.owner  # no owner suggested → team-only ownership, not a crash
+
+    def test_approve_with_no_suggestions_does_not_crash(self):
+        """No team and no owner → still succeeds (managed), no error."""
+        agent = f"nosug-{uuid.uuid4().hex[:6]}"
+        _seed_agent(agent, team="")
+        r = _client.post(f"/agents/{agent}/approve-suggestions", json={}, headers=AH)
+        assert r.status_code == 200, r.text
+        reg = _reg(agent)
+        assert reg.status == "managed"
+
+    def test_ignore_with_empty_body(self):
+        agent = f"ign-empty-{uuid.uuid4().hex[:6]}"
+        _seed_agent(agent)
+        r = _client.post(f"/agents/{agent}/ignore", headers=AH)   # no json body at all
+        assert r.status_code == 200, r.text
+        assert r.json().get("lifecycle_status") != "retired"
+
+    def test_non_dict_evidence_does_not_crash(self):
+        """A registry row whose evidence is a non-dict JSON must not 500 approve/ignore."""
+        agent = f"badev-{uuid.uuid4().hex[:6]}"
+        _seed_agent(agent)
+        db = SessionLocal()
+        try:
+            db.add(AssetRegistry(
+                organization_id=ORG_ID, asset_key=_asset_key(ORG_ID, agent),
+                agent_id_raw=agent, agent_name=agent, status="unassigned",
+                source="discovered", first_seen_at=_now, is_demo=False,
+                evidence="[]",   # legacy/demo non-dict evidence
+            ))
+            db.commit()
+        finally:
+            db.close()
+        r1 = _client.post(f"/agents/{agent}/ignore", json={}, headers=AH)
+        assert r1.status_code == 200, r1.text
+        r2 = _client.post(f"/agents/{agent}/approve-suggestions", json={}, headers=AH)
+        assert r2.status_code == 200, r2.text
+        reg = _reg(agent)
+        events = json.loads(reg.evidence or "{}").get("validation_events", [])
+        assert any(e.get("action") == "approved_suggestions" for e in events)
