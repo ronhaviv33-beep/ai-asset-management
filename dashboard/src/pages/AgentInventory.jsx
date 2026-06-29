@@ -886,7 +886,7 @@ export default function AgentInventory({ isAdmin = false, onNavigate }) {
       setSummary(s);
       setError(null);
     } catch (e) {
-      setError(e.message);
+      setError(typeof e?.message === "string" && e.message ? e.message : "Something went wrong");
     } finally {
       setLoading(false);
     }
@@ -917,7 +917,7 @@ export default function AgentInventory({ isAdmin = false, onNavigate }) {
       setClaimError(null);
       await loadData();
     } catch (e) {
-      setClaimError(e.message);
+      setClaimError(typeof e?.message === "string" && e.message ? e.message : "Something went wrong");
     } finally {
       setSaving(false);
     }

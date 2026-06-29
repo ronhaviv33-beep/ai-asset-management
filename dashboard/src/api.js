@@ -413,10 +413,7 @@ export async function updateInventoryAgent(agentId, data) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(data),
   })
-  if (!r || !r.ok) {
-    const err = await r.json().catch(() => ({}))
-    throw new Error(err.detail || 'Failed to update agent')
-  }
+  if (!r || !r.ok) throw await apiError(r, 'Failed to update agent')
   return r.json()
 }
 

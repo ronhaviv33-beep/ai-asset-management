@@ -358,8 +358,12 @@ async def validate_agent(
         evidence = json.loads(reg.evidence or "{}")
     except Exception:
         pass
+    if not isinstance(evidence, dict):
+        evidence = {}
     now = datetime.now(timezone.utc)
     events = evidence.get("validation_events", [])
+    if not isinstance(events, list):
+        events = []
     events.append({"action": "validated", "by": _caller_email(user), "at": now.isoformat()})
     evidence["validation_events"] = events
 
@@ -412,8 +416,12 @@ async def reject_agent(
         evidence = json.loads(reg.evidence or "{}")
     except Exception:
         pass
+    if not isinstance(evidence, dict):
+        evidence = {}
     now = datetime.now(timezone.utc)
     events = evidence.get("validation_events", [])
+    if not isinstance(events, list):
+        events = []
     events.append({
         "action": "rejected",
         "by":     _caller_email(user),
@@ -450,6 +458,7 @@ async def update_agent(
 ):
     """Admin-only: update registry metadata for any agent."""
     org_id, _ = _org_and_scope(user, db)
+    demo_mode = bool(get_org_config(db, org_id, "demo_mode"))
 
     reg = _lookup_registry(db, org_id, agent_id)
     if not reg:
@@ -463,5 +472,5 @@ async def update_agent(
         reg.status = body["lifecycle_status"]
 
     db.commit()
-    result = inv.get_agent_by_id(db, org_id, reg.asset_key)
+    result = inv.get_agent_by_id(db, org_id, reg.asset_key, demo_mode=demo_mode)
     return result or {"asset_key": reg.asset_key, "updated": True}
