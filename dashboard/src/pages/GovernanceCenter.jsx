@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo, useCallback } from "react";
 import { fetchAgents, claimInventoryAgent, approveSuggestions, ignoreInventoryAgent } from "../api.js";
 import { stageMeta } from "../discoveryStatus.js";
+import CollapsiblePanel from "../components/CollapsiblePanel.jsx";
 
 const agentActionId = (a) => a?.id || a?.asset_key || a?.agent_id;
 
@@ -399,13 +400,13 @@ export default function GovernanceCenter() {
 
         /* ── Policy Coverage ───────────────────────────────────────────────── */
         <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
-          <div style={{ background: T.panel, border: `1px solid ${T.border}`, borderRadius: 8, padding: "24px 28px" }}>
-            <div style={{ fontSize: 14, fontWeight: 600, color: T.text, marginBottom: 20 }}>Classification Completeness</div>
+          <CollapsiblePanel title="Classification Completeness" storageKey="oa-panel-gov-classification"
+            subtitle="How much governance metadata is filled in across agents">
             <CoverageBar label="Owner Assigned"            value={withOwner}  total={total} color={T.accent} />
             <CoverageBar label="Environment Classified"    value={withEnv}    total={total} color={T.info} />
             <CoverageBar label="Criticality Assessed"      value={withCrit}   total={total} color={T.warn} />
             <CoverageBar label="Business Purpose Documented" value={withPurpose} total={total} color={T.purple} />
-          </div>
+          </CollapsiblePanel>
 
           <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 12 }}>
             {[
