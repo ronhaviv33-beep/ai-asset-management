@@ -133,6 +133,61 @@ function StrengthBadge({ rel }) {
   )
 }
 
+// Fixed readability order for branches in a flow graph (gateway → provider → model first).
+const REL_FLOW_ORDER = [
+  'routes_via', 'uses_provider', 'uses_model', 'uses_tool',
+  'reads_from', 'writes_to', 'calls', 'invokes_workflow', 'triggers', 'sends_event_to',
+]
+function relOrder(t) {
+  const i = REL_FLOW_ORDER.indexOf(t)
+  return i === -1 ? REL_FLOW_ORDER.length : i
+}
+
+// Coarsen an observation timestamp into a bucket so the same agent's flows at different
+// times become distinct rows ("just now" vs "3h ago") without over-fragmenting old data.
+function obsBucket(iso) {
+  if (!iso) return 'unknown'
+  const age = Date.now() - new Date(iso).getTime()
+  if (Number.isNaN(age)) return 'unknown'
+  if (age < 3600000)      return 'recent'                          // < 1h
+  if (age < 86400000)     return 'h' + Math.floor(age / 3600000)   // hourly buckets within a day
+  if (age < 604800000)    return 'd' + Math.floor(age / 86400000)  // daily buckets within a week
+  return 'older'
+}
+
+// Group relationship rows into runtime observations. Honors trace/request/session ids if
+// they ever appear in metadata (no invention); otherwise groups by source_agent + time bucket.
+function groupRelationships(rows) {
+  const groups = new Map()
+  for (const r of rows) {
+    const m = r.metadata || {}
+    const key = m.trace_id || m.request_id || m.session_id
+      || `${r.source_agent_name}__${obsBucket(r.last_seen_at)}`
+    if (!groups.has(key)) groups.set(key, { key, sourceAgent: r.source_agent_name, rows: [] })
+    groups.get(key).rows.push(r)
+  }
+  const out = []
+  for (const g of groups.values()) {
+    const lastSeen = g.rows.reduce((mx, r) => {
+      const t = new Date(r.last_seen_at).getTime()
+      return Number.isNaN(t) ? mx : Math.max(mx, t)
+    }, 0)
+    const targetTypes = [...new Set(g.rows.map(r => r.target_type))]
+    const requests = g.rows.reduce((mx, r) => Math.max(mx, r.request_count || 0), 0)
+    const strengths = [...new Set(g.rows.map(r => relationshipEvidenceLabel(r).label))]
+    out.push({
+      ...g,
+      lastSeenMs: lastSeen,
+      lastSeenIso: lastSeen ? new Date(lastSeen).toISOString() : g.rows[0]?.last_seen_at,
+      relationshipCount: g.rows.length,
+      targetTypes,
+      requests,
+      strengthSummary: strengths.join(' / '),
+    })
+  }
+  return out.sort((a, b) => b.lastSeenMs - a.lastSeenMs)
+}
+
 function Select({ value, onChange, options }) {
   return (
     <select
@@ -157,6 +212,8 @@ export default function RelationshipMap() {
   const [targetType, setTargetType]       = useState('')
   const [relType, setRelType]             = useState('')
   const [sourceFilter, setSourceFilter]   = useState('')
+  const [viewMode, setViewMode]           = useState('flows')   // 'flows' | 'all'
+  const [flowGroup, setFlowGroup]         = useState(null)
 
   useEffect(() => {
     setLoading(true)
@@ -182,6 +239,8 @@ export default function RelationshipMap() {
     const s = new Set(rows.map(r => r.source_agent_name))
     return Array.from(s).sort()
   }, [rows])
+
+  const flowGroups = useMemo(() => groupRelationships(filtered), [filtered])
 
   return (
     <div style={{ background: T.bg, minHeight: '100vh', padding: 24, fontFamily: FONT_SANS }}>
@@ -259,6 +318,24 @@ export default function RelationshipMap() {
         </span>
       </div>
 
+      {/* View toggle */}
+      <div style={{ display: 'flex', gap: 0, marginBottom: 16, background: T.panel, border: `1px solid ${T.border}`, borderRadius: 6, padding: 3, width: 'fit-content' }}>
+        {[
+          { id: 'flows', label: 'Runtime Flows' },
+          { id: 'all',   label: 'All Relationships' },
+        ].map(t => (
+          <button key={t.id} onClick={() => setViewMode(t.id)}
+            style={{
+              background: viewMode === t.id ? T.panelHi : 'transparent',
+              border: viewMode === t.id ? `1px solid ${T.border}` : '1px solid transparent',
+              color: viewMode === t.id ? T.text : T.textDim,
+              padding: '7px 16px', borderRadius: 4, fontSize: 11, fontFamily: FONT_MONO, cursor: 'pointer',
+            }}>
+            {t.label}
+          </button>
+        ))}
+      </div>
+
       {/* Content */}
       {loading ? (
         <div style={{ textAlign: 'center', padding: 60, color: T.textMute, fontFamily: FONT_MONO, fontSize: 12 }}>
@@ -274,9 +351,13 @@ export default function RelationshipMap() {
         <div style={{ textAlign: 'center', padding: 60, color: T.textMute, fontFamily: FONT_MONO, fontSize: 12 }}>
           No relationships match the current filters.
         </div>
+      ) : viewMode === 'flows' ? (
+        <FlowSummaryTable groups={flowGroups} onViewFlow={setFlowGroup} />
       ) : (
         <RelationshipTable rows={filtered} />
       )}
+
+      {flowGroup && <FlowModal group={flowGroup} onClose={() => setFlowGroup(null)} />}
     </div>
   )
 }
@@ -423,6 +504,152 @@ function RelationshipTable({ rows }) {
           })}
         </tbody>
       </table>
+    </div>
+  )
+}
+
+// ── Grouped runtime-flow summary table ──────────────────────────────────────────
+const FLOW_HEADERS = ['Source Agent', 'Last Seen', 'Relationships', 'Targets', 'Requests', 'Strength', '']
+
+function FlowSummaryTable({ groups, onViewFlow }) {
+  return (
+    <div style={{ background: T.panel, border: `1px solid ${T.border}`, borderRadius: 6, overflow: 'hidden' }}>
+      <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+        <thead>
+          <tr style={{ borderBottom: `1px solid ${T.border}` }}>
+            {FLOW_HEADERS.map((h, i) => (
+              <th key={h || i} style={{
+                padding: '10px 14px', textAlign: 'left',
+                fontSize: 10, fontFamily: FONT_MONO, letterSpacing: '0.1em',
+                textTransform: 'uppercase', color: T.textMute, fontWeight: 500, whiteSpace: 'nowrap',
+              }}>{h}</th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {groups.map((g, i) => (
+            <tr key={g.key}
+              onClick={() => onViewFlow(g)}
+              style={{ borderBottom: `1px solid ${T.border}`, background: i % 2 === 0 ? 'transparent' : `${T.bg}66`, cursor: 'pointer', transition: 'background 0.12s' }}
+              onMouseEnter={e => e.currentTarget.style.background = T.panelHi}
+              onMouseLeave={e => e.currentTarget.style.background = i % 2 === 0 ? 'transparent' : `${T.bg}66`}>
+              <td style={{ padding: '12px 14px', fontFamily: FONT_MONO, fontSize: 12, color: T.text, fontWeight: 500 }}>{g.sourceAgent}</td>
+              <td style={{ padding: '12px 14px', fontFamily: FONT_MONO, fontSize: 11, color: T.textDim, whiteSpace: 'nowrap' }}>{fmtDate(g.lastSeenIso)}</td>
+              <td style={{ padding: '12px 14px', fontFamily: FONT_MONO, fontSize: 12, color: T.text }}>{g.relationshipCount}</td>
+              <td style={{ padding: '12px 14px' }}>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+                  {g.targetTypes.map(t => <TypeBadge key={t} type={t} />)}
+                </div>
+              </td>
+              <td style={{ padding: '12px 14px', fontFamily: FONT_MONO, fontSize: 12, color: T.text }}>{g.requests.toLocaleString()}</td>
+              <td style={{ padding: '12px 14px', fontFamily: FONT_MONO, fontSize: 11, color: T.textDim }}>{g.strengthSummary}</td>
+              <td style={{ padding: '12px 14px', textAlign: 'right' }}>
+                <button
+                  onClick={e => { e.stopPropagation(); onViewFlow(g) }}
+                  style={{ background: `${T.accent}18`, border: `1px solid ${T.accent}44`, color: T.accent, padding: '5px 12px', borderRadius: 4, fontSize: 10, fontFamily: FONT_MONO, cursor: 'pointer', letterSpacing: '0.06em', textTransform: 'uppercase', whiteSpace: 'nowrap' }}>
+                  View Flow →
+                </button>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
+// ── Graphical runtime-flow modal ────────────────────────────────────────────────
+function FlowNode({ type, label, sub }) {
+  const m = TYPE_META[type] || TYPE_META.unknown
+  return (
+    <div style={{
+      display: 'inline-flex', alignItems: 'center', gap: 10,
+      background: `${m.color}12`, border: `1px solid ${m.color}55`, borderRadius: 8,
+      padding: '10px 16px', minWidth: 220,
+    }}>
+      <span style={{ fontSize: 18, color: m.color, flexShrink: 0 }}>{m.icon}</span>
+      <div style={{ minWidth: 0 }}>
+        <div style={{ fontSize: 9, fontFamily: FONT_MONO, letterSpacing: '0.08em', textTransform: 'uppercase', color: m.color }}>{m.label}</div>
+        <div style={{ fontSize: 13, fontFamily: FONT_MONO, color: T.text, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{label}</div>
+        {sub && <div style={{ fontSize: 10, fontFamily: FONT_MONO, color: T.textMute, marginTop: 1 }}>{sub}</div>}
+      </div>
+    </div>
+  )
+}
+
+function FlowModal({ group, onClose }) {
+  const ordered = [...group.rows].sort((a, b) => relOrder(a.relationship_type) - relOrder(b.relationship_type))
+  return (
+    <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.65)', display: 'flex', alignItems: 'flex-end', justifyContent: 'center', zIndex: 1000 }}>
+      <div onClick={e => e.stopPropagation()} style={{ background: T.panel, border: `1px solid ${T.border}`, borderTop: `2px solid ${T.accent}`, borderRadius: '12px 12px 0 0', width: '100%', maxWidth: 760, maxHeight: '82vh', display: 'flex', flexDirection: 'column', fontFamily: FONT_SANS }}>
+
+        {/* Header */}
+        <div style={{ padding: '20px 24px 16px', borderBottom: `1px solid ${T.border}` }}>
+          <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontSize: 16, fontWeight: 600, color: T.text }}>Runtime Flow: {group.sourceAgent}</div>
+              <div style={{ fontSize: 11, color: T.textMute, fontFamily: FONT_MONO, marginTop: 4 }}>
+                Observed {fmtDate(group.lastSeenIso)} · {group.requests.toLocaleString()} requests · {group.strengthSummary} evidence
+              </div>
+            </div>
+            <button onClick={onClose} style={{ background: 'transparent', border: `1px solid ${T.border}`, color: T.textDim, padding: '6px 14px', borderRadius: 5, fontSize: 12, fontFamily: FONT_MONO, cursor: 'pointer' }}>✕ Close</button>
+          </div>
+        </div>
+
+        {/* Body */}
+        <div style={{ overflowY: 'auto', flex: 1, padding: '24px' }}>
+          {/* Graph: agent root → labelled branches */}
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 0, marginBottom: 24 }}>
+            <FlowNode type="agent" label={group.sourceAgent} />
+            <div style={{ width: 1, height: 16, background: T.border }} />
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 14, width: '100%', maxWidth: 520 }}>
+              {ordered.map((r, i) => {
+                const rel = REL_META[r.relationship_type] || { color: T.textDim, label: (r.relationship_type || 'touches_system').replace(/_/g, ' ') }
+                return (
+                  <div key={r.id ?? i} style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 140, flexShrink: 0 }}>
+                      <span style={{ color: T.textMute }}>↳</span>
+                      <span style={{ padding: '2px 8px', borderRadius: 3, fontSize: 10, fontFamily: FONT_MONO, background: `${rel.color}18`, color: rel.color, border: `1px solid ${rel.color}33`, whiteSpace: 'nowrap' }}>{rel.label}</span>
+                    </div>
+                    <span style={{ color: T.textMute }}>→</span>
+                    <FlowNode type={r.target_type} label={r.target_name} sub={r.target_identifier || undefined} />
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+
+          {/* Detail table */}
+          <div style={{ border: `1px solid ${T.border}`, borderRadius: 6, overflow: 'hidden' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+              <thead>
+                <tr style={{ borderBottom: `1px solid ${T.border}`, background: T.panelHi }}>
+                  {['Relationship', 'Target', 'Evidence', 'Strength', 'Requests', 'Last Seen'].map(h => (
+                    <th key={h} style={{ padding: '8px 12px', textAlign: 'left', fontSize: 10, fontFamily: FONT_MONO, letterSpacing: '0.08em', textTransform: 'uppercase', color: T.textMute, fontWeight: 500, whiteSpace: 'nowrap' }}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {ordered.map((r, i) => (
+                  <tr key={r.id ?? i} style={{ borderBottom: `1px solid ${T.border}` }}>
+                    <td style={{ padding: '9px 12px' }}><RelBadge type={r.relationship_type} /></td>
+                    <td style={{ padding: '9px 12px' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                        <TypeBadge type={r.target_type} />
+                        <span style={{ fontFamily: FONT_MONO, fontSize: 12, color: T.text }}>{r.target_name}</span>
+                      </div>
+                    </td>
+                    <td style={{ padding: '9px 12px', fontFamily: FONT_MONO, fontSize: 10, color: T.textDim }}>{r.evidence_source}</td>
+                    <td style={{ padding: '9px 12px' }}><StrengthBadge rel={r} /></td>
+                    <td style={{ padding: '9px 12px', fontFamily: FONT_MONO, fontSize: 12, color: T.text }}>{(r.request_count || 0).toLocaleString()}</td>
+                    <td style={{ padding: '9px 12px', fontFamily: FONT_MONO, fontSize: 11, color: T.textDim }}>{fmtDate(r.last_seen_at)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
     </div>
   )
 }
