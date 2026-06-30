@@ -4380,7 +4380,7 @@ function AssetsPage() {
 const PAGES = [
   { id:"dashboard",      label:"Dashboard" },
   { id:"welcome",        label:"Platform Guide" },
-  { id:"agent_inventory",label:"AI Agent Inventory" },
+  { id:"agent_inventory",label:"AI Inventory" },
   { id:"discovery",      label:"Discovery Center" },
   { id:"governance",     label:"Governance Center" },
   { id:"cost",           label:"Cost Intelligence" },
@@ -4418,7 +4418,7 @@ const NAV_GROUPS = [
   {
     label: "INVENTORY",
     items: [
-      { id: "agent_inventory",  label: "Agents" },
+      { id: "agent_inventory",  label: "AI Inventory" },
       { id: "discovery",        label: "Discovery Center" },
       { id: "governance",       label: "Governance Center" },
       { id: "relationship_map", label: "Dependency Map" },

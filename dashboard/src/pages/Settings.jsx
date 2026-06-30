@@ -750,7 +750,7 @@ export default function SettingsPage() {
         </table>
       </Card>
 
-      <Card title="Environments" subtitle="Shown in the Environment dropdown when claiming or validating agents">
+      <Card title="Environments" subtitle="Shown in the Environment dropdown when reviewing AI systems">
         <div style={{ display:"flex", flexWrap:"wrap", gap:8, marginBottom:14 }}>
           {environments.map(env => (
             <div key={env} style={{ display:"flex", alignItems:"center", gap:6, background:T.panelHi, border:`1px solid ${T.border}`, borderRadius:4, padding:"5px 10px" }}>
