@@ -57,6 +57,7 @@ import { UserContext, useUser, RolesContext, useRoles, ROLES, canSeePage, userCa
 import CustomerWelcomePage from "./pages/PlatformGuide.jsx";
 import SimpleIntegrationsPage from "./pages/Setup.jsx";
 import SettingsPage, { GUARD_MODE_META } from "./pages/Settings.jsx";
+import { useBreakpoint } from "./hooks/useBreakpoint.js";
 
 
 
