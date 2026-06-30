@@ -371,6 +371,34 @@ const NAV_GROUPS = [
 export default function App() {
   const [page, setPage]       = useState("dashboard");
   const [discoveryInitialTab, setDiscoveryInitialTab] = useState("verified");
+
+  // Navigate to a page and push a browser history entry so back/forward works.
+  const navigate = useCallback((id) => {
+    setPage(id);
+    window.history.pushState({ page: id }, '', '#' + id);
+  }, []);
+
+  // On first load, restore page from URL hash if valid.
+  useEffect(() => {
+    const hash = window.location.hash.slice(1);
+    const valid = PAGES.find(p => p.id === hash);
+    if (valid) {
+      setPage(hash);
+      window.history.replaceState({ page: hash }, '', '#' + hash);
+    } else {
+      window.history.replaceState({ page: 'dashboard' }, '', '#dashboard');
+    }
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Sync React page state when the user presses back or forward.
+  useEffect(() => {
+    const onPop = (e) => {
+      const p = e.state?.page || window.location.hash.slice(1) || 'dashboard';
+      setPage(PAGES.find(pg => pg.id === p) ? p : 'dashboard');
+    };
+    window.addEventListener('popstate', onPop);
+    return () => window.removeEventListener('popstate', onPop);
+  }, []);
   const [filters, setFilters] = useState({ team:"all", model:"all", agent:"all", sev:"all", range:30 });
 
   // ── Real JWT auth ──
@@ -460,6 +488,8 @@ export default function App() {
 
   const handleLogin = async (u) => {
     setUser(u);
+    window.history.replaceState({ page: 'dashboard' }, '', '#dashboard');
+    setPage('dashboard');
     try {
       const serverRoles = await fetchRoles();
       const map = serverRoles?.length
@@ -474,6 +504,7 @@ export default function App() {
   const handleLogout = () => {
     setToken(null);
     setUser(null);
+    window.history.replaceState(null, '', window.location.pathname);
   };
 
   const { apiRecords, serverTeams, serverAlerts, lastRefresh, isLive, demoMode, setDemoModeState, refresh } = useLiveData(30_000);
@@ -602,9 +633,9 @@ export default function App() {
     }
     switch (page) {
       // ── New primary pages ───────────────────────────────────────────────
-      case "dashboard":      return <ExecutiveDashboard onNavigate={setPage} />;
-      case "welcome":        return <CustomerWelcomePage onNavigate={setPage} />;
-      case "agent_inventory":return <AgentInventory isAdmin={user?.role === "admin"} onNavigate={(pg, opts={}) => { if (opts.discoveryTab) setDiscoveryInitialTab(opts.discoveryTab); setPage(pg); }} />;
+      case "dashboard":      return <ExecutiveDashboard onNavigate={navigate} />;
+      case "welcome":        return <CustomerWelcomePage onNavigate={navigate} />;
+      case "agent_inventory":return <AgentInventory isAdmin={user?.role === "admin"} onNavigate={(pg, opts={}) => { if (opts.discoveryTab) setDiscoveryInitialTab(opts.discoveryTab); navigate(pg); }} />;
       case "discovery":      return <DiscoveryCenter initialTab={discoveryInitialTab} />;
       case "governance":     return <GovernanceCenter />;
       case "security_intel": return <SecurityIntelligence />;
@@ -619,7 +650,7 @@ export default function App() {
       case "apikeys":   return <ApiKeysPage />;
       case "settings":      return <SettingsPage />;
       // ── Legacy pages (still routable, removed from primary nav) ────────
-      case "home":           return <Home onNavigate={setPage} />;
+      case "home":           return <Home onNavigate={navigate} />;
       case "chat":           return <ChatPage />;
       case "assets":    return <AssetsPage />;
       case "overview":  return <Overview  {...pageProps} />;
@@ -627,8 +658,8 @@ export default function App() {
       case "models":    return <ModelUsage A={A} />;
       case "workflows": return <WorkflowHealth {...pageProps} />;
       case "alerts":    return <AlertsPage alerts={alerts} sevFilter={filters.sev} />;
-      case "integrations":  return <SimpleIntegrationsPage onNavigate={setPage} />;
-      case "onboarding":    return <OnboardingPage onNavigate={setPage} />;
+      case "integrations":  return <SimpleIntegrationsPage onNavigate={navigate} />;
+      case "onboarding":    return <OnboardingPage onNavigate={navigate} />;
       case "organizations": return user?.is_platform_admin ? <OrganizationsPage /> : null;
       default:              return null;
     }
@@ -681,7 +712,7 @@ export default function App() {
                   </div>
                 )}
                 {visibleItems.map(item => (
-                  <button key={item.id} onClick={()=>setPage(item.id)}
+                  <button key={item.id} onClick={()=>navigate(item.id)}
                     style={{ background:page===item.id?T.panelHi:"transparent", border:"none", color:page===item.id?T.text:T.textDim, textAlign:"left", padding:"8px 10px", fontSize:12, borderRadius:4, cursor:"pointer", fontFamily:FONT_UI, display:"flex", alignItems:"center", gap:10, borderLeft:page===item.id?`2px solid ${T.accent}`:"2px solid transparent", transition:"all 0.1s", width:"100%" }}>
                     {item.label}
                     {item.id==="alerts" && critCount>0 && (
