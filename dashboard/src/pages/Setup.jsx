@@ -45,7 +45,7 @@ export default function SimpleIntegrationsPage({ onNavigate, demoMode = false })
 
   const PROGRESS_STEPS = [
     { key: "provider", label: "Connect Provider" },
-    { key: "key",      label: "Create Gateway API Key" },
+    { key: "key",      label: "Create API Key" },
     { key: "request",  label: "Send First Request" },
     { key: "agent",    label: "Discover First Agent" },
   ];
@@ -55,9 +55,9 @@ export default function SimpleIntegrationsPage({ onNavigate, demoMode = false })
   const OPTIONS = [
     {
       id: "gateway", badge: "Recommended", color: T.info,
-      title: "Route AI Traffic",
+      title: "Runtime Discovery",
       desc:  "Best for immediate visibility into active AI agents.",
-      benefits: ["Discover active AI assets", "Track usage and cost", "Build the dependency map", "Apply governance controls"],
+      benefits: ["Discover active AI assets", "Observe active AI systems in real time", "Build the dependency map", "Apply governance controls"],
       cta: "Start Here →",
     },
     {
@@ -70,7 +70,7 @@ export default function SimpleIntegrationsPage({ onNavigate, demoMode = false })
     {
       id: "platform", badge: null, color: T.purple,
       title: "Connect AI Ecosystem",
-      desc:  "Best for finding shadow AI and unmanaged automation.",
+      desc:  "Best for discovering unmanaged AI across your tooling ecosystem.",
       benefits: ["Discover GitHub, Slack, Jira, ServiceNow, and MCP signals", "Find potential AI assets", "Surface unmanaged dependencies", "Send findings for validation"],
       cta: "Connect Ecosystem →",
     },
@@ -227,7 +227,7 @@ client.chat.completions.create(
 
       <div style={{ marginBottom:24 }}>
         <div style={{ fontSize:11, fontFamily:FONT_MONO, color:T.textMute, letterSpacing:"0.12em", textTransform:"uppercase", marginBottom:6 }}>Administration · Setup</div>
-        <div style={{ fontSize:24, fontWeight:700, color:T.text, lineHeight:1.2 }}>Connect your AI traffic</div>
+        <div style={{ fontSize:24, fontWeight:700, color:T.text, lineHeight:1.2 }}>Enterprise AI Discovery</div>
       </div>
 
       {/* Setup progress */}
@@ -255,10 +255,10 @@ client.chat.completions.create(
         <div style={{ width:8, height:8, borderRadius:"50%", background:T.info, flexShrink:0, marginTop:5 }} />
         <div style={{ flex:1 }}>
           <div style={{ fontSize:13, fontWeight:600, color:T.text, marginBottom:6 }}>
-            Recommended path: start by routing AI traffic.
+            Recommended path: start with Runtime Discovery.
           </div>
           <div style={{ fontSize:12, color:T.textDim, lineHeight:1.7, maxWidth:620 }}>
-            One configuration change gives you immediate visibility. Agents, models, costs, and dependencies
+            One configuration change gives you immediate visibility. Agents, models, and dependencies
             start appearing automatically from runtime activity — no manual registration required.
           </div>
         </div>
@@ -267,7 +267,7 @@ client.chat.completions.create(
           style={{ background:T.info, color:"#fff", border:"none", borderRadius:6,
             padding:"9px 20px", fontSize:12, fontWeight:600, fontFamily:FONT_UI,
             cursor:"pointer", flexShrink:0, whiteSpace:"nowrap" }}>
-          Route AI Traffic →
+          Start Runtime Discovery →
         </button>
       </div>
 

@@ -9,14 +9,14 @@ export default function CustomerWelcomePage({ onNavigate }) {
     { icon: "🔗", color: T.teal,   label: "Dependencies",      detail: "MCP servers, tools, APIs, databases, and CRMs each agent touches at runtime" },
     { icon: "⊞", color: T.info,   label: "Models in use",     detail: "Every model variant across OpenAI, Anthropic, and other providers" },
     { icon: "⚡", color: T.yellow, label: "Workflows",         detail: "n8n, Zapier, LangGraph, and orchestration chains discovered automatically" },
-    { icon: "⊙", color: T.purple,  label: "Shadow AI",         detail: "Agents that appeared outside official channels — surfaced before they become a risk" },
-    { icon: "$",  color: T.accent,  label: "Cost attribution",  detail: "Spend by team, agent, and model — no manual tagging needed" },
+    { icon: "⊙", color: T.purple,  label: "Unmanaged Agents",  detail: "AI systems that appeared outside official channels — discovered, reviewed, and classified" },
+    { icon: "⊕", color: T.info,    label: "Ecosystem Signals", detail: "AI signals from GitHub, Jira, Slack, ServiceNow, MCP, and n8n — indexed alongside runtime traffic" },
   ];
 
   const features = [
     { icon: "◈", color: T.accent,  title: "Agent Inventory",          page: "agent_inventory",  desc: "Every agent that has ever touched your LLM traffic — automatically catalogued, attributed to a team, and tracked over time." },
     { icon: "🔗", color: T.teal,   title: "Runtime Dependency Map",   page: "relationship_map",  desc: "Automatically maps what every agent touches at runtime — MCP servers, tools, workflows, APIs, and CRMs." },
-    { icon: "⊙", color: T.yellow,  title: "Discovery Center",         page: "discovery",         desc: "Surface AI agents and automations that were created without going through official channels — before they become a risk." },
+    { icon: "⊙", color: T.yellow,  title: "Discovery Center",         page: "discovery",         desc: "Surface AI systems observed at runtime and signals found across your ecosystem — reviewed and classified in one place." },
     { icon: "⊛", color: T.info,    title: "Governance Center",        page: "governance",        desc: "Review newly discovered agents, assign owners, and enforce policies — without slowing down teams." },
     { icon: "$", color: T.accent,  title: "Cost Intelligence",        page: "cost",              desc: "See exactly how much each team and agent spends on AI APIs. No manual tagging required." },
     { icon: "⚑", color: T.crit,   title: "Security Intelligence",    page: "security_intel",    desc: "Alerts on unusual activity, prompt injection attempts, and policy violations — detected automatically." },
@@ -34,21 +34,21 @@ export default function CustomerWelcomePage({ onNavigate }) {
     {
       n: "2", color: T.teal,
       title: "Automatic discovery begins",
-      desc: "The moment traffic flows, the platform starts discovering agents, mapping dependencies, detecting models in use, and attributing cost. No manual agent registration. No tagging required.",
+      desc: "The moment traffic flows, the platform starts discovering agents, mapping dependencies, detecting models in use, and attributing ownership. No manual agent registration. No tagging required.",
       note: "Agents are fingerprinted from API keys, request patterns, headers, and SDK signals. Identity improves automatically over time.",
       cta: "View Discovery Center →", page: "discovery",
     },
     {
       n: "3", color: T.info,
       title: "Review and claim discovered assets",
-      desc: "Discovered agents appear in the Governance Center for review. Assign owners, add context, and promote them to managed assets — or reject shadow AI that shouldn't be running.",
+      desc: "Discovered agents appear in the Governance Center for review. Assign owners, add context, and promote them to managed assets — or reject unmanaged systems that shouldn't be running.",
       note: "Optional: enrich identities with X-Agent-Name, X-Agent-Team headers for higher confidence attribution.",
       cta: "Open Governance →", page: "governance",
     },
     {
       n: "4", color: T.purple,
       title: "Invite your team",
-      desc: "Add engineers, security leads, and FinOps colleagues as Viewers or Analysts. Each sees the agents their team owns and the spend they're responsible for.",
+      desc: "Add engineers, security and platform leads as Viewers or Analysts. Each sees the agents their team owns and the systems they're responsible for.",
       note: null, cta: "Manage Users →", page: "users",
     },
   ];
@@ -65,7 +65,7 @@ export default function CustomerWelcomePage({ onNavigate }) {
           background:`${T.teal}05`, pointerEvents:"none" }} />
 
         <div style={{ fontSize:11, fontFamily:FONT_MONO, color:T.accent, letterSpacing:"0.15em",
-          textTransform:"uppercase", marginBottom:12 }}>ObserveAgents · AI Runtime Intelligence Platform</div>
+          textTransform:"uppercase", marginBottom:12 }}>ObserveAgents · Enterprise AI Intelligence Platform</div>
 
         <div style={{ fontSize: bp.isMobile ? 22 : 32, fontWeight:700, color:T.text, marginBottom:14, lineHeight:1.15 }}>
           Connect traffic once.<br/>
@@ -74,11 +74,11 @@ export default function CustomerWelcomePage({ onNavigate }) {
 
         <div style={{ fontSize:15, color:T.textDim, lineHeight:1.75, maxWidth:580, marginBottom:10 }}>
           No manual agent registration. No tagging spreadsheets. Route your AI traffic through the gateway
-          and the platform automatically discovers every agent, maps every dependency, and attributes every dollar of spend.
+          and the platform automatically discovers every agent, maps every dependency, and maps ownership and exposure across your AI landscape.
         </div>
         <div style={{ fontSize:13, color:T.textMute, lineHeight:1.6, maxWidth:560, marginBottom:28 }}>
           Built for engineering and security teams managing AI at scale — from the agents your teams
-          built intentionally to the shadow AI that appeared without anyone knowing.
+          built intentionally to the unmanaged AI that appeared outside official channels.
         </div>
 
         <div style={{ display:"flex", gap:10, flexWrap:"wrap" }}>
